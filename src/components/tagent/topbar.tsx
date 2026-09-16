@@ -1,0 +1,157 @@
+'use client'
+
+import { useState } from 'react'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Badge } from '@/components/ui/badge'
+import {
+  ChevronDown, Cpu, Files, FolderOpen, Github, History, ListTodo,
+  PanelRightClose, PanelRightOpen, Settings, Terminal, TerminalSquare, Zap,
+} from 'lucide-react'
+import { useTagent } from '@/lib/tagent/store'
+import { cn } from '@/lib/utils'
+import { SettingsDialog } from './settings-dialog'
+import { CommandPalette } from './command-palette'
+
+export function TopBar() {
+  const connection = useTagent((s) => s.connection)
+  const workspace = useTagent((s) => s.workspace)
+  const config = useTagent((s) => s.config)
+  const session = useTagent((s) => s.session)
+  const setMode = useTagent((s) => s.setMode)
+  const setModel = useTagent((s) => s.setModel)
+  const rightOpen = useTagent((s) => s.rightOpen)
+  const toggleRight = useTagent((s) => s.toggleRight)
+  const setRightTab = useTagent((s) => s.setRightTab)
+  const githubBusy = useTagent((s) => s.githubBusy)
+  const githubPush = useTagent((s) => s.githubPush)
+  const running = useTagent((s) => s.running)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+
+  const provider = config?.providers.find((p) => p.id === config.defaultProvider)
+  const modelLabel = provider?.models.find((m) => m.id === config?.defaultModel)?.label ?? config?.defaultModel ?? 'no model'
+  const mode = session?.mode ?? 'build'
+
+  return (
+    <header className="h-12 shrink-0 flex items-center gap-2 px-3 border-b border-zinc-800/60 bg-zinc-950/80 backdrop-blur">
+      <div className="flex items-center gap-2 font-semibold tracking-tight">
+        <span className="grid place-items-center size-6 rounded-md bg-orange-500 text-zinc-950">
+          <TerminalSquare className="size-4" />
+        </span>
+        <span className="text-zinc-100">tagent</span>
+      </div>
+
+      <div className="hidden sm:flex items-center gap-1.5 text-xs text-zinc-500 border-l border-zinc-800 pl-2 ml-1">
+        <FolderOpen className="size-3.5" />
+        <span className="font-mono">{workspace?.name ?? '…'}</span>
+      </div>
+
+      <div className="flex-1" />
+
+      {/* agent mode */}
+      <div className="flex items-center rounded-md border border-zinc-800 p-0.5 text-xs font-medium">
+        <button
+          onClick={() => void setMode('build')}
+          className={cn('px-2.5 py-1 rounded flex items-center gap-1 transition-colors',
+            mode === 'build' ? 'bg-orange-500/15 text-orange-400' : 'text-zinc-500 hover:text-zinc-300')}
+          title="Build mode — agent may edit files (permission-gated)"
+        >
+          <Zap className="size-3.5" /> Build
+        </button>
+        <button
+          onClick={() => void setMode('plan')}
+          className={cn('px-2.5 py-1 rounded flex items-center gap-1 transition-colors',
+            mode === 'plan' ? 'bg-sky-500/15 text-sky-400' : 'text-zinc-500 hover:text-zinc-300')}
+          title="Plan mode — read-only investigation"
+        >
+          <ListTodo className="size-3.5" /> Plan
+        </button>
+      </div>
+
+      {/* model picker */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="outline" size="sm" className="h-7 gap-1.5 border-zinc-800 bg-zinc-900/50 text-xs font-mono">
+            <Cpu className="size-3.5 text-orange-400" />
+            <span className="max-w-36 truncate">{modelLabel}</span>
+            <ChevronDown className="size-3 opacity-50" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-64 bg-zinc-900 border-zinc-800">
+          {config?.providers.map((p) => (
+            <DropdownMenuGroup key={p.id}>
+              <DropdownMenuLabel className="text-[11px] text-zinc-500 flex items-center justify-between">
+                <span>{p.label}</span>
+                {!p.needsKey && <Badge variant="outline" className="text-[9px] h-4 px-1 border-zinc-700 text-zinc-400">free</Badge>}
+                {p.needsKey && !p.hasKey && <Badge variant="outline" className="text-[9px] h-4 px-1 border-zinc-700 text-zinc-500">needs key</Badge>}
+              </DropdownMenuLabel>
+              {p.models.map((m) => (
+                <DropdownMenuItem
+                  key={m.id}
+                  disabled={p.needsKey && !p.hasKey}
+                  onClick={() => void setModel(p.id, m.id)}
+                  className={cn('text-xs font-mono', m.id === config?.defaultModel && 'text-orange-400')}
+                >
+                  {m.label}
+                </DropdownMenuItem>
+              ))}
+              {p.docsUrl && p.needsKey && !p.hasKey && (
+                <DropdownMenuItem className="text-[11px] text-zinc-500" asChild>
+                  <a href={p.docsUrl} target="_blank" rel="noreferrer">Get an API key ↗</a>
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator className="bg-zinc-800" />
+            </DropdownMenuGroup>
+          ))}
+          <DropdownMenuItem className="text-xs text-zinc-400" onClick={() => setSettingsOpen(true)}>
+            <Settings className="size-3.5 mr-2" /> Provider settings…
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      {/* connection */}
+      <span
+        className={cn('size-2 rounded-full shrink-0',
+          connection === 'ready' ? 'bg-emerald-500 shadow-[0_0_6px] shadow-emerald-500/60'
+          : connection === 'connecting' ? 'bg-amber-400 animate-pulse'
+          : 'bg-zinc-600')}
+        title={connection}
+      />
+
+      <Button variant="ghost" size="icon" className="size-7 text-zinc-400" onClick={() => void githubPush()} disabled={githubBusy || !config?.github.connected} title="Push workspace to GitHub">
+        <Github className={cn('size-4', config?.github.connected ? 'text-zinc-200' : 'opacity-40')} />
+      </Button>
+      <Button variant="ghost" size="icon" className="size-7 text-zinc-400" onClick={() => setPaletteOpen(true)} title="Command palette (⌘K)">
+        <History className="size-4" />
+      </Button>
+      <Button variant="ghost" size="icon" className="size-7 text-zinc-400" onClick={() => setSettingsOpen(true)} title="Settings">
+        <Settings className="size-4" />
+      </Button>
+      <Button variant="ghost" size="icon" className="size-7 text-zinc-400 hidden md:inline-flex" onClick={toggleRight} title="Toggle side panel">
+        {rightOpen ? <PanelRightClose className="size-4" /> : <PanelRightOpen className="size-4" />}
+      </Button>
+      {/* mobile quick tabs */}
+      <div className="md:hidden flex items-center gap-0.5">
+        <Button variant="ghost" size="icon" className="size-7 text-zinc-400" onClick={() => setRightTab('files')}><Files className="size-4" /></Button>
+        <Button variant="ghost" size="icon" className="size-7 text-zinc-400" onClick={() => setRightTab('terminal')}><Terminal className="size-4" /></Button>
+      </div>
+
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      {running && (
+        <span className="absolute bottom-0 left-0 h-px w-full overflow-hidden">
+          <span className="block h-full w-1/3 bg-orange-500 animate-[slide_1.2s_ease-in-out_infinite]" />
+        </span>
+      )}
+    </header>
+  )
+}

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TaskFlow</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="app">
+    <header>
+      <h1>TaskFlow</h1>
+      <span id="task-count">0 tasks left</span>
+    </header>
+
+    <form id="new-task-form">
+      <input id="new-task-input" type="text" placeholder="What needs to be done?" aria-label="New task" autocomplete="off" />
+      <button type="submit">Add</button>
+    </form>
+
+    <ul id="task-list" aria-label="Task list"></ul>
+
+    <footer>
+      <button id="clear-completed" type="button">Clear completed</button>
+    </footer>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
