@@ -58,3 +58,4 @@ demo-workspace/.tagent/*
 # plugin runtime logs
 .tagent/plugin-log.jsonl
 mini-services/tagent-daemon/.tagent/
+website/.next/

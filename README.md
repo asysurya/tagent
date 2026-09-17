@@ -14,6 +14,12 @@ Tagent is an open agent platform in the spirit of [opencode](https://opencode.ai
 coding agent engine that runs on **your machine** via a CLI daemon, controlled from a
 beautiful **web interface** in the browser — the best of both worlds.
 
+> 🌐 **Website (docs · install · releases · downloads):** the `website/` workspace in this
+> repo deploys to Vercel (root directory = `website`).
+>
+> 🔄 **Update-aware:** the CLI checks for newer releases at most once a day and prints a
+> warning when stale — it never blocks. `tagent --version` · `tagent --check-update`
+
 ```
 ┌─ Browser GUI (Next.js) ─────────────────┐
 │  chat · tool cards · permissions ·      │
@@ -119,8 +125,9 @@ gui-dist/         committed static export of the GUI (served by the daemon)
 mini-services/    sandbox harness that boots the daemon on :3001
 builtin-skills/   shipped skills (web-app-builder, code-review, bug-hunter)
 demo-workspace/   a tiny vanilla-JS todo app with planted bugs — try the agent on it
-scripts/         setup-ubuntu.sh + smoke tests (bun scripts/debug-rpc.ts 4020 /socket)
+scripts/         setup-ubuntu.sh, sync-latest.ts, smoke tests, gh-release.sh
 docs/             USERLAND.md — run Tagent on an Android phone (no root)
+website/          the docs/release website (Next.js → deploy to Vercel)
 ```
 
 ## The action protocol
@@ -168,6 +175,22 @@ Workspace-local `.tagent/config.json` (gitignored) over `~/.tagent/config.json`:
 - [ ] Streaming tokens (event protocol supports it; providers currently return per-turn)
 - [ ] Workspace switcher for multiple concurrent workspaces
 - [ ] Share links, relay mode
+
+## Releases & versioning
+
+Versioning is semver-ish; every release is a git tag + a GitHub release, and the
+changelog lives in [`website/src/data/releases.ts`](website/src/data/releases.ts)
+(single source of truth for the site, the CLI update check and the release notes).
+
+```bash
+tagent --version          # running version
+tagent --check-update     # force an update check (exit 2 when outdated)
+# endpoint override for self-hosted mirrors:
+export TAGENT_UPDATE_URL=https://your-host/latest.json
+```
+
+Cutting a release: bump versions → update `releases.ts` → `bun scripts/sync-latest.ts`
+→ commit → `git tag vX.Y.Z && git push --tags` → `bash scripts/gh-release.sh <token>`.
 
 ## Contributing & license
 
