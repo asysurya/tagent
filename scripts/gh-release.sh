@@ -52,7 +52,7 @@ The TUI is now the primary interface — a complete terminal UI with every featu
 \`\`\`bash
 git clone https://github.com/asysurya/tagent.git
 cd tagent && bash scripts/setup-ubuntu.sh
-bun link            # makes the `tagent` command available
+bun link            # makes the \`tagent\` command available
 tagent start ~/my-project
 \`\`\`
 EOF
