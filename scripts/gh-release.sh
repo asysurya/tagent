@@ -3,58 +3,44 @@
 # Usage: scripts/gh-release.sh <token> [version]
 set -euo pipefail
 TOKEN="${1:?usage: $0 <token> [version]}"
-VERSION="${2:-0.4.0}"
+VERSION="${2:-0.5.0}"
 
-BODY=$(cat <<EOF
-## Terminal-first: full TUI, tagent start, share links, timelines
+BODY=$(cat <<'EOF'
+## Relay mode: share a live session over the network
 
-The TUI is now the primary interface — a complete terminal UI with every feature the web GUI has. Same engine, same sessions, same permissions, on desktop and on a phone.
+The last roadmap item is done — you can now share any session with another person **while it happens**. A read-only viewer page streams messages, tool calls, todos and subagent activity in real time, from any device with a browser.
 
-### Terminal-first
-- New full TUI (\`tagent start\`): streaming tokens, tool lines, live todo lists, subagent activity, inline permission prompts
-- Pure stdin/stdout — identical on desktop, SSH and Android (Termux/UserLAnd)
-- Shared AgentHost: the terminal and browser tabs attach to the same agent and stay in sync
+### Relay mode
+- `tagent relay [sessionId] [path]` — share a session live; prints the viewer URL and serves it until you stop it
+- The viewer page is self-contained: history on open, then live streaming tokens, tool lines and todos — mobile-friendly, auto-reconnecting, with a LIVE indicator
+- Unguessable per-session codes; revoke at any time (`tagent relay stop <code>`) — revoked viewers disconnect instantly
+- `--host 0.0.0.0` prints LAN URLs for your phone or teammates; by default it stays on localhost (pair with an SSH tunnel for remote)
 
-### Commands
-- \`tagent start [path]\` — the TUI (primary); \`--web-gui\` also serves the browser GUI
-- \`tagent web [path]\` — daemon + web GUI only, for phone / remote use
-- \`tagent run [path] "prompt"\` — one-shot agent run (\`--json\` for structured output)
-- \`tagent auth\` — GitHub login wizard (device flow or PAT)
-- \`tagent config get/set/list\` · \`tagent sessions\` · \`tagent share\` · \`tagent doctor\`
-- Web GUI on/off: \`tagent config set webGui on\` (global) — \`tagent start\` stays TUI-only by default
+### Everywhere (desktop = phone = browser)
+- TUI: `/relay` starts sharing the current session — it spins up a local endpoint on demand, no flags needed
+- TUI: `/relay list` and `/relay stop <code>` manage live relays
+- GUI: the RadioTower button on any session starts a live share; the sidebar lists active relays with watcher counts, copy and end buttons
+- Relays persist in `.tagent/relays.json` and survive restarts, until you revoke them
 
-### Worklog + todos
-- The agent plans multi-step work as a live todo list, then journals each completed step to WORKLOG.md
-- Resuming older work: the agent reads WORKLOG.md first and picks up where it left off
-- GUI: Log tab + Settings → Agent. TUI: \`/todos\`, \`/log\`, \`/worklog\`
-
-### Caveman mode 🦴
-- Omni-route style token saver: terse replies, compact system prompt, one-line tool docs, tighter tool-output budgets
-- Toggle: top-bar bone icon, \`/caveman\` in the TUI, or \`tagent config set caveman on\`
-
-### Share links
-- Export any session as a standalone read-only HTML file (self-contained, collapsible tool calls)
-- Served at \`/share/<id>.html\` — sidebar share button, \`/share\` in the TUI, \`tagent share <id>\` from the shell
-
-### Multi-agent timelines
-- Subagent runs are persisted as real sessions (parentId metadata) — they survive restarts
-- New Timeline tab in the GUI panel; \`/timeline\` in the TUI
+### Security model
+- Viewer sockets are read-only by construction: no RPC handlers are registered for them
+- Events are session-filtered server-side: a viewer never sees other sessions or permission prompts
+- One live relay per session — re-sharing returns the same code, revoking ends it for everyone
 
 ### Under the hood
-- AgentHost refactor: one brain shared by TUI and daemon
-- GitHub device flow wired end-to-end (CLI wizard + GUI button)
-- PermissionManager honors permissions.defaultMode; permission requests carry real risk levels
-- Session titles auto-derive from the first message
+- The websocket now always lives at `/socket` (with or without the GUI bundle) — one canonical endpoint for viewers and clients
+- Normal clients receive broadcasts through a `gui` room; relay viewers get per-session filtered events
+- New test suites: `scripts/test-relay.ts` (27 checks — auth, filtering, read-only enforcement, revoke) and a TUI pty test for `/relay`
 
 ---
 
 **Install / upgrade**
-\`\`\`bash
+```bash
 git clone https://github.com/asysurya/tagent.git
 cd tagent && bash scripts/setup-ubuntu.sh
 bun link            # makes the \`tagent\` command available
 tagent start ~/my-project
-\`\`\`
+```
 EOF
 )
 
@@ -62,5 +48,5 @@ curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/asysurya/tagent/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — Terminal-first: full TUI, tagent start, share links, timelines" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')" \
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — Relay mode: share a live session over the network" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')" \
   | python3 -c "import json,sys; d=json.load(sys.stdin); print('release:', d.get('html_url') or d.get('message'))"

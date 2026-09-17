@@ -2,7 +2,7 @@
 import { io } from 'socket.io-client'
 
 const port = process.argv[2] ?? '4020'
-const sockPath = process.argv[3] ?? '/'
+const sockPath = process.argv[3] ?? '/socket'
 // 127.0.0.1, not localhost: in some sandboxes localhost resolves to ::1 first
 // while the daemon binds IPv4 only.
 const socket = io(`http://127.0.0.1:${port}`, { path: sockPath, transports: ['websocket', 'polling'] })

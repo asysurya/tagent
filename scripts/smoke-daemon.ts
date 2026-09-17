@@ -4,7 +4,7 @@
  */
 import { io } from 'socket.io-client'
 
-const socket = io('http://localhost:3001', { path: '/', transports: ['websocket'] })
+const socket = io('http://localhost:3001', { path: '/socket', transports: ['websocket'] })
 
 const timeout = (ms: number) => new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms))
 

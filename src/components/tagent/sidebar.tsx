@@ -1,9 +1,10 @@
 'use client'
 
+import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Badge } from '@/components/ui/badge'
-import { Plus, MessageSquare, Trash2, Clock, RotateCcw, Share2 } from 'lucide-react'
+import { Plus, MessageSquare, Trash2, Clock, RotateCcw, Share2, RadioTower, Copy, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { useTagent } from '@/lib/tagent/store'
 import { cn } from '@/lib/utils'
@@ -22,6 +23,7 @@ function SessionRow({ s }: { s: SessionMeta }) {
   const loadSession = useTagent((st) => st.loadSession)
   const deleteSession = useTagent((st) => st.deleteSession)
   const shareSession = useTagent((st) => st.shareSession)
+  const relaySession = useTagent((st) => st.relaySession)
   const connection = useTagent((st) => st.connection)
   const running = useTagent((st) => st.running && active)
 
@@ -40,6 +42,24 @@ function SessionRow({ s }: { s: SessionMeta }) {
       toast.success('Share exported', { description: url })
     }
     window.open(r.url, '_blank')
+  }
+
+  const relay = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    const r = await relaySession(s.id)
+    if (!r.ok || !r.url) {
+      toast.error(r.error ?? 'relay failed')
+      return
+    }
+    const url = `${window.location.origin}${r.url}`
+    try {
+      await navigator.clipboard.writeText(url)
+      toast.success('Live share started — link copied', {
+        description: `${url} · read-only, updates in real time`,
+      })
+    } catch {
+      toast.success('Live share started', { description: url })
+    }
   }
 
   return (
@@ -67,6 +87,15 @@ function SessionRow({ s }: { s: SessionMeta }) {
       <div className="absolute right-1.5 top-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
         {connection === 'ready' && (
           <button
+            className="text-zinc-500 hover:text-orange-400"
+            onClick={(e) => void relay(e)}
+            title="Share live — read-only relay link (updates in real time)"
+          >
+            <RadioTower className="size-3.5" />
+          </button>
+        )}
+        {connection === 'ready' && (
+          <button
             className="text-zinc-500 hover:text-sky-400"
             onClick={(e) => void share(e)}
             title="Export a read-only share link (standalone HTML)"
@@ -85,6 +114,70 @@ function SessionRow({ s }: { s: SessionMeta }) {
           <Trash2 className="size-3.5" />
         </button>
       </div>
+    </div>
+  )
+}
+
+function LiveShares() {
+  const relays = useTagent((st) => st.relays)
+  const relayRevoke = useTagent((st) => st.relayRevoke)
+  const [open, setOpen] = useState(false)
+  if (relays.length === 0) return null
+
+  const copy = (code: string) => {
+    const url = `${window.location.origin}/relay/${code}`
+    navigator.clipboard.writeText(url).then(
+      () => toast.success('Relay link copied', { description: url }),
+      () => toast('Relay link', { description: url }),
+    )
+  }
+
+  return (
+    <div className="border-t border-zinc-800/60 pt-1.5">
+      <button
+        className="w-full flex items-center justify-between text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
+        onClick={() => setOpen((v) => !v)}
+        title="Live read-only shares of your sessions"
+      >
+        <span className="inline-flex items-center gap-1.5">
+          <RadioTower className="size-3 text-orange-400" /> live shares
+        </span>
+        <span className="font-mono inline-flex items-center gap-1">
+          {open ? '▾' : '▸'} {relays.length}
+        </span>
+      </button>
+      {open && (
+        <div className="mt-1 space-y-1">
+          {relays.map((r) => (
+            <div
+              key={r.code}
+              className="flex items-center gap-1.5 rounded border border-orange-500/20 bg-orange-500/5 px-2 py-1.5"
+            >
+              <span className="size-1.5 rounded-full bg-orange-400 animate-pulse shrink-0" />
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] text-zinc-300 truncate">{r.sessionTitle}</p>
+                <p className="text-[9px] text-zinc-600 font-mono">
+                  {r.code} · {r.viewers ?? 0} watching
+                </p>
+              </div>
+              <button
+                className="text-zinc-500 hover:text-sky-400 shrink-0"
+                onClick={() => copy(r.code)}
+                title="Copy the live link"
+              >
+                <Copy className="size-3" />
+              </button>
+              <button
+                className="text-zinc-500 hover:text-red-400 shrink-0"
+                onClick={() => void relayRevoke(r.code)}
+                title="End this live share"
+              >
+                <X className="size-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -141,6 +234,7 @@ export function Sidebar() {
         <p className="text-[10px] text-zinc-700 truncate font-mono" title={workspace?.path}>
           {workspace?.path ?? ''}
         </p>
+        <LiveShares />
       </div>
     </aside>
   )

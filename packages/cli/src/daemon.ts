@@ -4,9 +4,10 @@ import path from 'node:path'
 import fs from 'node:fs'
 import type { Server as HttpServer } from 'node:http'
 
-import { readShareFile } from '@tagent/core'
+import { readShareFile, findRelayByCode, renderRelayViewerHtml, CURRENT_VERSION, type RelayEntry } from '@tagent/core'
 
 import { AgentHost } from './host'
+import type { Socket } from 'socket.io'
 
 /**
  * The daemon — a thin network adapter over an AgentHost.
@@ -41,12 +42,13 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     quiet: opts.quiet,
   })
 
-  // When a built GUI directory exists we serve it as a static SPA and move
-  // the websocket to /socket so it never collides with static assets.
+  // The websocket always lives at /socket (with or without a GUI bundle)
+  // so the relay viewer page and clients have one canonical endpoint —
+  // socket.io serves its own client at /socket/socket.io.js.
   const guiDir = opts.guiDir && fs.existsSync(path.join(opts.guiDir, 'index.html'))
     ? path.resolve(opts.guiDir as string)
     : null
-  const socketIoPath = opts.socketPath ?? (guiDir ? '/socket' : '/')
+  const socketIoPath = opts.socketPath ?? '/socket'
 
   const log = (...a: unknown[]) => { if (!opts.quiet) console.log('[tagent]', ...a) }
 
@@ -126,6 +128,19 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       return
     }
 
+    // relay mode — /relay/<code> (live read-only viewer page)
+    if (url.startsWith('/relay/')) {
+      const entry = findRelayByCode(host.root, url.slice('/relay/'.length))
+      if (entry) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' })
+        res.end(renderRelayViewerHtml(entry.code, socketIoPath))
+      } else {
+        res.writeHead(404, { 'content-type': 'text/plain' })
+        res.end('relay not found — ask the owner for a fresh link')
+      }
+      return
+    }
+
     if (guiDir) {
       // never shadow the websocket endpoint with a static file
       if (url === socketIoPath || url.startsWith(socketIoPath + '/')) return
@@ -143,16 +158,93 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     maxHttpBufferSize: 20e6,
   })
 
-  // host events broadcast to every attached frontend (browser tabs alike)
+  // host events broadcast to every attached browser tab (the "gui" room;
+  // relay viewers never join it — they get session-filtered events instead)
   const forward = [
     'agent:status', 'message:new', 'agent:chunk', 'tool:start', 'tool:end',
     'todos:update', 'subagent:update', 'files:changed', 'notify',
     'permission:request', 'chat:done', 'session:active', 'session:list',
     'workspace:changed',
   ]
-  for (const event of forward) host.bus.on(event, (payload) => io.emit(event, payload))
+  for (const event of forward) host.bus.on(event, (payload) => io.to('gui').emit(event, payload))
+
+  /* ------------------------------------------------------------------ */
+  /* relay viewers — read-only sockets bound to one session by code        */
+  /* ------------------------------------------------------------------ */
+
+  interface Viewer { entry: RelayEntry; sockets: Set<Socket> }
+  const viewers = new Map<string, Viewer>()
+
+  const toViewers = (fn: (v: Viewer) => void) => {
+    for (const v of viewers.values()) fn(v)
+  }
+
+  // session-scoped events go ONLY to the viewers bound to that session
+  for (const event of ['message:new', 'agent:chunk', 'tool:start', 'tool:end', 'todos:update', 'subagent:update', 'chat:done']) {
+    host.bus.on(event, (payload) => {
+      const sid = (payload as { sessionId?: string } | undefined)?.sessionId
+      if (!sid) return
+      toViewers((v) => {
+        if (sid === v.entry.sessionId) v.sockets.forEach((s) => s.emit(event, payload))
+      })
+    })
+  }
+  // status is global — viewers only see it while their session is the active one
+  host.bus.on('agent:status', (p: unknown) => {
+    toViewers((v) => {
+      if (host.session?.id === v.entry.sessionId) v.sockets.forEach((s) => s.emit('agent:status', p))
+    })
+  })
+
+  // relay auth: ?relay=<code> — invalid codes never reach the connection handler
+  io.use((socket, next) => {
+    const code = socket.handshake.query?.relay
+    if (!code) return next()
+    const entry = findRelayByCode(host.root, String(code))
+    if (!entry) return next(new Error('invalid relay code'))
+    socket.data.relay = entry
+    next()
+  })
+
+  const kickViewers = (code: string, message = 'relay:revoked') => {
+    const v = viewers.get(code)
+    if (!v) return
+    v.sockets.forEach((s) => {
+      s.emit(message)
+      s.disconnect(true)
+    })
+    viewers.delete(code)
+  }
 
   io.on('connection', (socket) => {
+    /* -------- relay viewer: snapshot on connect, then live + read-only ---- */
+    if (socket.data.relay) {
+      const entry = socket.data.relay as RelayEntry
+      let v = viewers.get(entry.code)
+      if (!v) {
+        v = { entry, sockets: new Set() }
+        viewers.set(entry.code, v)
+      }
+      v.sockets.add(socket)
+      const snapshot = host.sessionSnapshot(entry.sessionId)
+      socket.emit('relay:hello', {
+        session: snapshot,
+        running: host.running && host.session?.id === entry.sessionId,
+        server: 'tagent',
+        version: CURRENT_VERSION,
+      })
+      if (!snapshot) socket.emit('relay:revoked')
+      log('relay viewer connected:', entry.code, '(' + v.sockets.size + ' watching)')
+      socket.on('disconnect', () => {
+        const cur = viewers.get(entry.code)
+        if (!cur) return
+        cur.sockets.delete(socket)
+        if (cur.sockets.size === 0) viewers.delete(entry.code)
+      })
+      return // read-only: no RPC handlers for viewers
+    }
+
+    socket.join('gui')
     log('gui connected:', socket.id)
 
     /* ------------------------------ hello ------------------------------ */
@@ -193,6 +285,26 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
 
     socket.on('session:share', (p: { id?: string }, cb?: (r: unknown) => void) => {
       cb?.(host.share(p?.id))
+    })
+
+    /* ------------------------- relay mode ------------------------------ */
+    socket.on('relay:create', (p: { sessionId?: string }, cb?: (r: unknown) => void) => {
+      cb?.(host.relayCreate(p?.sessionId))
+    })
+
+    socket.on('relay:list', (_p: unknown, cb?: (r: unknown) => void) => {
+      const relays = host.relayList().map((e) => ({
+        ...e,
+        viewers: viewers.get(e.code)?.sockets.size ?? 0,
+      }))
+      cb?.({ relays })
+    })
+
+    socket.on('relay:revoke', (p: { code?: string }, cb?: (r: unknown) => void) => {
+      const code = String(p?.code ?? '')
+      const r = host.relayRevoke(code)
+      if (r.ok) kickViewers(code)
+      cb?.(r)
     })
 
     /* ------------------------------- chat ------------------------------ */

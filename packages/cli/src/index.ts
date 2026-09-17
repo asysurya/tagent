@@ -14,6 +14,7 @@
  *   tagent config …         get / set / list settings
  *   tagent sessions [path]  list sessions of a workspace
  *   tagent share [id] [p]   export a session as standalone HTML
+ *   tagent relay [id] [p]   share a session LIVE over the network (read-only)
  *   tagent doctor           environment sanity check
  *   tagent version          print the version
  */
@@ -41,6 +42,8 @@ import {
 import { AgentHost } from './host'
 import { createDaemon } from './daemon'
 import { Tui, runPiped } from './tui'
+import { lanIPv4s } from './net'
+import { loadRelays, revokeRelay } from '@tagent/core'
 
 const args = process.argv.slice(2)
 
@@ -133,6 +136,10 @@ function printHelp() {
             list sessions of a workspace
     tagent share [sessionId] [path]
             export a session as a standalone HTML file
+    tagent relay [sessionId] [path] [--port N] [--host H]
+            share a session LIVE — read-only viewer page over the network.
+            subcommands: relay list [path] · relay stop <code> [path]
+            --host 0.0.0.0 exposes it on your LAN (prints LAN urls)
     tagent doctor
             environment sanity check
     tagent version · --check-update
@@ -158,6 +165,7 @@ async function init(): Promise<void> {
     case 'config': await mainConfig(); break
     case 'sessions': await mainSessions(); break
     case 'share': await mainShare(); break
+    case 'relay': await mainRelay(); break
     case 'doctor': await mainDoctor(); break
     default: {
       // `tagent <path>` — a bare directory arg means "start here"
@@ -531,6 +539,108 @@ async function mainShare() {
   console.log(`✔ share exported`)
   console.log(`  file: ${r.file}`)
   console.log(`  url:  /share/${path.basename(r.file!)}  ${dim('(served by the daemon / tagent web)')}`)
+}
+
+/* ------------------------------------------------------------------ */
+/* tagent relay — live read-only sharing                                */
+/* ------------------------------------------------------------------ */
+
+async function mainRelay() {
+  const sub = plain[1]
+
+  /* relay list [path] */
+  if (sub === 'list') {
+    const root = resolveWorkspace(plain[2] ?? '.')
+    const relays = loadRelays(root)
+    if (relays.length === 0) {
+      console.log('no live relays.')
+      return
+    }
+    console.log(`\n  live relays in ${root}\n`)
+    for (const r of relays) {
+      console.log(`  ${bold(r.code)}  ${dim(`· ${r.sessionTitle} · since ${new Date(r.createdAt).toISOString().slice(0, 16).replace('T', ' ')}`)}`)
+    }
+    console.log(`\n  stop: tagent relay stop <code>`)
+    return
+  }
+
+  /* relay stop <code> [path] */
+  if (sub === 'stop') {
+    const code = plain[2]
+    if (!code) die('usage: tagent relay stop <code> [path]')
+    const root = resolveWorkspace(plain[3] ?? '.')
+    const ok = revokeRelay(root, code)
+    console.log(ok ? `✔ relay ${code} ended — viewers are disconnected.` : `no live relay ${code} in this workspace.`)
+    return
+  }
+
+  /* relay [sessionId] [path] — start sharing live */
+  // positional args with --flag values stripped (e.g. `--port 4183`)
+  const raw = args.slice(1) // args[0] is the "relay" command itself
+  const positional: string[] = []
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i].startsWith('--')) {
+      const v = raw[i + 1]
+      if (v && !v.startsWith('--')) i++ // skip the flag's value too
+      continue
+    }
+    positional.push(raw[i])
+  }
+  let root = '.'
+  let sessionArg: string | undefined
+  if (positional.length > 0 && fs.existsSync(resolveWorkspace(positional[0])) && fs.statSync(resolveWorkspace(positional[0])).isDirectory()) {
+    root = positional[0]
+    sessionArg = positional[1]
+  } else {
+    sessionArg = positional[0]
+  }
+  root = resolveWorkspace(root)
+
+  const host = new AgentHost({ workspaceRoot: root })
+  const sessions = host.listSessions()
+  if (sessions.length === 0) die('no sessions in this workspace yet — run the TUI first (tagent start)')
+
+  const target = sessionArg
+    ? sessions.find((s) => s.id.startsWith(sessionArg))
+    : host.session && sessions.some((s) => s.id === host.session?.id)
+      ? host.session
+      : sessions[0]
+  if (!target) die(`no session starts with "${sessionArg}" — see: tagent sessions ${root}`)
+
+  const relay = host.relayCreate(target.id)
+  if (!relay.ok || !relay.code) die(relay.error ?? 'relay failed')
+
+  const port = Number(flag('port') ?? 4020)
+  const hostName = typeof flag<string>('host') === 'string' ? flag<string>('host') : '127.0.0.1'
+  const handle = await createDaemon({
+    port, host: hostName, workspaceRoot: root, agentHost: host, quiet: true,
+  })
+
+  const local = `http://127.0.0.1:${port}`
+  console.log(`
+  ${bold('⚡ Tagent relay')} — sharing ${bold(target.title)} live
+
+  ${green('viewer url')}   ${local}${relay.url}
+  ${dim('read-only · updates in real time · the TUI/GUI keep full control')}`)
+  if (hostName === '0.0.0.0') {
+    for (const ip of lanIPv4s()) {
+      console.log(`  ${green('on your lan')}    ${`http://${ip}:${port}`}${relay.url}`)
+    }
+    console.log(dim('  note: --host 0.0.0.0 also exposes the web GUI + RPC on this network — trusted networks only.'))
+  } else {
+    console.log(dim(`  share beyond this machine: re-run with ${bold('--host 0.0.0.0')} (or use an SSH tunnel)`))
+  }
+  console.log(dim(`  end it: Ctrl+C · tagent relay stop ${relay.code}
+
+  Ctrl+C to stop.`))
+
+  const shutdown = async () => {
+    console.log('\n[tagent] relay stopped.')
+    await handle.close()
+    process.exit(0)
+  }
+  process.on('SIGINT', shutdown)
+  process.on('SIGTERM', shutdown)
 }
 
 /* ------------------------------------------------------------------ */

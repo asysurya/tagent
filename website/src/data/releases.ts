@@ -17,9 +17,45 @@ export interface Release {
   stable?: boolean
 }
 
-export const LATEST = '0.4.0'
+export const LATEST = '0.5.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.5.0',
+    date: '2026-09-18',
+    title: 'Relay mode: share a live session over the network',
+    summary:
+      'Share any session with another person in real time — a read-only viewer page at /relay/<code> that streams messages, tool calls and todos as they happen. tagent relay on the CLI, /relay in the TUI, one click in the GUI.',
+    stable: true,
+    sections: [
+      {
+        name: 'Relay mode',
+        items: [
+          '`tagent relay [sessionId] [path]` — share a session live: prints the viewer URL and serves it until you stop it',
+          'The viewer page is a self-contained read-only window: history on open, then live streaming tokens, tool lines, todos and subagent activity as they happen',
+          'Unguessable per-session codes, revocable at any time (`tagent relay stop <code>`, `/relay stop` in the TUI, or the sidebar in the GUI) — revoked viewers are disconnected instantly',
+          'Over the network: `--host 0.0.0.0` prints LAN URLs for your phone/teammates; without it the relay stays on localhost (pair with an SSH tunnel for remote)',
+        ],
+      },
+      {
+        name: 'Everywhere',
+        items: [
+          'TUI: `/relay` starts sharing the current session (spins up a local endpoint on demand), `/relay list` and `/relay stop <code>` manage it',
+          'GUI: the RadioTower button on any session starts a live share; the sidebar lists active relays with watcher counts, copy and end buttons',
+          'Relays survive restarts — they persist in `.tagent/relays.json` until revoked',
+          'Viewer sockets are read-only by construction: no RPC handlers, no permission requests, session-filtered events only',
+        ],
+      },
+      {
+        name: 'Under the hood',
+        items: [
+          'The websocket now always lives at `/socket` (with or without the GUI bundle) — one canonical endpoint for viewers and clients',
+          'Normal clients get broadcasts through a `gui` room; relay viewers get per-session filtered events and never see other sessions or permission prompts',
+          'One live relay per session: re-sharing returns the same code, revoking ends it for everyone',
+        ],
+      },
+    ],
+  },
   {
     version: '0.4.0',
     date: '2026-09-17',

@@ -32,6 +32,10 @@ export {
 export { buildToolset, ALL_TOOLS, worklogTool, worklogPath } from './tools'
 export { exportShare, readShareFile, shareDir, renderShareHtml, type ShareResult } from './share'
 export {
+  loadRelays, saveRelays, createRelay, findRelayByCode, revokeRelay,
+  relayUrl, relaysPath, renderRelayViewerHtml, type RelayEntry,
+} from './relay'
+export {
   startDeviceLogin, pollDeviceToken, validatePat, ensureRepo, pushWorkspace,
 } from './github'
 export {

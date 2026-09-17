@@ -20,6 +20,7 @@ import type {
   MemoryFact,
   MemoryState,
   PermissionRequest,
+  RelayEntry,
   SanitizedConfig,
   SessionData,
   SessionMeta,
@@ -53,6 +54,7 @@ interface TagentState {
   worklogContent: string
   worklogExists: boolean
   timeline: SessionMeta[]
+  relays: RelayEntry[]
 
   /* active session */
   session: SessionData | null
@@ -90,6 +92,9 @@ interface TagentState {
   setMaxTurns: (n: number) => Promise<void>
   refreshWorklog: () => Promise<void>
   shareSession: (id: string) => Promise<{ ok: boolean; url?: string; file?: string; error?: string }>
+  relaySession: (id: string) => Promise<{ ok: boolean; code?: string; url?: string; error?: string }>
+  relayRevoke: (code: string) => Promise<void>
+  refreshRelays: () => Promise<void>
   refreshTimeline: () => Promise<void>
   saveGithubPat: (token: string) => Promise<{ ok: boolean; login?: string; error?: string }>
   githubPush: () => Promise<void>
@@ -140,6 +145,7 @@ const initial = {
   worklogContent: '',
   worklogExists: false,
   timeline: [],
+  relays: [],
   session: null,
   stream: '',
   status: null,
@@ -177,6 +183,7 @@ export const useTagent = create<TagentState>((set, get) => ({
         const payload = await helloDaemon(socket)
         console.info('[tagent] hello ok — live mode')
         await get()._applyHello(payload)
+        void get().refreshRelays()
       } catch (e) {
         console.warn('[tagent] hello failed — falling back to demo:', (e as Error).message)
         set({ connection: 'demo' })
@@ -532,6 +539,29 @@ export const useTagent = create<TagentState>((set, get) => ({
     const { socket, connection } = get()
     if (connection !== 'ready' || !socket) return { ok: false, error: 'daemon not connected' }
     return call<{ ok: boolean; url?: string; file?: string; error?: string }>(socket, 'session:share', { id })
+  },
+
+  async relaySession(id) {
+    const { socket, connection } = get()
+    if (connection !== 'ready' || !socket) return { ok: false, error: 'daemon not connected' }
+    const r = await call<{ ok: boolean; code?: string; url?: string; error?: string }>(socket, 'relay:create', { sessionId: id })
+    void get().refreshRelays()
+    return r
+  },
+
+  async relayRevoke(code) {
+    const { socket, connection } = get()
+    if (connection !== 'ready' || !socket) return
+    await call<{ ok: boolean }>(socket, 'relay:revoke', { code })
+    await get().refreshRelays()
+  },
+
+  async refreshRelays() {
+    const { socket, connection } = get()
+    if (connection !== 'ready' || !socket) return
+    const r = await call<{ relays?: RelayEntry[] }>(socket, 'relay:list', {}, 10000)
+      .catch(() => ({ relays: [] as RelayEntry[] }))
+    set({ relays: r.relays ?? [] })
   },
 
   async saveGithubPat(token) {

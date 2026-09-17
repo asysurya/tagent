@@ -1,6 +1,6 @@
 {
-  "version": "0.4.0",
-  "date": "2026-09-17",
-  "notes": "The TUI is now the primary interface — a complete terminal UI with every feature the web GUI has. New command surface (tagent start/web/run/auth/config), share links, subagent timelines, worklog + todos, and caveman mode.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.4.0"
+  "version": "0.5.0",
+  "date": "2026-09-18",
+  "notes": "Share any session with another person in real time — a read-only viewer page at /relay/<code> that streams messages, tool calls and todos as they happen. tagent relay on the CLI, /relay in the TUI, one click in the GUI.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.5.0"
 }

@@ -34,6 +34,12 @@ import {
   syncMemoryToMega,
   pullMemoryFromMega,
   exportShare,
+  createRelay,
+  loadRelays,
+  saveRelays,
+  revokeRelay as revokeRelayEntry,
+  relayUrl as relayLinkUrl,
+  type RelayEntry,
   type AgentEvents,
   type ChatMessage,
   type LoopSummary,
@@ -550,5 +556,39 @@ export class AgentHost {
     if (!s) return { ok: false, error: sessionId ? `session not found: ${sessionId}` : 'no session to share' }
     const r = exportShare(this.root, s)
     return { ok: true, url: r.url, file: r.file }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* relay mode — live read-only sharing                                 */
+  /* ------------------------------------------------------------------ */
+
+  /** Read a session without activating it — the relay viewer snapshot. */
+  sessionSnapshot(sessionId?: string): SessionData | null {
+    const id = sessionId ?? this.session?.id
+    if (!id) return null
+    return this.sessions.load(id) ?? null
+  }
+
+  /** Create (or return) the live relay for a session — one relay per session. */
+  relayCreate(sessionId?: string): { ok: boolean; code?: string; url?: string; error?: string } {
+    const s =
+      (sessionId && this.sessions.load(sessionId)) ||
+      (sessionId ? undefined : this.session) ||
+      (sessionId ? undefined : this.sessions.list()[0] && this.sessions.load(this.sessions.list()[0].id))
+    if (!s) return { ok: false, error: sessionId ? `session not found: ${sessionId}` : 'no session to share' }
+    const entry = createRelay(this.root, s.id, s.title)
+    return { ok: true, code: entry.code, url: relayLinkUrl(entry.code) }
+  }
+
+  /** Active relays (prunes entries whose session no longer exists). */
+  relayList(): RelayEntry[] {
+    const known = new Set(this.sessions.list().map((s) => s.id))
+    const relays = loadRelays(this.root).filter((r) => known.has(r.sessionId))
+    saveRelays(this.root, relays)
+    return relays
+  }
+
+  relayRevoke(code: string): { ok: boolean } {
+    return { ok: revokeRelayEntry(this.root, String(code ?? '')) }
   }
 }

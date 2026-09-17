@@ -52,6 +52,7 @@ process when you want a browser. Same engine, same sessions, same permissions.
 | 📋 **Worklog + todos** | Live todo list + timestamped WORKLOG.md journal the agent keeps as it works |
 | 🦴 **Caveman mode** | Omni-route style token saver — terse replies, compact prompts, tighter budgets |
 | 🔗 **Share links** | Export any session as a standalone read-only HTML file |
+| 📡 **Relay mode** | Share a session LIVE over the network — a read-only viewer page that streams messages, tool calls and todos as they happen |
 | 🕸️ **Timelines** | Subagent runs persist as sessions — inspect the multi-agent timeline after the fact |
 | 🖥️ **Terminal in GUI** | Run shell commands in the workspace, see output |
 | 👤 **Guest-first** | Works fully offline & local; accounts are optional |
@@ -101,13 +102,34 @@ tagent auth                # GitHub login wizard (device flow / PAT)
 tagent config list|get|set # settings from the shell (-g = global)
 tagent sessions [path]     # list a workspace's sessions
 tagent share [id] [path]   # export a session as standalone HTML
+tagent relay [id] [path]   # share a session LIVE (read-only viewer page)
+           --port --host   # --host 0.0.0.0 exposes it on your LAN
+tagent relay list|stop     # manage live relays
 tagent doctor [path]       # environment sanity check
 tagent version · --check-update · help
 ```
 
 Inside the TUI everything is a slash command — `/help` lists them all (sessions,
-model switching, caveman, worklog, share, timeline, permissions, files, grep,
-auth, push, checkpoints, memory, skills…). Plain text talks to the agent.
+model switching, caveman, worklog, share, relay, timeline, permissions, files,
+grep, auth, push, checkpoints, memory, skills…). Plain text talks to the agent.
+
+### 📡 Relay mode — share a session live
+
+Share what the agent is doing with a teammate (or your phone) while it happens.
+The viewer gets a read-only page with the history plus everything live:
+streaming tokens, tool calls, todos. Revoke at any time.
+
+```bash
+tagent relay ~/my-project            # share the newest session, prints the URL
+tagent relay --host 0.0.0.0          # LAN urls for phone/teammates
+tagent relay list ~/my-project       # active relays
+tagent relay stop <code>             # end it — viewers disconnect instantly
+```
+
+In the TUI: `/relay` (starts a local endpoint on demand), `/relay list`,
+`/relay stop <code>`. In the GUI: the RadioTower button on a session, and the
+"live shares" list in the sidebar. Codes are unguessable, relays persist until
+revoked, and viewer sockets are read-only by construction.
 
 ### 📱 Run it on your phone (Android, no root)
 
@@ -207,7 +229,13 @@ Workspace-local `.tagent/config.json` (gitignored) over `~/.tagent/config.json`:
 - [x] GitHub OAuth device flow — `tagent auth` + GUI button (v0.4.0)
 - [x] Share links — standalone HTML session exports (v0.4.0)
 - [x] Multi-agent timelines (v0.4.0)
-- [ ] Relay mode — share a session with another person over the network
+- [x] Relay mode — share a session with another person over the network (v0.5.0)
+
+Ideas for the next versions (unordered, unpromised):
+
+- [ ] Relay viewer participation — let a trusted viewer send messages to the agent
+- [ ] Remote relay — broker page for sharing across networks without an SSH tunnel
+- [ ] Auth for LAN daemons — token-gated GUI/RPC when bound to 0.0.0.0
 
 ## Releases & versioning
 

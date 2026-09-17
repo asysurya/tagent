@@ -47,6 +47,16 @@ export interface SessionData extends SessionMeta {
   todos: TodoItem[]
 }
 
+/** a live read-only share of one session (relay mode) */
+export interface RelayEntry {
+  code: string
+  sessionId: string
+  sessionTitle: string
+  createdAt: number
+  /** connected viewer sockets (server-side count) */
+  viewers?: number
+}
+
 export type AgentMode = 'build' | 'plan'
 
 export interface ModelInfo {

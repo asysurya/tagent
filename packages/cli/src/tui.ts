@@ -17,6 +17,7 @@ import {
 } from '@tagent/core'
 
 import { AgentHost } from './host'
+import type { DaemonHandle } from './daemon'
 
 /**
  * The TUI — Tagent's primary interface.
@@ -111,6 +112,9 @@ export class Tui {
   private exited = false
   private lastCtrlC = 0
   private webUrl?: string
+  /** on-demand relay endpoint (created by /relay, closed on exit) */
+  private relayServer?: DaemonHandle
+  private relayBase?: string
 
   constructor(private host: AgentHost, opts: TuiOptions) {
     this.rl = readline.createInterface({
@@ -458,7 +462,27 @@ export class Tui {
     this.exited = true
     this.hideTicker()
     this.host.interrupt()
+    void this.relayServer?.close().catch(() => undefined)
     this.rl.close()
+  }
+
+  /** start a minimal local endpoint for /relay (no GUI, first free port 4020-4029) */
+  private async startRelayEndpoint(): Promise<void> {
+    const { createDaemon } = await import('./daemon')
+    let lastErr: unknown
+    for (let port = 4020; port < 4030; port++) {
+      try {
+        this.relayServer = await createDaemon({
+          port, host: '127.0.0.1', workspaceRoot: this.host.root,
+          agentHost: this.host, quiet: true,
+        })
+        this.relayBase = `http://127.0.0.1:${port}`
+        return
+      } catch (e) {
+        lastErr = e
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
   }
 
   /* ------------------------------------------------------------------ */
@@ -477,7 +501,7 @@ export class Tui {
         this.println(bold('\n  Tagent commands'))
         const rows: [string, string][] = [
           ['sessions · new [plan] · open <id> · delete <id>', 'session management'],
-          ['share [id] · timeline', 'export HTML · subagent runs'],
+          ['share [id] · relay [id|list|stop <code>] · timeline', 'HTML export · live share · subagent runs'],
           ['mode [plan|build] · model [p[:m]]', 'planning vs build · pick llm'],
           ['caveman [on|off] · worklog [on|off] · maxturns <n>', 'agent behavior'],
           ['todos · log [n]', 'live plan · journal tail'],
@@ -535,6 +559,45 @@ export class Tui {
         this.println(green('  ✔ share exported'))
         this.println(`    ${dim('file')}  ${r.file}`)
         this.println(`    ${dim('url')}   ${this.webUrl ? this.webUrl.replace(/\/$/, '') + r.url : dim('run with --web-gui to serve it')}`)
+        return
+      }
+
+      case 'relay': {
+        const [sub, code] = arg.split(/\s+/)
+        if (sub === 'stop') {
+          if (!code) return this.println(dim('  usage: /relay stop <code> — see /relay list'))
+          const r = host.relayRevoke(code)
+          return this.println(r.ok ? green(`  ✔ relay ${code} ended`) : dim(`  no live relay ${code}`))
+        }
+        if (sub === 'list') {
+          const relays = host.relayList()
+          if (relays.length === 0) return this.println(dim('  no live relays — /relay starts one for this session'))
+          this.println(bold(`  live relays (${relays.length})`))
+          for (const r of relays) {
+            this.println(`   ${green('◉')} ${bold(r.code)} ${dim(`· ${r.sessionTitle} · since ${fmtWhen(r.createdAt)}`)}`)
+          }
+          this.println(dim('    stop: /relay stop <code>'))
+          return
+        }
+        const target = sub
+          ? host.listSessions().find((s) => s.id.startsWith(sub))
+          : host.session
+        if (!target) return this.println(dim('  no session yet — say something first, or /relay <session-prefix>'))
+        const r = host.relayCreate(target.id)
+        if (!r.ok || !r.code) return this.println(red(`  ✗ ${r.error}`))
+        const base = this.webUrl ?? this.relayBase
+        if (!base) {
+          try {
+            await this.startRelayEndpoint()
+          } catch (e) {
+            return this.println(red(`  ✗ could not start the relay endpoint: ${(e as Error).message}`))
+          }
+        }
+        const url = (this.webUrl ?? this.relayBase ?? '').replace(/\/$/, '') + r.url
+        this.println(green(`  ✔ live relay for "${target.title}"`))
+        this.println(`    ${bold('url')}   ${url}`)
+        this.println(dim(`    read-only live view · ends with /relay stop ${r.code}`))
+        this.println(dim('    sharing beyond this machine: tagent relay --host 0.0.0.0 (prints LAN urls)'))
         return
       }
 
