@@ -7,7 +7,6 @@ VERSION="${2:-0.5.0}"
 
 BODY=$(cat <<'EOF'
 ## Relay mode: share a live session over the network
-
 The last roadmap item is done — you can now share any session with another person **while it happens**. A read-only viewer page streams messages, tool calls, todos and subagent activity in real time, from any device with a browser.
 
 ### Relay mode
@@ -38,7 +37,7 @@ The last roadmap item is done — you can now share any session with another per
 ```bash
 git clone https://github.com/asysurya/tagent.git
 cd tagent && bash scripts/setup-ubuntu.sh
-bun link            # makes the \`tagent\` command available
+bun link            # makes the `tagent` command available
 tagent start ~/my-project
 ```
 EOF
