@@ -3,7 +3,9 @@ import { io } from 'socket.io-client'
 
 const port = process.argv[2] ?? '4020'
 const sockPath = process.argv[3] ?? '/'
-const socket = io(`http://localhost:${port}`, { path: sockPath, transports: ['websocket', 'polling'] })
+// 127.0.0.1, not localhost: in some sandboxes localhost resolves to ::1 first
+// while the daemon binds IPv4 only.
+const socket = io(`http://127.0.0.1:${port}`, { path: sockPath, transports: ['websocket', 'polling'] })
 
 const stepTimeout = (ms: number, label: string) =>
   new Promise<never>((_, r) => setTimeout(() => r(new Error(`STEP TIMEOUT: ${label}`)), ms))
