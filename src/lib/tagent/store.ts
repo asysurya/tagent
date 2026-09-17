@@ -83,6 +83,7 @@ interface TagentState {
   githubPush: () => Promise<void>
   undo: () => Promise<void>
   openFile: (path: string) => Promise<void>
+  closeFile: () => void
   saveFile: () => Promise<void>
   refreshTree: () => Promise<void>
   setRightTab: (t: RightTab) => void
@@ -457,6 +458,10 @@ export const useTagent = create<TagentState>((set, get) => ({
     const r = await call<{ path: string; content: string; binary?: boolean; error?: string }>(socket, 'file:read', { path })
     if (r.error) set({ fileBuffer: { path, content: `// ${r.error}`, dirty: false } })
     else set({ fileBuffer: { path, content: r.binary ? '(binary file)' : r.content, dirty: false, binary: r.binary } })
+  },
+
+  closeFile() {
+    set({ fileBuffer: null })
   },
 
   async saveFile() {

@@ -52,7 +52,7 @@ The daemon is self-contained: it serves the built web GUI itself, so there is
 no separate frontend process to run.
 
 ```bash
-# 0. get the repo (private — GitHub will ask for your PAT/login)
+# 0. get the repo
 git clone https://github.com/asysurya/tagent.git && cd tagent
 
 # 1. one-shot setup: bun + dependencies (GUI bundle ships in the repo)
@@ -74,9 +74,26 @@ enough. Requirements: Ubuntu 20.04+ (or any Debian-based x64/arm64), `git`, and
 ```bash
 bun packages/cli/src/index.ts <folder>  # workspace to open (default: cwd)
                     --port 4020         # daemon port
+                    --host 127.0.0.1    # bind address (0.0.0.0 = LAN)
                     --no-open           # don't launch the browser
                     --gui <dir>         # custom GUI bundle directory
 ```
+
+### 📱 Run it on your phone (Android, no root)
+
+Tagent runs on a phone under [UserLAnd Ubuntu](https://userland.tech) — proot,
+no root — and the GUI is a mobile-tabbed layout served to your phone browser:
+
+```bash
+# inside the UserLAnd Ubuntu session:
+sudo apt-get install -y git curl
+git clone https://github.com/asysurya/tagent.git && cd tagent
+bash scripts/setup-ubuntu.sh
+bun packages/cli/src/index.ts ~/my-project --no-open
+```
+
+Then open **http://localhost:4020** in Chrome on the same phone. Full guide:
+[docs/USERLAND.md](docs/USERLAND.md).
 
 ### Development / sandbox mode
 
@@ -103,6 +120,7 @@ mini-services/    sandbox harness that boots the daemon on :3001
 builtin-skills/   shipped skills (web-app-builder, code-review, bug-hunter)
 demo-workspace/   a tiny vanilla-JS todo app with planted bugs — try the agent on it
 scripts/         setup-ubuntu.sh + smoke tests (bun scripts/debug-rpc.ts 4020 /socket)
+docs/             USERLAND.md — run Tagent on an Android phone (no root)
 ```
 
 ## The action protocol
@@ -151,6 +169,8 @@ Workspace-local `.tagent/config.json` (gitignored) over `~/.tagent/config.json`:
 - [ ] Workspace switcher for multiple concurrent workspaces
 - [ ] Share links, relay mode
 
-## License
+## Contributing & license
 
-MIT
+MIT — see [LICENSE](LICENSE). PRs welcome: [CONTRIBUTING.md](CONTRIBUTING.md)
+explains the dev loop and conventions. Found something exploitable?
+[SECURITY.md](SECURITY.md) — please report privately, not in public issues.

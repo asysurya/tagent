@@ -41,6 +41,7 @@ import { walkTree, readWorkspaceFile, saveWorkspaceFile } from './files'
 
 export interface DaemonOptions {
   port: number
+  host?: string
   workspaceRoot: string
   configOverride?: Partial<TagentConfig>
   socketPath?: string
@@ -512,8 +513,8 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     process.on('unhandledRejection', (err) => {
       console.error('[tagent] unhandled rejection (daemon stays up):', err)
     })
-    server.listen(opts.port, () => {
-      log(`daemon ready on :${opts.port} (workspace: ${root})`)
+    server.listen(opts.port, opts.host ?? '127.0.0.1', () => {
+      log(`daemon ready on ${opts.host ?? '127.0.0.1'}:${opts.port} (workspace: ${root})`)
       if (guiDir) log(`serving GUI from ${guiDir} (websocket: ${socketIoPath})`)
       resolve({
         server,

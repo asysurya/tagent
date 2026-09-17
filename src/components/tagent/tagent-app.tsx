@@ -8,6 +8,7 @@ import { TopBar } from './topbar'
 import { Sidebar } from './sidebar'
 import { ChatPanel } from './chat-panel'
 import { RightPanel } from './right-panel'
+import { MobileShell } from './mobile-shell'
 import { PermissionDialog } from './permission-dialog'
 import { SettingsDialog } from './settings-dialog'
 
@@ -37,9 +38,9 @@ export function TagentApp() {
           </Panel>
         </PanelGroup>
       </div>
-      {/* mobile: chat only; panels via topbar toggles */}
+      {/* mobile: tabbed phone layout (UserLAnd on Android, small windows) */}
       <div className="flex-1 min-h-0 md:hidden">
-        <ChatPanel />
+        <MobileShell />
       </div>
 
       <PermissionDialog />

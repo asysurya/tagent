@@ -10,10 +10,20 @@
 
 import path from 'node:path'
 import fs from 'node:fs'
+import os from 'node:os'
 import { createDaemon } from './daemon'
 import { GLOBAL_DIR } from '@tagent/core'
 
 const args = process.argv.slice(2)
+
+/** Android/UserLAnd detection — no xdg-open there, print phone-browser hints instead. */
+function isAndroidish() {
+  try {
+    return /android/i.test(os.release()) || fs.existsSync('/.proot') || !!process.env.USERLAND
+  } catch {
+    return false
+  }
+}
 
 function flag<T = string>(name: string): T | undefined {
   const i = args.indexOf(`--${name}`)
@@ -27,6 +37,7 @@ async function main() {
   const root = path.resolve(dirArg)
   const port = Number(flag('port') ?? 4020)
   const noOpen = flag('no-open') === true
+  const host = typeof flag<string>('host') === 'string' ? flag<string>('host') : '127.0.0.1'
 
   // GUI bundle: explicit --gui <dir> wins, else look for gui-dist/ in the repo
   let guiDir: string | undefined = flag<string>('gui')
@@ -43,9 +54,10 @@ async function main() {
   const { mkdirSync } = await import('node:fs')
   mkdirSync(GLOBAL_DIR, { recursive: true })
 
-  const handle = await createDaemon({ port, workspaceRoot: root, guiDir })
+  const handle = await createDaemon({ port, host, workspaceRoot: root, guiDir })
 
-  const url = `http://localhost:${port}`
+  const url = `http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`
+  const mobile = isAndroidish()
   console.log(`
   ████████╗ █████╗ ██╗   ██╗██████╗ ███████╗██████╗
   ╚══██╔══╝██╔══██╗██║   ██║██╔══██╗██╔════╝██╔══██╗
@@ -61,15 +73,20 @@ async function main() {
       : '\n  ⚠ GUI bundle not found — run `bun run build:gui` for the browser UI,\n    or use `next dev` in development.'
   }
 
-  Open ${url} in your browser to start coding with the agent.
+  Open ${url} in your browser to start coding with the agent.${
+    mobile
+      ? '\n  📱 You are on Android (UserLAnd) — open that URL in your PHONE browser.'
+      : ''
+  }
   Press Ctrl+C to stop.
 `)
 
-  if (!noOpen) {
+  if (!noOpen && !mobile) {
     const { exec } = await import('node:child_process')
     const open =
       process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start ""' : 'xdg-open'
-    exec(`${open} ${url}`.replace('"" ""', '""'), () => undefined)
+    // xdg-open is best-effort — on bare WSL/headless boxes it simply no-ops
+    exec(`command -v ${open.split(' ')[0]} >/dev/null 2>&1 && ${open} ${url}`, () => undefined)
   }
 
   const shutdown = async () => {

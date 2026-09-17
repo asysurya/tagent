@@ -13,6 +13,7 @@ const workspaceRoot = path.resolve(import.meta.dir, '../../demo-workspace')
 
 await createDaemon({
   port: 3001,
+  host: '0.0.0.0', // sandbox gateway reaches the daemon via the container network
   workspaceRoot,
   socketPath: '/',
   configOverride: {
