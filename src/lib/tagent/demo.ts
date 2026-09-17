@@ -15,6 +15,7 @@ export const DEMO_FILES: Record<string, string> = {
   'index.html': '<!doctype html>\n<html>\n  <head><title>Demo</title></head>\n  <body>\n    <h1>Hello, Tagent</h1>\n    <script src="app.js"></script>\n  </body>\n</html>\n',
   'app.js': '// demo file\nconsole.log("hello from demo")\n',
   'styles.css': 'body { font-family: system-ui; }\n',
+  'WORKLOG.md': '# Worklog\n\n## 2026-09-17\n\n- **09:12 — demo mode** Daemon offline — this is a scripted journal.\n- **09:14** read app.js, found the todo-counter bug.\n- **09:15 — fix counter** patched off-by-one in updateCount(); all tests pass.\n',
 }
 
 export function demoTree(): FileNode {
@@ -49,6 +50,8 @@ export function startDemo(): void {
       mega: { enabled: false, email: null },
       autoCheckpoint: true,
       maxTurns: 40,
+      worklog: { enabled: true },
+      caveman: false,
     },
     skills: [
       { name: 'web-app-builder', description: 'Playbook for building a complete web app', source: 'builtin', path: '' },
@@ -62,6 +65,8 @@ export function startDemo(): void {
       { id: 's1', title: 'Fix todo counter bug', model: 'glm-4.7', mode: 'build', createdAt: Date.now(), updatedAt: Date.now(), messageCount: 4 },
     ],
     fileTree: demoTree(),
+    worklogExists: true,
+    worklogContent: DEMO_FILES['WORKLOG.md']!,
   })
   st._apply.todos([{ id: 't1', content: 'Read app.js', status: 'completed' }, { id: 't2', content: 'Patch counter', status: 'in_progress' }])
 }

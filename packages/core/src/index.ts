@@ -29,7 +29,7 @@ export {
   type ProviderAdapter, type CompletionRequest, type CompletionResult,
   type NativeToolDef, type NativeToolCall,
 } from './providers'
-export { buildToolset, ALL_TOOLS } from './tools'
+export { buildToolset, ALL_TOOLS, worklogTool, worklogPath } from './tools'
 export {
   startDeviceLogin, pollDeviceToken, validatePat, ensureRepo, pushWorkspace,
 } from './github'

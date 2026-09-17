@@ -19,6 +19,8 @@ import { buildToolset } from './tools'
 
 const ACTION_RE = /```tagent:action\s*\n([\s\S]*?)```/g
 const MAX_TOOL_OUTPUT = 24_000
+/** caveman mode: tighter tool-output budget — real token savings */
+const MAX_TOOL_OUTPUT_CAVEMAN = 8_000
 /** how often streamed text is pushed to the UI (ms) — keeps phones calm */
 const CHUNK_EMIT_MS = 60
 
@@ -102,11 +104,18 @@ export class AgentLoop {
     session.messages.push(userMsg)
     this.opts.events.onUserMessage?.(userMsg)
 
+    const caveman = this.opts.config.caveman === true
     const system = buildSystemPrompt({
       workspaceRoot: session.workspaceId,
       mode: this.opts.mode,
       tools: this.tools,
       subagent: (this.opts.depth ?? 0) > 0,
+      caveman,
+      // the primary agent keeps the journal; subagents & plan mode stay lean
+      worklog:
+        this.opts.config.worklog?.enabled !== false &&
+        (this.opts.depth ?? 0) === 0 &&
+        this.opts.mode === 'build',
     })
 
     let turns = 0
@@ -223,12 +232,12 @@ export class AgentLoop {
             record.status = 'error'
             output = `Error: ${(e as Error).message}`
           }
-          record.output = trunc(output, 4_000)
+          record.output = trunc(output, caveman ? 1_600 : 4_000)
           record.endedAt = Date.now()
           toolCalls++
           this.opts.events.onToolEnd?.(record)
           results.push(
-            `### ${action.tool} (${record.status})\ninput: ${JSON.stringify(action.input).slice(0, 400)}\noutput:\n${trunc(output, MAX_TOOL_OUTPUT)}`,
+            `### ${action.tool} (${record.status})\ninput: ${JSON.stringify(action.input).slice(0, 400)}\noutput:\n${trunc(output, caveman ? MAX_TOOL_OUTPUT_CAVEMAN : MAX_TOOL_OUTPUT)}`,
           )
         }
 

@@ -4,7 +4,9 @@
  * Spawns its own daemon on a scratch workspace (allow-all permissions, zai
  * provider — no API key needed), sends a chat that requires a tool call,
  * and asserts: streamed chunks arrived, the assistant answered, the tool
- * ran, and the file it was asked to write exists with the right content.
+ * ran, the file it was asked to write exists with the right content, the
+ * worklog journal was appended — and caveman mode round-trips with a
+ * terse reply.
  *
  * Usage: bun scripts/e2e-chat.ts [port]
  */
@@ -104,7 +106,8 @@ async function runOnce(): Promise<boolean> {
       socket.emit('chat:send', {
         text:
           `Create a file named ${MARKER} in the workspace root with exactly this content (no quotes, one line): ${MARKER_CONTENT}. ` +
-          'After the file is written, reply with a one-sentence confirmation.',
+          'After the file is written, call the worklog tool with entry "wrote ' + MARKER + '". ' +
+          'Then reply with a one-sentence confirmation.',
         mode: 'build',
       }, (ok: boolean) => r(ok))
       setTimeout(() => r(false), 15000)
@@ -125,15 +128,53 @@ async function runOnce(): Promise<boolean> {
     const exists = fs.existsSync(markerPath)
     const content = exists ? fs.readFileSync(markerPath, 'utf8').trim() : ''
 
+    const worklogPath = path.join(WS, 'WORKLOG.md')
+    const wlExists = fs.existsSync(worklogPath)
+    const wlContent = wlExists ? fs.readFileSync(worklogPath, 'utf8') : ''
+
     const pass =
       summary?.summary?.finished === 'complete' &&
       assistantText.trim().length > 0 &&
       toolStarts >= 1 &&
-      exists && content === MARKER_CONTENT
+      exists && content === MARKER_CONTENT &&
+      wlExists && wlContent.includes(MARKER)
 
     log(`file ${MARKER}: exists=${exists} content=${JSON.stringify(content)}`)
+    log(`WORKLOG.md: exists=${wlExists} hasMarker=${wlContent.includes(MARKER)}`)
     log(pass ? 'E2E PASS ✓' : 'E2E FAIL ✗')
-    return pass
+
+    /* phase 2 — caveman mode round-trip */
+    const setR = await new Promise<any>((r) => {
+      socket.emit('settings:save', { caveman: true }, (res: any) => r(res))
+      setTimeout(() => r(undefined), 5000)
+    })
+    const cavemanOn = setR?.config?.caveman === true
+    log('caveman toggle ack:', cavemanOn)
+
+    let cavemanReply = ''
+    const events2: string[] = []
+    const replyHandler = (d: { message: { role: string; content: string } }) => {
+      events2.push(`${d.message.role}: ${JSON.stringify(d.message.content.slice(0, 100))}`)
+      if (d.message.role === 'assistant') cavemanReply = d.message.content
+    }
+    socket.on('message:new', replyHandler)
+    socket.on('notify', (n: { level: string; message: string }) => events2.push(`notify[${n.level}]: ${n.message}`))
+    const ack2 = await new Promise<boolean>((r) => {
+      socket.emit('chat:send', { text: 'In one short sentence: what is in WORKLOG.md?', mode: 'build' }, (ok: boolean) => r(ok))
+      setTimeout(() => r(false), 15000)
+    })
+    const summary2 = await new Promise<any>((r) => {
+      socket.on('chat:done', r)
+      setTimeout(() => r(undefined), 120000)
+    })
+    socket.off('message:new', replyHandler)
+    log('phase2 ack:', ack2, '| summary2:', JSON.stringify(summary2?.summary ?? null))
+    log('phase2 events:', JSON.stringify(events2, null, 1))
+    log('caveman reply:', JSON.stringify(cavemanReply.slice(0, 120)))
+    const cavemanPass = cavemanOn && !!summary2?.summary && summary2.summary.finished === 'complete' && cavemanReply.trim().length > 0 && cavemanReply.length < 600
+    log(cavemanPass ? 'CAVEMAN PHASE PASS ✓' : 'CAVEMAN PHASE FAIL ✗')
+
+    return pass && cavemanPass
   } finally {
     socket.disconnect()
     try { process.kill(-daemon.pid!, 'SIGKILL') } catch { daemon.kill('SIGKILL') }

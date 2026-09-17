@@ -206,6 +206,12 @@ export interface TagentConfig {
   }
   autoCheckpoint: boolean
   maxTurns: number
+  /** agent-maintained progress journal (WORKLOG.md) + live todo protocol */
+  worklog?: {
+    enabled: boolean
+  }
+  /** caveman mode — ultra-terse replies + compact prompts. Big token saver. */
+  caveman?: boolean
   /** use native function-calling when the provider supports it (default true).
    *  The markdown action protocol is always available as a fallback. */
   nativeTools?: boolean

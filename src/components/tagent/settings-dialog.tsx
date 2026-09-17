@@ -9,12 +9,12 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Check, ExternalLink, Eye, EyeOff, Github, Key, Loader2, ShieldAlert, Terminal, Globe } from 'lucide-react'
+import { Check, ExternalLink, Eye, EyeOff, Github, Key, Loader2, ShieldAlert, Terminal, Globe, Bot, Bone, ScrollText, Coins } from 'lucide-react'
 import { useTagent } from '@/lib/tagent/store'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 
-type Tab = 'providers' | 'permissions' | 'integrations'
+type Tab = 'providers' | 'permissions' | 'agent' | 'integrations'
 
 export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const [tab, setTab] = useState<Tab>('providers')
@@ -35,6 +35,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
           {([
             ['providers', 'Providers', Key],
             ['permissions', 'Permissions', ShieldAlert],
+            ['agent', 'Agent', Bot],
             ['integrations', 'Integrations', Github],
           ] as const).map(([id, label, Icon]) => (
             <button
@@ -52,6 +53,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
           <div className="p-5 pt-4">
             {tab === 'providers' && <ProvidersTab />}
             {tab === 'permissions' && <PermissionsTab />}
+            {tab === 'agent' && <AgentTab />}
             {tab === 'integrations' && <IntegrationsTab />}
           </div>
         </ScrollArea>
@@ -196,6 +198,105 @@ function PermissionsTab() {
             <Globe className="size-4 text-orange-400" /> browser tool <span className="text-[10px] text-zinc-600">(needs playwright)</span>
           </div>
           <Switch checked={config.tools.browser} onCheckedChange={(v) => void setToolEnabled('browser', v)} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AgentTab() {
+  const config = useTagent((s) => s.config)
+  const setCaveman = useTagent((s) => s.setCaveman)
+  const setWorklog = useTagent((s) => s.setWorklog)
+  const setMaxTurns = useTagent((s) => s.setMaxTurns)
+  const setRightTab = useTagent((s) => s.setRightTab)
+  const [turns, setTurns] = useState('')
+
+  if (!config) return null
+
+  return (
+    <div className="space-y-5">
+      <p className="text-xs text-zinc-500 leading-relaxed">
+        How the agent behaves on every run — progress tracking and token frugality.
+      </p>
+
+      {/* Worklog + todos */}
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <ScrollText className="size-4 text-orange-400" />
+          <span className="text-sm font-medium text-zinc-200">Worklog + todos</span>
+          {config.worklog.enabled ? (
+            <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-800/50 hover:bg-emerald-500/15 text-[9px] h-4 px-1.5">on</Badge>
+          ) : (
+            <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-zinc-700 text-zinc-500">off</Badge>
+          )}
+        </div>
+        <p className="text-xs text-zinc-500 leading-relaxed">
+          The agent plans multi-step work as a <b className="text-zinc-300">live todo list</b> in the chat, then
+          appends a timestamped entry to <code className="text-zinc-400">WORKLOG.md</code> after every completed step —
+          a durable journal you (or a future session) can pick back up. Entries show up in the
+          <b className="text-zinc-300"> Log</b> tab of the side panel.
+        </p>
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-zinc-300">Keep the journal</span>
+          <Switch aria-label="Worklog and todos" checked={config.worklog.enabled} onCheckedChange={(v) => void setWorklog(v)} />
+        </div>
+        <Button size="sm" variant="outline" className="h-7 text-xs border-zinc-700 gap-1.5" onClick={() => setRightTab('worklog')}>
+          <ScrollText className="size-3.5" /> Open the Log tab
+        </Button>
+      </div>
+
+      {/* Caveman mode */}
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <Bone className="size-4 text-orange-400" />
+          <span className="text-sm font-medium text-zinc-200">Caveman mode</span>
+          {config.caveman ? (
+            <Badge className="bg-orange-500/15 text-orange-300 border-orange-700/50 hover:bg-orange-500/15 text-[9px] h-4 px-1.5">me talk short</Badge>
+          ) : (
+            <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-zinc-700 text-zinc-500">off</Badge>
+          )}
+        </div>
+        <p className="text-xs text-zinc-500 leading-relaxed">
+          Omni-route style <b className="text-zinc-300">token saver</b>: ultra-terse replies (telegraphic, no filler,
+          summaries capped at 5 bullets) plus a compact system prompt, one-line tool docs and tighter tool-output
+          budgets. Same tools, same safety — far fewer tokens in and out.
+        </p>
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-zinc-300 flex items-center gap-1.5">
+            <Coins className="size-3.5 text-zinc-500" /> Terse everything
+          </span>
+          <Switch aria-label="Caveman mode" checked={config.caveman} onCheckedChange={(v) => void setCaveman(v)} />
+        </div>
+        <p className="text-[10px] text-zinc-600 leading-relaxed">
+          Tip: toggle it any time from the top bar (bone icon) or with <code className="text-zinc-500">/caveman</code> in chat.
+        </p>
+      </div>
+
+      {/* Max turns */}
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <Bot className="size-4 text-zinc-200" />
+          <span className="text-sm font-medium text-zinc-200">Turn budget</span>
+        </div>
+        <p className="text-xs text-zinc-500 leading-relaxed">
+          Hard cap on agent loop turns per message (1–80). Lower = cheaper and safer for small tasks.
+        </p>
+        <div className="flex gap-2 items-center">
+          <Input
+            type="number" min={1} max={80}
+            value={turns || String(config.maxTurns)}
+            onChange={(e) => setTurns(e.target.value)}
+            className="h-8 bg-zinc-900 border-zinc-800 font-mono text-xs w-24"
+          />
+          <Button
+            size="sm" className="h-8 text-xs bg-orange-500 hover:bg-orange-400 text-zinc-950"
+            disabled={!turns.trim() || Number(turns) === config.maxTurns}
+            onClick={async () => { await setMaxTurns(Number(turns)); setTurns('') }}
+          >
+            Save
+          </Button>
+          <span className="text-[11px] text-zinc-600">current: {config.maxTurns}</span>
         </div>
       </div>
     </div>

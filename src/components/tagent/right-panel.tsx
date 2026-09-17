@@ -1,6 +1,6 @@
 'use client'
 
-import { BookOpen, Brain, Files, Terminal } from 'lucide-react'
+import { BookOpen, Brain, Files, ScrollText, Terminal } from 'lucide-react'
 import { useTagent } from '@/lib/tagent/store'
 import { cn } from '@/lib/utils'
 import { FileTree } from './file-tree'
@@ -8,12 +8,14 @@ import { FileEditor } from './file-editor'
 import { TerminalPanel } from './terminal-panel'
 import { MemoryPanel } from './memory-panel'
 import { SkillsPanel } from './skills-panel'
+import { WorklogPanel } from './worklog-panel'
 
 const TABS = [
   { id: 'files', label: 'Files', icon: Files },
   { id: 'terminal', label: 'Terminal', icon: Terminal },
   { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'skills', label: 'Skills', icon: BookOpen },
+  { id: 'worklog', label: 'Log', icon: ScrollText },
 ] as const
 
 export function RightPanel() {
@@ -67,6 +69,7 @@ export function RightPanel() {
         {tab === 'terminal' && <div className="flex-1 min-h-0"><TerminalPanel /></div>}
         {tab === 'memory' && <div className="flex-1 min-h-0"><MemoryPanel /></div>}
         {tab === 'skills' && <div className="flex-1 min-h-0"><SkillsPanel /></div>}
+        {tab === 'worklog' && <div className="flex-1 min-h-0"><WorklogPanel /></div>}
       </div>
     </div>
   )

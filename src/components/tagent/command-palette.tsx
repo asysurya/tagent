@@ -4,7 +4,7 @@ import { useEffect } from 'react'
 import {
   CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator,
 } from '@/components/ui/command'
-import { Bot, Brain, Files, ListChecks, RotateCcw, Settings, Sparkles, Terminal, Plus, BookOpen } from 'lucide-react'
+import { Bone, Bot, Brain, Files, ListChecks, RotateCcw, ScrollText, Settings, Sparkles, Terminal, Plus, BookOpen } from 'lucide-react'
 import { useTagent } from '@/lib/tagent/store'
 
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
@@ -58,6 +58,18 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           </CommandItem>
           <CommandItem className="text-zinc-300" onSelect={() => run(() => st.setRightTab('skills'))}>
             <BookOpen className="size-4" /> Open skills
+          </CommandItem>
+          <CommandItem className="text-zinc-300" onSelect={() => run(() => st.setRightTab('worklog'))}>
+            <ScrollText className="size-4" /> Open worklog (WORKLOG.md)
+          </CommandItem>
+        </CommandGroup>
+        <CommandSeparator />
+        <CommandGroup heading="Agent behavior">
+          <CommandItem className="text-zinc-300" onSelect={() => run(() => void st.setCaveman(!st.config?.caveman))}>
+            <Bone className="size-4" /> Toggle caveman mode {st.config?.caveman ? '(currently ON)' : '(currently off)'}
+          </CommandItem>
+          <CommandItem className="text-zinc-300" onSelect={() => run(() => void st.setWorklog(!st.config?.worklog.enabled))}>
+            <ScrollText className="size-4" /> Toggle worklog + todos {st.config?.worklog.enabled ? '(currently ON)' : '(currently off)'}
           </CommandItem>
         </CommandGroup>
         <CommandSeparator />

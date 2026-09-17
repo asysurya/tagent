@@ -153,6 +153,10 @@ export function ChatPanel() {
     if (t === '/files') return store.setRightTab('files')
     if (t === '/memory') return store.setRightTab('memory')
     if (t === '/terminal') return store.setRightTab('terminal')
+    if (t === '/worklog' || t === '/log') return store.setRightTab('worklog')
+    if (t === '/caveman') return void store.setCaveman(!store.config?.caveman)
+    if (t === '/worklog-on') return void store.setWorklog(true)
+    if (t === '/worklog-off') return void store.setWorklog(false)
     return store.send(t)
   }
 
@@ -212,7 +216,7 @@ export function ChatPanel() {
           />
           <div className="flex items-center justify-between px-2 pb-2">
             <span className="text-[10px] text-zinc-600 font-mono pl-1.5">
-              /undo · /new · /plan · /build · /skills
+              /undo · /new · /plan · /build · /worklog · /caveman
             </span>
             {running ? (
               <Button size="sm" variant="destructive" className="h-7 gap-1 text-xs" onClick={interrupt}>

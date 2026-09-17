@@ -3,6 +3,7 @@ import { editFileTool, grepTool, listFilesTool, readFileTool, writeFileTool } fr
 import { bashTool } from './bash'
 import { ddgSearchTool, webFetchTool } from './web'
 import { todoWriteTool } from './todo'
+import { worklogTool } from './worklog'
 import { taskTool } from './task'
 import { browserTool } from './browser'
 import { memoryTool } from '../memory'
@@ -18,6 +19,7 @@ const ALL_TOOLS: ToolDefinition[] = [
   webFetchTool,
   ddgSearchTool,
   todoWriteTool,
+  worklogTool,
   taskTool,
   memoryTool,
   loadSkillTool,
@@ -52,8 +54,11 @@ export function buildToolset(opts: BuildToolsetOptions = {}): ToolDefinition[] {
     if (isSubagent && t.name === 'task') return false
     if (cfg && t.name === 'bash' && !cfg.tools.bash) return false
     if (cfg && t.name === 'browser' && !cfg.tools.browser) return false
+    if (cfg && t.name === 'worklog' && cfg.worklog?.enabled === false) return false
     return true
   })
 }
+
+export { worklogTool, worklogPath } from './worklog'
 
 export { ALL_TOOLS }

@@ -135,6 +135,8 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       mega: { enabled: !!cfg.mega?.enabled, email: cfg.mega?.email ?? null },
       autoCheckpoint: cfg.autoCheckpoint,
       maxTurns: cfg.maxTurns,
+      worklog: { enabled: cfg.worklog?.enabled !== false },
+      caveman: cfg.caveman === true,
       bashEnabled: cfg.tools.bash,
       browserEnabled: cfg.tools.browser,
     }
@@ -465,6 +467,8 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       tools: TagentConfig['tools']
       maxTurns: number
       autoCheckpoint: boolean
+      worklogEnabled: boolean
+      caveman: boolean
     }>, cb?: (r: unknown) => void) => {
       try {
         if (p.defaultProvider) cfg.defaultProvider = p.defaultProvider
@@ -478,6 +482,10 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         if (p.tools) cfg.tools = p.tools
         if (typeof p.maxTurns === 'number') cfg.maxTurns = Math.min(Math.max(p.maxTurns, 1), 80)
         if (typeof p.autoCheckpoint === 'boolean') cfg.autoCheckpoint = p.autoCheckpoint
+        if (typeof p.worklogEnabled === 'boolean') {
+          cfg.worklog = { ...(cfg.worklog ?? {}), enabled: p.worklogEnabled }
+        }
+        if (typeof p.caveman === 'boolean') cfg.caveman = p.caveman
         persist()
         cb?.({ ok: true, config: sanitizeConfig() })
       } catch (e) {

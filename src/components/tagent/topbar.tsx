@@ -22,7 +22,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import {
-  Check, ChevronDown, Cpu, Files, FolderInput, FolderOpen, Github, History, ListTodo,
+  Bone, Check, ChevronDown, Cpu, Files, FolderInput, FolderOpen, Github, History, ListTodo,
   PanelRightClose, PanelRightOpen, Settings, Terminal, TerminalSquare, Zap,
 } from 'lucide-react'
 import { useTagent } from '@/lib/tagent/store'
@@ -42,6 +42,8 @@ export function TopBar() {
   const setRightTab = useTagent((s) => s.setRightTab)
   const githubBusy = useTagent((s) => s.githubBusy)
   const githubPush = useTagent((s) => s.githubPush)
+  const caveman = useTagent((s) => s.config?.caveman ?? false)
+  const setCaveman = useTagent((s) => s.setCaveman)
   const running = useTagent((s) => s.running)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -135,6 +137,9 @@ export function TopBar() {
         title={connection}
       />
 
+      <Button variant="ghost" size="icon" className="size-7 text-zinc-400" onClick={() => void setCaveman(!caveman)} title={caveman ? 'Caveman mode ON — terse replies, fewer tokens. Click to turn off.' : 'Caveman mode — terse replies, fewer tokens. Click to turn on.'}>
+        <Bone className={cn('size-4', caveman ? 'text-orange-400' : 'text-zinc-400 opacity-50')} />
+      </Button>
       <Button variant="ghost" size="icon" className="size-7 text-zinc-400" onClick={() => void githubPush()} disabled={githubBusy || !config?.github.connected} title="Push workspace to GitHub">
         <Github className={cn('size-4', config?.github.connected ? 'text-zinc-200' : 'opacity-40')} />
       </Button>

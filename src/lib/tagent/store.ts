@@ -29,7 +29,7 @@ import type {
   WorkspaceInfo,
 } from './types'
 
-type RightTab = 'files' | 'terminal' | 'memory' | 'skills'
+type RightTab = 'files' | 'terminal' | 'memory' | 'skills' | 'worklog'
 
 interface FileBuffer {
   path: string
@@ -50,6 +50,8 @@ interface TagentState {
   sessions: SessionMeta[]
   checkpoints: CheckpointMeta[]
   availableTools: { name: string; description: string; risk: string }[]
+  worklogContent: string
+  worklogExists: boolean
 
   /* active session */
   session: SessionData | null
@@ -81,6 +83,10 @@ interface TagentState {
   setApiKey: (provider: string, key: string) => Promise<void>
   setToolPermission: (tool: string, mode: 'ask' | 'allow' | 'deny') => Promise<void>
   setToolEnabled: (tool: 'bash' | 'browser', enabled: boolean) => Promise<void>
+  setCaveman: (v: boolean) => Promise<void>
+  setWorklog: (v: boolean) => Promise<void>
+  setMaxTurns: (n: number) => Promise<void>
+  refreshWorklog: () => Promise<void>
   saveGithubPat: (token: string) => Promise<{ ok: boolean; login?: string; error?: string }>
   githubPush: () => Promise<void>
   switchWorkspace: (path: string) => Promise<void>
@@ -127,6 +133,8 @@ const initial = {
   sessions: [],
   checkpoints: [],
   availableTools: [],
+  worklogContent: '',
+  worklogExists: false,
   session: null,
   stream: '',
   status: null,
@@ -285,6 +293,7 @@ export const useTagent = create<TagentState>((set, get) => ({
     },
     filesChanged() {
       void get().refreshTree()
+      void get().refreshWorklog()
     },
     permission(p) {
       set({ pendingPermission: p })
@@ -318,6 +327,8 @@ export const useTagent = create<TagentState>((set, get) => ({
       pendingPermission: null,
       fileTree: null,
       fileBuffer: null,
+      worklogContent: '',
+      worklogExists: false,
     })
     if (payload.sessions.length > 0) {
       await get().loadSession(payload.sessions[0].id)
@@ -325,6 +336,7 @@ export const useTagent = create<TagentState>((set, get) => ({
       await get().newSession()
     }
     await get().refreshTree()
+    await get().refreshWorklog()
   },
 
   async setMode(m) {
@@ -448,6 +460,45 @@ export const useTagent = create<TagentState>((set, get) => ({
     const tools = { ...config.tools, [tool]: enabled }
     const r = await call<{ ok: boolean; config: SanitizedConfig }>(socket, 'settings:save', { tools })
     if (r.config) set({ config: r.config })
+  },
+
+  async setCaveman(v) {
+    const { socket } = get()
+    if (!socket || get().connection !== 'ready') return
+    const r = await call<{ ok: boolean; config: SanitizedConfig }>(socket, 'settings:save', { caveman: v })
+    if (r.config) set({ config: r.config })
+    toast(v ? 'Caveman mode ON — terse replies, fewer tokens 🦴' : 'Caveman mode off')
+  },
+
+  async setWorklog(v) {
+    const { socket } = get()
+    if (!socket || get().connection !== 'ready') return
+    const r = await call<{ ok: boolean; config: SanitizedConfig }>(socket, 'settings:save', { worklogEnabled: v })
+    if (r.config) set({ config: r.config })
+    toast(v ? 'Worklog + todos enabled' : 'Worklog disabled')
+  },
+
+  async setMaxTurns(n) {
+    const { socket } = get()
+    if (!socket || get().connection !== 'ready') return
+    const r = await call<{ ok: boolean; config: SanitizedConfig }>(socket, 'settings:save', {
+      maxTurns: Math.min(Math.max(Math.round(n) || 1, 1), 80),
+    })
+    if (r.config) set({ config: r.config })
+  },
+
+  async refreshWorklog() {
+    const { socket, connection } = get()
+    if (connection !== 'ready' || !socket) return
+    type ReadResult = { content?: string; error?: string; binary?: boolean }
+    let r: ReadResult
+    try {
+      r = await call<ReadResult>(socket, 'file:read', { path: 'WORKLOG.md' })
+    } catch {
+      r = { error: 'unreachable' }
+    }
+    if (r.error || r.binary) set({ worklogExists: false, worklogContent: '' })
+    else set({ worklogExists: true, worklogContent: r.content ?? '' })
   },
 
   async saveGithubPat(token) {

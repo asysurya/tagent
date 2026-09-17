@@ -29,6 +29,7 @@ export function defaultConfig(): TagentConfig {
         ddg_search: 'allow',
         task: 'allow',
         todowrite: 'allow',
+        worklog: 'allow',
         memory: 'allow',
         load_skill: 'allow',
         browser: 'ask',
@@ -40,6 +41,8 @@ export function defaultConfig(): TagentConfig {
     autoCheckpoint: true,
     maxTurns: 40,
     nativeTools: true,
+    worklog: { enabled: true },
+    caveman: false,
   }
 }
 

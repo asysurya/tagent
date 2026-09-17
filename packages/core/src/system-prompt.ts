@@ -12,16 +12,28 @@ export function buildSystemPrompt(opts: {
   mode: AgentMode
   tools: ToolDefinition[]
   subagent?: boolean
+  /** caveman mode: compact tool docs + ultra-terse output style */
+  caveman?: boolean
+  /** worklog protocol: todos + WORKLOG.md journal */
+  worklog?: boolean
 }): string {
   const { workspaceRoot, mode, tools } = opts
-  const toolDocs = tools
-    .map((t) => {
-      const params = Object.entries(t.params)
-        .map(([k, v]) => `    - ${k}: ${v}`)
+  const caveman = opts.caveman === true
+  // journaling writes a file — never instruct it in read-only plan mode
+  const worklog = opts.worklog === true && mode !== 'plan'
+
+  const toolDocs = caveman
+    ? tools
+        .map((t) => `- ${t.name}(${Object.keys(t.params).join(', ')}): ${firstSentence(t.description)}`)
         .join('\n')
-      return `### ${t.name} (risk: ${t.risk})\n${t.description}\n  params:\n${params || '    (none)'}`
-    })
-    .join('\n\n')
+    : tools
+        .map((t) => {
+          const params = Object.entries(t.params)
+            .map(([k, v]) => `    - ${k}: ${v}`)
+            .join('\n')
+          return `### ${t.name} (risk: ${t.risk})\n${t.description}\n  params:\n${params || '    (none)'}`
+        })
+        .join('\n\n')
 
   const lines: string[] = []
   lines.push(
@@ -52,6 +64,29 @@ Rules:
 4. Keep replies tight. Never fabricate tool output — if you need a fact, run a tool.
 5. For big file changes: read first, then edit_file for small patches or write_file for new/rewritten files.`)
 
+  if (worklog) {
+    lines.push(`
+## Progress tracking — todos + worklog${caveman ? ' (mandatory)' : ''}
+1. Before multi-step work: call todowrite with the full plan as short items. Update statuses as you go.
+2. After each completed step: call worklog with a 1-2 line entry (what + why). One call per step — never batch a whole run into one entry.
+3. Resuming older work: read WORKLOG.md first, continue where it left off.`)
+  } else if (!opts.subagent) {
+    lines.push(`
+## Progress tracking — todos
+Multi-step work should be tracked with todowrite so the user can follow along live.`)
+  }
+
+  if (caveman) {
+    lines.push(`
+## CAVEMAN MODE — token saving is ON
+Write the tersest useful output. Hard rules:
+- No greetings, no filler, no "I will now…", no restating the task back.
+- Lead-ins before action blocks: max 6 words, or none.
+- Prose: telegraphic. Facts only. No decoration, no headers unless listing >3 items.
+- Final summaries: max 5 bullets, one line each.
+- Terse ≠ vague: never drop required tool inputs, real errors, or asked-for detail.`)
+  }
+
   if (mode === 'plan') {
     lines.push(`
 ## Mode: PLAN
@@ -70,11 +105,23 @@ You are in read-only planning mode. You may use read-only tools (read_file, list
 ## Tools
 ${toolDocs}`)
 
-  lines.push(`
+  if (!caveman) {
+    lines.push(`
 ## Style
 - Be direct and technical; use markdown.
 - When you finish a multi-step change, summarize what changed and what to verify.
 - If something fails, show the error briefly and your fix.`)
+  } else {
+    lines.push(`
+## Style
+- Terse. Technical. No ceremony.`)
+  }
 
   return lines.join('\n')
+}
+
+/** First sentence of a tool description, capped — used for caveman tool docs. */
+function firstSentence(s: string): string {
+  const m = s.split(/(?<=[.!?])\s/)[0] ?? s
+  return m.length > 90 ? `${m.slice(0, 87)}…` : m
 }

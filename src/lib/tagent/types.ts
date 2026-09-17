@@ -73,6 +73,8 @@ export interface SanitizedConfig {
   mega: { enabled: boolean; email: string | null }
   autoCheckpoint: boolean
   maxTurns: number
+  worklog: { enabled: boolean }
+  caveman: boolean
 }
 
 export interface PermissionRequest {
