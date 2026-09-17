@@ -9,6 +9,7 @@
  */
 
 import path from 'node:path'
+import fs from 'node:fs'
 import { createDaemon } from './daemon'
 import { GLOBAL_DIR } from '@tagent/core'
 
@@ -27,10 +28,22 @@ async function main() {
   const port = Number(flag('port') ?? 4020)
   const noOpen = flag('no-open') === true
 
+  // GUI bundle: explicit --gui <dir> wins, else look for gui-dist/ in the repo
+  let guiDir: string | undefined = flag<string>('gui')
+  if (typeof guiDir === 'string') {
+    guiDir = path.resolve(guiDir)
+  } else {
+    const candidates = [
+      path.resolve(import.meta.dir, '../../../gui-dist'), // repo root when running from source
+      path.resolve(process.cwd(), 'gui-dist'),
+    ]
+    guiDir = candidates.find((d) => fs.existsSync(path.join(d, 'index.html')))
+  }
+
   const { mkdirSync } = await import('node:fs')
   mkdirSync(GLOBAL_DIR, { recursive: true })
 
-  const handle = await createDaemon({ port, workspaceRoot: root })
+  const handle = await createDaemon({ port, workspaceRoot: root, guiDir })
 
   const url = `http://localhost:${port}`
   console.log(`
@@ -42,7 +55,11 @@ async function main() {
      ╚═╝   ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝
 
   ⚡ Tagent daemon is live → ${url}
-  📂 workspace: ${root}
+  📂 workspace: ${root}${
+    guiDir
+      ? `\n  🖥  GUI: ${guiDir} (websocket at /socket)`
+      : '\n  ⚠ GUI bundle not found — run `bun run build:gui` for the browser UI,\n    or use `next dev` in development.'
+  }
 
   Open ${url} in your browser to start coding with the agent.
   Press Ctrl+C to stop.

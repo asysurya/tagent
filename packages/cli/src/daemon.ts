@@ -44,6 +44,7 @@ export interface DaemonOptions {
   workspaceRoot: string
   configOverride?: Partial<TagentConfig>
   socketPath?: string
+  guiDir?: string
   quiet?: boolean
 }
 
@@ -65,6 +66,13 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   const workspaceId = root
   let cfg = loadConfig(root, opts.configOverride)
   const persist = () => saveConfig(root, cfg)
+
+  // When a built GUI directory exists we serve it as a static SPA and move
+  // the websocket to /socket so it never collides with static assets.
+  const guiDir = opts.guiDir && fs.existsSync(path.join(opts.guiDir, 'index.html'))
+    ? path.resolve(opts.guiDir as string)
+    : null
+  const socketIoPath = opts.socketPath ?? (guiDir ? '/socket' : '/')
 
   const sessions = new SessionStore(root, workspaceId)
   let session: SessionData | undefined
@@ -131,20 +139,73 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   }
 
   /* ------------------------------------------------------------------ */
+  /* static GUI (built Next.js export)                                   */
+  /* ------------------------------------------------------------------ */
+
+  const MIME: Record<string, string> = {
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'text/javascript; charset=utf-8',
+    '.mjs': 'text/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.ico': 'image/x-icon',
+    '.txt': 'text/plain; charset=utf-8',
+    '.map': 'application/json',
+    '.woff': 'font/woff',
+    '.woff2': 'font/woff2',
+    '.webp': 'image/webp',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.wasm': 'application/wasm',
+  }
+
+  function serveStatic(req: http.IncomingMessage, res: http.ServerResponse) {
+    try {
+      const urlPath = decodeURIComponent((req.url ?? '/').split('?')[0])
+      if (urlPath.includes('..')) { res.writeHead(400).end('bad path'); return }
+      let filePath = path.join(guiDir as string, urlPath)
+      if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+        // SPA fallback: unknown routes render the app shell
+        filePath = path.join(guiDir as string, 'index.html')
+        if (!fs.existsSync(filePath)) {
+          res.writeHead(404).end('GUI bundle missing (index.html). Re-run `bun run build:gui`.')
+          return
+        }
+      }
+      const ext = path.extname(filePath).toLowerCase()
+      res.writeHead(200, {
+        'content-type': MIME[ext] ?? 'application/octet-stream',
+        'cache-control': ext === '.html' ? 'no-cache' : 'public, max-age=86400',
+      })
+      fs.createReadStream(filePath).pipe(res)
+    } catch {
+      res.writeHead(500).end('static error')
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
   /* server                                                              */
   /* ------------------------------------------------------------------ */
 
   const server = http.createServer((req, res) => {
     if (req.url?.startsWith('/health')) {
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ ok: true, server: 'tagent', version: '0.1.0' }))
+      res.end(JSON.stringify({ ok: true, server: 'tagent', version: '0.1.0', gui: !!guiDir }))
+      return
+    }
+    if (guiDir) {
+      // never shadow the websocket endpoint with a static file
+      if ((req.url ?? '/').split('?')[0] === socketIoPath || (req.url ?? '').startsWith(socketIoPath + '/')) return
+      serveStatic(req, res)
       return
     }
     res.writeHead(404).end('tagent daemon — connect via websocket')
   })
 
   const io = new SocketIOServer(server, {
-    path: opts.socketPath ?? '/',
+    path: socketIoPath,
     cors: { origin: '*', methods: ['GET', 'POST'] },
     pingTimeout: 60_000,
     pingInterval: 25_000,
@@ -453,6 +514,7 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     })
     server.listen(opts.port, () => {
       log(`daemon ready on :${opts.port} (workspace: ${root})`)
+      if (guiDir) log(`serving GUI from ${guiDir} (websocket: ${socketIoPath})`)
       resolve({
         server,
         io,
