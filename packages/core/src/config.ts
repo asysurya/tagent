@@ -39,6 +39,7 @@ export function defaultConfig(): TagentConfig {
     mega: { enabled: false },
     autoCheckpoint: true,
     maxTurns: 40,
+    nativeTools: true,
   }
 }
 
@@ -71,4 +72,47 @@ export function saveConfig(root: string, cfg: TagentConfig): void {
   const dir = workspaceDir(root)
   ensureDir(dir)
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(cfg, null, 2))
+}
+
+/* ------------------------------------------------------------------ */
+/* recent workspaces (global) — powers the workspace switcher          */
+/* ------------------------------------------------------------------ */
+
+export interface RecentWorkspace {
+  path: string
+  name: string
+  exists: boolean
+  at?: number
+}
+
+function recentFile(): string {
+  return path.join(GLOBAL_DIR, 'workspaces.json')
+}
+
+/** Current workspace first, then the most recently used ones (deduped, capped). */
+export function listRecentWorkspaces(current: string): RecentWorkspace[] {
+  const cur = path.resolve(current)
+  const seen = new Set([cur])
+  const out: RecentWorkspace[] = [{ path: cur, name: path.basename(cur), exists: true }]
+  const arr = readJson(recentFile()) as { path: string; at: number }[] | undefined
+  for (const w of (arr ?? []).sort((a, b) => b.at - a.at)) {
+    const p = path.resolve(w.path)
+    if (seen.has(p)) continue
+    seen.add(p)
+    out.push({ path: p, name: path.basename(p), exists: fs.existsSync(p), at: w.at })
+  }
+  return out.slice(0, 12)
+}
+
+/** Remember a workspace as recently used (global, newest first, capped at 12). */
+export function rememberWorkspace(root: string): void {
+  try {
+    const p = path.resolve(root)
+    const arr = (readJson(recentFile()) as { path: string; at: number }[] | undefined) ?? []
+    const next = [{ path: p, at: Date.now() }, ...arr.filter((w) => path.resolve(w.path) !== p)].slice(0, 12)
+    ensureDir(GLOBAL_DIR)
+    fs.writeFileSync(recentFile(), JSON.stringify(next, null, 2))
+  } catch {
+    /* best-effort — never break startup */
+  }
 }

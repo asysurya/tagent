@@ -59,6 +59,14 @@ export const readFileTool: ToolDefinition = {
     'Read a text file from the workspace. Returns the file content (up to ~200KB).',
   risk: 'low',
   params: { path: 'string (required) — file path relative to workspace root', limit: 'number — max characters (default 200000)' },
+  inputSchema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: 'File path relative to the workspace root' },
+      limit: { type: 'number', description: 'Max characters to return (default 200000)' },
+    },
+    required: ['path'],
+  },
   async run(input, ctx) {
     const abs = jailPath(ctx.workspaceRoot, input.path as string)
     const st = fs.statSync(abs)
@@ -76,6 +84,13 @@ export const listFilesTool: ToolDefinition = {
     'List files in the workspace (or a subdirectory). Directories end with "/". Ignores node_modules/.git/etc.',
   risk: 'low',
   params: { path: 'string — directory to list (default ".")', maxDepth: 'number — recursion depth (default 6)' },
+  inputSchema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: 'Directory to list (default ".")' },
+      maxDepth: { type: 'number', description: 'Recursion depth (default 6)' },
+    },
+  },
   async run(input, ctx) {
     const base = jailPath(ctx.workspaceRoot, (input.path as string) || '.')
     const out: string[] = []
@@ -94,6 +109,15 @@ export const grepTool: ToolDefinition = {
     pattern: 'string (required) — JavaScript regex, e.g. "function\\\\s+\\\\w+"',
     path: 'string — directory or file to search (default workspace root)',
     glob: 'string — filter files by substring, e.g. ".ts"',
+  },
+  inputSchema: {
+    type: 'object',
+    properties: {
+      pattern: { type: 'string', description: 'JavaScript regex, e.g. "function\\s+\\w+"' },
+      path: { type: 'string', description: 'Directory or file to search (default workspace root)' },
+      glob: { type: 'string', description: 'Filter files by substring, e.g. ".ts"' },
+    },
+    required: ['pattern'],
   },
   async run(input, ctx) {
     const pattern = String(input.pattern ?? '')
@@ -141,6 +165,14 @@ export const writeFileTool: ToolDefinition = {
     'Create or overwrite a file with full content. Parent directories are created automatically. Use for new files or full rewrites.',
   risk: 'medium',
   params: { path: 'string (required) — file path', content: 'string (required) — full file content' },
+  inputSchema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: 'File path relative to the workspace root' },
+      content: { type: 'string', description: 'Full file content to write' },
+    },
+    required: ['path', 'content'],
+  },
   async run(input, ctx) {
     const abs = jailPath(ctx.workspaceRoot, input.path as string)
     if (typeof input.content !== 'string') return 'Error: content must be a string'
@@ -162,6 +194,16 @@ export const editFileTool: ToolDefinition = {
     old: 'string (required) — exact text to find',
     new: 'string (required) — replacement text',
     replace_all: 'boolean — replace every occurrence (default false)',
+  },
+  inputSchema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: 'File path relative to the workspace root' },
+      old: { type: 'string', description: 'Exact text to find (must match exactly, including whitespace)' },
+      new: { type: 'string', description: 'Replacement text' },
+      replace_all: { type: 'boolean', description: 'Replace every occurrence (default false)' },
+    },
+    required: ['path', 'old', 'new'],
   },
   async run(input, ctx) {
     const abs = jailPath(ctx.workspaceRoot, input.path as string)

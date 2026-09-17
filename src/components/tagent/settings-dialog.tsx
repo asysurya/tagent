@@ -207,8 +207,14 @@ function IntegrationsTab() {
   const saveGithubPat = useTagent((s) => s.saveGithubPat)
   const githubPush = useTagent((s) => s.githubPush)
   const githubBusy = useTagent((s) => s.githubBusy)
+  const saveMega = useTagent((s) => s.saveMega)
+  const megaSync = useTagent((s) => s.megaSync)
+  const megaPull = useTagent((s) => s.megaPull)
   const [pat, setPat] = useState('')
   const [busy, setBusy] = useState(false)
+  const [megaEmail, setMegaEmail] = useState('')
+  const [megaKey, setMegaKey] = useState('')
+  const [megaBusy, setMegaBusy] = useState(false)
 
   if (!config) return null
 
@@ -269,15 +275,73 @@ function IntegrationsTab() {
       <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-4 space-y-3">
         <div className="flex items-center gap-2">
           <span className="grid place-items-center size-5 rounded bg-red-500/15 text-red-400 text-[10px] font-bold">M</span>
-          <span className="text-sm font-medium text-zinc-200">MEGA storage</span>
-          <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-zinc-700 text-zinc-500">experimental</Badge>
+          <span className="text-sm font-medium text-zinc-200">MEGA cloud sync</span>
+          {config.mega.enabled ? (
+            <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-800/50 hover:bg-emerald-500/15 text-[9px] h-4 px-1.5">
+              {config.mega.email ?? 'enabled'}
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-zinc-700 text-zinc-500">off</Badge>
+          )}
         </div>
         <p className="text-xs text-zinc-500 leading-relaxed">
-          End-to-end encrypted snapshots &amp; memory backup, synced across devices. Requires{' '}
-          <code className="text-zinc-400">bun add megajs</code> and your MEGA credentials in{' '}
-          <code className="text-zinc-400">.tagent/config.json → mega</code>. Roadmap item — the storage adapter is wired
-          (<code className="text-zinc-400">packages/core/src/storage</code>), UI sync controls land next.
+          End-to-end encrypted memory backup (AGENTS.md drafts + facts) synced across your devices.
+          Needs <code className="text-zinc-400">bun add megajs</code> once, then your MEGA email + password.
         </p>
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-zinc-300">Enable cloud sync</span>
+          <Switch
+            checked={config.mega.enabled}
+            onCheckedChange={(v) => void saveMega(v, megaEmail || config.mega.email || '', megaKey)}
+          />
+        </div>
+        <div className="grid grid-cols-1 gap-2">
+          <Input
+            type="email"
+            placeholder={config.mega.email ?? 'MEGA email'}
+            value={megaEmail}
+            onChange={(e) => setMegaEmail(e.target.value)}
+            className="h-8 bg-zinc-900 border-zinc-800 text-xs"
+          />
+          <div className="flex gap-2">
+            <Input
+              type="password"
+              placeholder="MEGA password / session key…"
+              value={megaKey}
+              onChange={(e) => setMegaKey(e.target.value)}
+              className="h-8 bg-zinc-900 border-zinc-800 font-mono text-xs"
+            />
+            <Button
+              size="sm" className="h-8 text-xs bg-orange-500 hover:bg-orange-400 text-zinc-950 shrink-0"
+              disabled={(!megaEmail.trim() && !config.mega.email) || !megaKey.trim()}
+              onClick={async () => {
+                setBusy(true)
+                await saveMega(true, megaEmail.trim() || config.mega.email || '', megaKey.trim())
+                setMegaKey('')
+                setBusy(false)
+              }}
+            >
+              Save
+            </Button>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <Button
+            size="sm" variant="outline" className="h-8 text-xs border-zinc-700 gap-1.5"
+            disabled={!config.mega.enabled || megaBusy}
+            onClick={async () => { setMegaBusy(true); await megaSync(); setMegaBusy(false) }}
+          >
+            {megaBusy ? <Loader2 className="size-3.5 animate-spin" /> : null}
+            Sync memory ↑
+          </Button>
+          <Button
+            size="sm" variant="outline" className="h-8 text-xs border-zinc-700"
+            disabled={!config.mega.enabled}
+            onClick={() => void megaPull()}
+          >
+            Restore ↓
+          </Button>
+        </div>
       </div>
     </div>
   )

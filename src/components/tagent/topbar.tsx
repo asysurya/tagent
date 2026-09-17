@@ -3,6 +3,14 @@
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
@@ -12,8 +20,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
 import {
-  ChevronDown, Cpu, Files, FolderOpen, Github, History, ListTodo,
+  Check, ChevronDown, Cpu, Files, FolderInput, FolderOpen, Github, History, ListTodo,
   PanelRightClose, PanelRightOpen, Settings, Terminal, TerminalSquare, Zap,
 } from 'lucide-react'
 import { useTagent } from '@/lib/tagent/store'
@@ -36,6 +45,7 @@ export function TopBar() {
   const running = useTagent((s) => s.running)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [openDialog, setOpenDialog] = useState(false)
 
   const provider = config?.providers.find((p) => p.id === config.defaultProvider)
   const modelLabel = provider?.models.find((m) => m.id === config?.defaultModel)?.label ?? config?.defaultModel ?? 'no model'
@@ -50,10 +60,8 @@ export function TopBar() {
         <span className="text-zinc-100">tagent</span>
       </div>
 
-      <div className="hidden sm:flex items-center gap-1.5 text-xs text-zinc-500 border-l border-zinc-800 pl-2 ml-1">
-        <FolderOpen className="size-3.5" />
-        <span className="font-mono">{workspace?.name ?? '…'}</span>
-      </div>
+      {/* workspace switcher */}
+      <WorkspaceSwitcher openDialog={openDialog} setOpenDialog={setOpenDialog} />
 
       <div className="flex-1" />
 
@@ -147,11 +155,111 @@ export function TopBar() {
 
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      <OpenFolderDialog open={openDialog} onOpenChange={setOpenDialog} />
       {running && (
         <span className="absolute bottom-0 left-0 h-px w-full overflow-hidden">
           <span className="block h-full w-1/3 bg-orange-500 animate-[slide_1.2s_ease-in-out_infinite]" />
         </span>
       )}
     </header>
+  )
+}
+
+function WorkspaceSwitcher({ openDialog, setOpenDialog }: { openDialog: boolean; setOpenDialog: (v: boolean) => void }) {
+  const workspace = useTagent((s) => s.workspace)
+  const workspaces = useTagent((s) => s.workspaces)
+  const switchWorkspace = useTagent((s) => s.switchWorkspace)
+  const connection = useTagent((s) => s.connection)
+  const recent = workspaces.filter((w) => w.path !== workspace?.path)
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-200 border-l border-zinc-800 pl-2 ml-1 transition-colors"
+          title={workspace?.path ?? 'workspace'}
+        >
+          <FolderOpen className="size-3.5" />
+          <span className="font-mono max-w-40 truncate">{workspace?.name ?? '…'}</span>
+          <ChevronDown className="size-3 opacity-50" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-72 bg-zinc-900 border-zinc-800">
+        <DropdownMenuLabel className="text-[11px] text-zinc-500">Current workspace</DropdownMenuLabel>
+        <DropdownMenuItem className="text-xs font-mono text-orange-400" disabled>
+          <Check className="size-3.5 mr-2" /> {workspace?.name ?? '…'}
+        </DropdownMenuItem>
+        {recent.length > 0 && (
+          <>
+            <DropdownMenuSeparator className="bg-zinc-800" />
+            <DropdownMenuLabel className="text-[11px] text-zinc-500">Recent</DropdownMenuLabel>
+            <DropdownMenuGroup>
+              {recent.slice(0, 6).map((w) => (
+                <DropdownMenuItem
+                  key={w.path}
+                  disabled={!w.exists || connection !== 'ready'}
+                  onClick={() => void switchWorkspace(w.path)}
+                  className="text-xs"
+                  title={w.path}
+                >
+                  <span className="font-mono truncate flex-1">{w.name}</span>
+                  {!w.exists && <Badge variant="outline" className="text-[9px] h-4 px-1 border-zinc-700 text-zinc-600">gone</Badge>}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuGroup>
+          </>
+        )}
+        <DropdownMenuSeparator className="bg-zinc-800" />
+        <DropdownMenuItem className="text-xs text-zinc-300" onClick={() => setOpenDialog(true)}>
+          <FolderInput className="size-3.5 mr-2" /> Open folder…
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+function OpenFolderDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+  const switchWorkspace = useTagent((s) => s.switchWorkspace)
+  const [path, setPath] = useState('')
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-zinc-900 border-zinc-800 max-w-md">
+        <DialogHeader>
+          <DialogTitle className="text-zinc-100">Open workspace</DialogTitle>
+          <DialogDescription className="text-zinc-500">
+            Absolute path to a folder on the machine running the Tagent daemon.
+          </DialogDescription>
+        </DialogHeader>
+        <Input
+          autoFocus
+          placeholder="/home/you/projects/my-app"
+          value={path}
+          onChange={(e) => setPath(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && path.trim()) {
+              void switchWorkspace(path.trim())
+              setPath('')
+              onOpenChange(false)
+            }
+          }}
+          className="bg-zinc-900 border-zinc-800 font-mono text-xs"
+        />
+        <DialogFooter>
+          <Button variant="outline" size="sm" className="h-8 text-xs border-zinc-700" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button
+            size="sm"
+            className="h-8 text-xs bg-orange-500 hover:bg-orange-400 text-zinc-950"
+            disabled={!path.trim()}
+            onClick={() => {
+              void switchWorkspace(path.trim())
+              setPath('')
+              onOpenChange(false)
+            }}
+          >
+            Switch
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

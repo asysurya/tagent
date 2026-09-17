@@ -83,6 +83,13 @@ export const loadSkillTool: ToolDefinition = {
     'Load a skill\'s full instructions. Skills are reusable playbooks (guides, templates, workflows). Load one right before using it.',
   risk: 'low',
   params: { name: 'string (required) — skill name from the list in the system prompt' },
+  inputSchema: {
+    type: 'object',
+    properties: {
+      name: { type: 'string', description: 'Skill name from the list in the system prompt' },
+    },
+    required: ['name'],
+  },
   async run(input, ctx) {
     const name = String(input.name ?? '')
     if (!name) return 'Error: name is required'

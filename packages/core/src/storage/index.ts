@@ -1,6 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { ensureDir } from '../util'
+import { readAgents, listFacts, saveFact } from '../memory'
+import type { TagentConfig } from '../types'
 
 /**
  * Storage adapters — pluggable cloud/sync backends for snapshots, memory
@@ -169,4 +171,45 @@ export function getStorageAdapter(
     return new MegaAdapter(mega.email, mega.sessionKey ?? '')
   }
   return new LocalAdapter(path.join(root, '.tagent', 'storage'))
+}
+
+/* ------------------------------------------------------------------ */
+/* memory sync (MEGA) — cross-device AGENTS.md + facts backup           */
+/* ------------------------------------------------------------------ */
+
+function megaAdapterFor(cfg: TagentConfig): MegaAdapter {
+  if (!cfg.mega?.enabled || !cfg.mega.email || !cfg.mega.sessionKey) {
+    throw new Error('MEGA is not configured — enable it in Settings → Cloud sync and set email + password/session key.')
+  }
+  return new MegaAdapter(cfg.mega.email, cfg.mega.sessionKey)
+}
+
+/** Push the workspace memory (AGENTS.md drafts + facts) to MEGA, end-to-end encrypted. */
+export async function syncMemoryToMega(root: string, cfg: TagentConfig): Promise<{ files: number; facts: number; bytes: number }> {
+  const adapter = megaAdapterFor(cfg)
+  const payload = JSON.stringify({
+    workspace: path.basename(path.resolve(root)),
+    agents: readAgents(root),
+    facts: listFacts(root),
+    syncedAt: new Date().toISOString(),
+  })
+  await adapter.put(`${path.basename(path.resolve(root))}/memory.json`, payload)
+  return { files: 1, facts: listFacts(root).length, bytes: Buffer.byteLength(payload) }
+}
+
+/** Pull the memory backup from MEGA and merge facts into this workspace (no duplicates). */
+export async function pullMemoryFromMega(root: string, cfg: TagentConfig): Promise<{ imported: number; total: number }> {
+  const adapter = megaAdapterFor(cfg)
+  const raw = await adapter.get(`${path.basename(path.resolve(root))}/memory.json`)
+  const data = JSON.parse(raw.toString('utf8')) as {
+    facts?: { id?: string; text: string; tags?: string[]; createdAt?: number }[]
+  }
+  const known = new Set(listFacts(root).map((f) => f.text))
+  let imported = 0
+  for (const f of data.facts ?? []) {
+    if (!f?.text || known.has(f.text)) continue
+    saveFact(root, f.text, f.tags)
+    imported++
+  }
+  return { imported, total: listFacts(root).length }
 }

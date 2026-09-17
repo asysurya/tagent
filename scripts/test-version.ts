@@ -17,13 +17,14 @@ assert(isNewer('1.0.0-rc1', '0.9') === true, 'suffix tolerated')
 // update check via file:// URL (simulates remote endpoint)
 process.env.TAGENT_UPDATE_URL = `file://${process.cwd()}/website/public/latest.json`
 process.env.HOME = '/tmp/tagent-test-home'
-const { rmSync, mkdirSync } = await import('node:fs')
+const { rmSync, mkdirSync, readFileSync } = await import('node:fs')
 rmSync('/tmp/tagent-test-home', { recursive: true, force: true })
 mkdirSync('/tmp/tagent-test-home', { recursive: true })
 
 const info = await checkUpdate(true)
+const expected = JSON.parse(readFileSync(`${process.cwd()}/website/public/latest.json`, 'utf8')).version
 assert(info !== null, 'check returns info')
-assert(info?.latest === '0.2.0', 'latest read from endpoint')
+assert(info?.latest === expected, `latest read from endpoint (${expected})`)
 assert(info?.outdated === false, `same version (${CURRENT_VERSION}) → not outdated`)
 
 // simulate outdated client
@@ -38,6 +39,6 @@ assert(oldInfo.outdated === true, '0.1.0 client vs 0.2.0 latest → outdated')
 
 // cache TTL: second call should hit cache (no file access needed)
 const cached = await checkUpdate(true)
-assert(cached?.latest === '0.2.0', 'second call works (cache written)')
+assert(cached?.latest === expected, 'second call works (cache written)')
 
 process.exit(fails ? 1 : 0)

@@ -28,6 +28,10 @@ import {
   loadPlugins,
   emitPluginEvent,
   buildToolset,
+  listRecentWorkspaces,
+  rememberWorkspace,
+  syncMemoryToMega,
+  pullMemoryFromMega,
   type AgentEvents,
   type ChatMessage,
   type PermissionDecision,
@@ -63,11 +67,14 @@ export interface DaemonHandle {
 }
 
 export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
-  const root = path.resolve(opts.workspaceRoot)
+  // `root` changes when the GUI switches workspace — everything below reads
+  // it through this closure at call time.
+  let root = path.resolve(opts.workspaceRoot)
   /** session.workspaceId doubles as the absolute workspace root for tools */
-  const workspaceId = root
+  let workspaceId = root
   let cfg = loadConfig(root, opts.configOverride)
   const persist = () => saveConfig(root, cfg)
+  rememberWorkspace(root)
 
   // When a built GUI directory exists we serve it as a static SPA and move
   // the websocket to /socket so it never collides with static assets.
@@ -76,7 +83,7 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     : null
   const socketIoPath = opts.socketPath ?? (guiDir ? '/socket' : '/')
 
-  const sessions = new SessionStore(root, workspaceId)
+  let sessions = new SessionStore(root, workspaceId)
   let session: SessionData | undefined
   let loop: AgentLoop | undefined
 
@@ -90,6 +97,31 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
 
   function activeProvider() {
     return getAdapter(cfg.defaultProvider, cfg)
+  }
+
+  /** Full world snapshot — sent on `hello` and after a workspace switch. */
+  function helloPayload() {
+    return {
+      server: 'tagent',
+      version: CURRENT_VERSION,
+      workspace: {
+        id: workspaceId,
+        name: path.basename(root),
+        path: root,
+      },
+      config: sanitizeConfig(),
+      skills: listSkills(root),
+      memory: {
+        agents: readAgents(root),
+        facts: listFacts(root),
+      },
+      sessions: sessions.list(),
+      tools: buildToolset({ config: cfg }).map((t) => ({
+        name: t.name, description: t.description, risk: t.risk,
+      })),
+      checkpoints: listCheckpoints(root).slice(0, 10),
+      recentWorkspaces: listRecentWorkspaces(root),
+    }
   }
 
   function sanitizeConfig() {
@@ -225,27 +257,35 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     /* ------------------------------ hello ------------------------------ */
     socket.on('hello', (_p: unknown, cb?: (resp: unknown) => void) => {
       const ack = typeof _p === 'function' ? _p : cb
-      const resp = {
-        server: 'tagent',
-        version: CURRENT_VERSION,
-        workspace: {
-          id: workspaceId,
-          name: path.basename(root),
-          path: root,
-        },
-        config: sanitizeConfig(),
-        skills: listSkills(root),
-        memory: {
-          agents: readAgents(root),
-          facts: listFacts(root),
-        },
-        sessions: sessions.list(),
-        tools: buildToolset({ config: cfg }).map((t) => ({
-          name: t.name, description: t.description, risk: t.risk,
-        })),
-        checkpoints: listCheckpoints(root).slice(0, 10),
+      ack?.(helloPayload())
+    })
+
+    /* --------------------------- workspaces ---------------------------- */
+    socket.on('workspace:list', (_p: unknown, cb?: (r: unknown) => void) => {
+      cb?.({ current: root, recent: listRecentWorkspaces(root) })
+    })
+
+    socket.on('workspace:switch', (p: { path: string }, cb?: (r: unknown) => void) => {
+      try {
+        const target = path.resolve(String(p?.path ?? ''))
+        if (!fs.existsSync(target) || !fs.statSync(target).isDirectory()) {
+          return cb?.({ error: `Not a directory: ${target}` })
+        }
+        if (target === root) return cb?.({ ok: true, workspace: helloPayload() })
+        if (loop) loop.stop()
+        root = target
+        workspaceId = target
+        cfg = loadConfig(root, opts.configOverride)
+        sessions = new SessionStore(root, workspaceId)
+        session = undefined
+        rememberWorkspace(root)
+        log('switched workspace →', root)
+        const payload = helloPayload()
+        emit('workspace:changed', payload)
+        cb?.({ ok: true, workspace: payload })
+      } catch (e) {
+        cb?.({ error: (e as Error).message })
       }
-      ack?.(resp)
     })
 
     /* ----------------------------- sessions ---------------------------- */
@@ -440,6 +480,48 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         if (typeof p.autoCheckpoint === 'boolean') cfg.autoCheckpoint = p.autoCheckpoint
         persist()
         cb?.({ ok: true, config: sanitizeConfig() })
+      } catch (e) {
+        cb?.({ error: (e as Error).message })
+      }
+    })
+
+    /* ------------------------------ mega sync -------------------------- */
+    socket.on(
+      'mega:save',
+      (p: { enabled: boolean; email?: string; sessionKey?: string }, cb?: (r: unknown) => void) => {
+        try {
+          const email = String(p?.email ?? '').trim()
+          const sessionKey = String(p?.sessionKey ?? '').trim()
+          cfg.mega = {
+            ...(cfg.mega ?? {}),
+            enabled: !!p?.enabled,
+            email: email || undefined,
+            sessionKey: sessionKey || (p?.enabled ? cfg.mega?.sessionKey : undefined),
+          }
+          persist()
+          cb?.({ ok: true, mega: { enabled: cfg.mega.enabled, email: cfg.mega.email ?? null } })
+        } catch (e) {
+          cb?.({ error: (e as Error).message })
+        }
+      },
+    )
+
+    socket.on('mega:sync', async (_p: unknown, cb?: (r: unknown) => void) => {
+      try {
+        const result = await syncMemoryToMega(root, cfg)
+        emitTo(socket.id, 'notify', { level: 'info', message: `MEGA sync done — ${result.facts} facts backed up (end-to-end encrypted).` })
+        cb?.({ ok: true, ...result })
+      } catch (e) {
+        cb?.({ error: (e as Error).message })
+      }
+    })
+
+    socket.on('mega:pull', async (_p: unknown, cb?: (r: unknown) => void) => {
+      try {
+        const result = await pullMemoryFromMega(root, cfg)
+        const payload = helloPayload()
+        emit('workspace:changed', payload)
+        cb?.({ ok: true, ...result })
       } catch (e) {
         cb?.({ error: (e as Error).message })
       }

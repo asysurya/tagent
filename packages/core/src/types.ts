@@ -142,6 +142,8 @@ export interface ToolDefinition {
   risk: Risk
   /** compact parameter documentation for the system prompt */
   params: Record<string, string>
+  /** JSON schema (OpenAI function-calling shape) for native tool-calling */
+  inputSchema?: Record<string, unknown>
   run(input: Record<string, unknown>, ctx: ToolContext): Promise<string>
 }
 
@@ -204,4 +206,9 @@ export interface TagentConfig {
   }
   autoCheckpoint: boolean
   maxTurns: number
+  /** use native function-calling when the provider supports it (default true).
+   *  The markdown action protocol is always available as a fallback. */
+  nativeTools?: boolean
+  /** recent workspaces (tracked globally for the workspace switcher) */
+  recentWorkspaces?: { path: string; at: number }[]
 }

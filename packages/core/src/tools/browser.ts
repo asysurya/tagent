@@ -24,6 +24,17 @@ export const browserTool: ToolDefinition = {
     value: 'string — text to type',
     code: 'string — JS to evaluate in the page',
   },
+  inputSchema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['open', 'click', 'type', 'screenshot', 'console', 'network', 'evaluate', 'close'], description: 'Browser action' },
+      url: { type: 'string', description: 'URL (for open)' },
+      selector: { type: 'string', description: 'CSS selector (for click/type)' },
+      value: { type: 'string', description: 'Text to type (for type)' },
+      code: { type: 'string', description: 'JS to evaluate in the page (for evaluate)' },
+    },
+    required: ['action'],
+  },
   async run(input, ctx) {
     if (!ctx.config.tools.browser) {
       return 'Error: the browser tool is disabled. Enable it in Settings → Tools (requires: bun add playwright && bunx playwright install chromium).'

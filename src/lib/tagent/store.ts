@@ -26,6 +26,7 @@ import type {
   SkillMeta,
   SubagentInfo,
   ToolCallRecord,
+  WorkspaceInfo,
 } from './types'
 
 type RightTab = 'files' | 'terminal' | 'memory' | 'skills'
@@ -42,6 +43,7 @@ interface TagentState {
   connection: Connection
   socket: Socket | null
   workspace: HelloPayload['workspace'] | null
+  workspaces: WorkspaceInfo[]
   config: SanitizedConfig | null
   skills: SkillMeta[]
   memory: MemoryState
@@ -81,6 +83,10 @@ interface TagentState {
   setToolEnabled: (tool: 'bash' | 'browser', enabled: boolean) => Promise<void>
   saveGithubPat: (token: string) => Promise<{ ok: boolean; login?: string; error?: string }>
   githubPush: () => Promise<void>
+  switchWorkspace: (path: string) => Promise<void>
+  saveMega: (enabled: boolean, email: string, sessionKey: string) => Promise<void>
+  megaSync: () => Promise<void>
+  megaPull: () => Promise<void>
   undo: () => Promise<void>
   openFile: (path: string) => Promise<void>
   closeFile: () => void
@@ -95,6 +101,7 @@ interface TagentState {
   readSkill: (name: string) => Promise<string>
 
   /* internal event reducers (also used by demo mode) */
+  _applyHello: (payload: HelloPayload) => Promise<void>
   _apply: {
     message: (m: ChatMessage) => void
     toolStart: (c: ToolCallRecord) => void
@@ -113,6 +120,7 @@ const initial = {
   connection: 'connecting' as Connection,
   socket: null,
   workspace: null,
+  workspaces: [] as WorkspaceInfo[],
   config: null,
   skills: [],
   memory: { agents: { global: '', workspace: '' }, facts: [] },
@@ -155,20 +163,7 @@ export const useTagent = create<TagentState>((set, get) => ({
       try {
         const payload = await helloDaemon(socket)
         console.info('[tagent] hello ok — live mode')
-        set({
-          connection: 'ready',
-          workspace: payload.workspace,
-          config: payload.config,
-          skills: payload.skills,
-          memory: payload.memory,
-          sessions: payload.sessions,
-          checkpoints: payload.checkpoints,
-          availableTools: payload.tools,
-        })
-        if (payload.sessions.length > 0) {
-          await get().loadSession(payload.sessions[0].id)
-        }
-        await get().refreshTree()
+        await get()._applyHello(payload)
       } catch (e) {
         console.warn('[tagent] hello failed — falling back to demo:', (e as Error).message)
         set({ connection: 'demo' })
@@ -198,6 +193,10 @@ export const useTagent = create<TagentState>((set, get) => ({
       get()._apply.chatDone(d.summary),
     )
     socket.on('session:list', (sessions: SessionMeta[]) => set({ sessions }))
+    socket.on('workspace:changed', (payload: HelloPayload) => {
+      // daemon switched workspaces (local action or mega:pull) — adopt the new world
+      void get()._applyHello(payload)
+    })
     socket.on('session:active', (s: SessionData) => {
       set((st) => ({
         session: s,
@@ -297,6 +296,35 @@ export const useTagent = create<TagentState>((set, get) => ({
       }))
       void get().refreshTree()
     },
+  },
+
+  _applyHello: async (payload) => {
+    set({
+      connection: 'ready',
+      workspace: payload.workspace,
+      workspaces: payload.recentWorkspaces ?? [],
+      config: payload.config,
+      skills: payload.skills,
+      memory: payload.memory,
+      sessions: payload.sessions,
+      checkpoints: payload.checkpoints,
+      availableTools: payload.tools,
+      // world changed — reset per-session/per-file UI state
+      session: null,
+      stream: '',
+      status: null,
+      running: false,
+      subagents: [],
+      pendingPermission: null,
+      fileTree: null,
+      fileBuffer: null,
+    })
+    if (payload.sessions.length > 0) {
+      await get().loadSession(payload.sessions[0].id)
+    } else {
+      await get().newSession()
+    }
+    await get().refreshTree()
   },
 
   async setMode(m) {
@@ -436,6 +464,57 @@ export const useTagent = create<TagentState>((set, get) => ({
     set({ githubBusy: false })
     if (r.ok) toast('Pushed to GitHub ✓')
     else toast.error(r.error ?? 'push failed')
+  },
+
+  async switchWorkspace(path) {
+    const { socket, running } = get()
+    if (!socket || get().connection !== 'ready') return
+    if (running) {
+      toast.warning('Stop the running agent before switching workspaces')
+      return
+    }
+    const r = await call<{ ok?: boolean; error?: string; workspace?: HelloPayload }>(socket, 'workspace:switch', { path }, 20000)
+      .catch((e) => ({ error: (e as Error).message }))
+    if (r.error) {
+      toast.error(r.error)
+      return
+    }
+    if (r.workspace) await get()._applyHello(r.workspace)
+    else await get()._applyHello(await helloDaemon(socket))
+    toast(`Workspace → ${get().workspace?.name ?? path}`)
+  },
+
+  async saveMega(enabled, email, sessionKey) {
+    const { socket } = get()
+    if (!socket || get().connection !== 'ready') return
+    const r = await call<{ ok?: boolean; error?: string; config?: SanitizedConfig }>(socket, 'mega:save', {
+      enabled, email, sessionKey,
+    })
+    if (r.error) {
+      toast.error(r.error)
+      return
+    }
+    if (r.config) set({ config: r.config })
+    else set((st) => (st.config ? { config: { ...st.config, mega: { enabled, email: email || null } } } : st))
+    toast('MEGA settings saved ✓')
+  },
+
+  async megaSync() {
+    const { socket } = get()
+    if (!socket || get().connection !== 'ready') return
+    const r = await call<{ ok?: boolean; facts?: number; error?: string }>(socket, 'mega:sync', {}, 120000)
+      .catch((e) => ({ error: (e as Error).message }))
+    if (r.error) toast.error(r.error)
+    else toast(`Synced ${r.facts ?? 0} facts to MEGA (E2E encrypted) ✓`)
+  },
+
+  async megaPull() {
+    const { socket } = get()
+    if (!socket || get().connection !== 'ready') return
+    const r = await call<{ ok?: boolean; imported?: number; total?: number; error?: string }>(socket, 'mega:pull', {}, 120000)
+      .catch((e) => ({ error: (e as Error).message }))
+    if (r.error) toast.error(r.error)
+    else toast(`Imported ${r.imported ?? 0} facts from MEGA (${r.total ?? 0} total) ✓`)
   },
 
   async undo() {

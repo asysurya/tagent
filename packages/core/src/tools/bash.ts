@@ -25,6 +25,14 @@ export const bashTool: ToolDefinition = {
     command: 'string (required) — the shell command',
     timeout: 'number — ms before the command is killed (default 60000)',
   },
+  inputSchema: {
+    type: 'object',
+    properties: {
+      command: { type: 'string', description: 'The shell command to run' },
+      timeout: { type: 'number', description: 'ms before the command is killed (default 60000)' },
+    },
+    required: ['command'],
+  },
   async run(input, ctx) {
     if (!ctx.config.tools.bash) {
       return 'Error: the bash tool is disabled in this environment (enable it in Settings → Tools).'

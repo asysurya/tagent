@@ -7,7 +7,7 @@
  */
 
 export * from './types'
-export { loadConfig, saveConfig, defaultConfig, workspaceDir, GLOBAL_DIR } from './config'
+export { loadConfig, saveConfig, defaultConfig, workspaceDir, GLOBAL_DIR, listRecentWorkspaces, rememberWorkspace, type RecentWorkspace } from './config'
 export { PermissionManager } from './permissions'
 export { AgentLoop, isReadOnlyTool } from './loop'
 export { buildSystemPrompt } from './system-prompt'
@@ -26,14 +26,16 @@ export {
 export {
   getAdapter, listProviderInfos,
   ZaiAdapter, OpenAICompatibleAdapter, AnthropicAdapter, GoogleAdapter,
-  type ProviderAdapter, type CompletionRequest,
+  type ProviderAdapter, type CompletionRequest, type CompletionResult,
+  type NativeToolDef, type NativeToolCall,
 } from './providers'
 export { buildToolset, ALL_TOOLS } from './tools'
 export {
   startDeviceLogin, pollDeviceToken, validatePat, ensureRepo, pushWorkspace,
 } from './github'
 export {
-  getStorageAdapter, LocalAdapter, MegaAdapter, type StorageAdapter,
+  getStorageAdapter, LocalAdapter, MegaAdapter, syncMemoryToMega, pullMemoryFromMega,
+  type StorageAdapter,
 } from './storage'
 export {
   loadPlugins, emitPluginEvent, listPluginFiles, scaffoldPlugin,

@@ -140,6 +140,13 @@ export interface FileNode {
   children?: FileNode[]
 }
 
+export interface WorkspaceInfo {
+  path: string
+  name: string
+  exists: boolean
+  at?: number
+}
+
 export interface HelloPayload {
   server: string
   version: string
@@ -150,6 +157,7 @@ export interface HelloPayload {
   sessions: SessionMeta[]
   tools: { name: string; description: string; risk: string }[]
   checkpoints: CheckpointMeta[]
+  recentWorkspaces?: WorkspaceInfo[]
 }
 
 export type Connection = 'connecting' | 'ready' | 'demo'

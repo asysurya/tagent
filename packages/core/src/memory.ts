@@ -90,6 +90,16 @@ export const memoryTool: ToolDefinition = {
     id: 'string — fact id (for delete)',
     tags: 'string[] — optional tags',
   },
+  inputSchema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['save', 'list', 'delete'] },
+      text: { type: 'string', description: 'The fact to save (for save)' },
+      id: { type: 'string', description: 'Fact id (for delete)' },
+      tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags' },
+    },
+    required: ['action'],
+  },
   async run(input, ctx) {
     const action = String(input.action ?? 'list')
     if (action === 'save') {

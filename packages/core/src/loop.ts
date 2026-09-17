@@ -11,6 +11,7 @@ import type {
   ToolContext,
   ToolDefinition,
 } from './types'
+import type { NativeToolDef } from './providers'
 import { buildSystemPrompt } from './system-prompt'
 import { createCheckpoint, shouldCheckpoint } from './checkpoints'
 import { trunc, uid } from './util'
@@ -18,6 +19,25 @@ import { buildToolset } from './tools'
 
 const ACTION_RE = /```tagent:action\s*\n([\s\S]*?)```/g
 const MAX_TOOL_OUTPUT = 24_000
+/** how often streamed text is pushed to the UI (ms) — keeps phones calm */
+const CHUNK_EMIT_MS = 60
+
+function toNativeToolDef(t: ToolDefinition): NativeToolDef {
+  return {
+    type: 'function',
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.inputSchema ?? { type: 'object', properties: {} },
+    },
+  }
+}
+
+/** Hide the raw action protocol from the streamed text shown to the user. */
+function displayText(s: string): string {
+  const i = s.indexOf('```tagent:action')
+  return i >= 0 ? s.slice(0, i).trimEnd() : s
+}
 
 export interface AgentLoopOptions {
   session: SessionData
@@ -92,6 +112,12 @@ export class AgentLoop {
     let turns = 0
     let toolCalls = 0
     const maxTurns = Math.min(this.opts.config.maxTurns ?? 40, 80)
+    // native function-calling when the provider supports it (config: nativeTools)
+    const useNativeTools =
+      this.opts.config.nativeTools !== false &&
+      this.opts.provider.supportsNativeTools === true &&
+      this.tools.length > 0
+    const nativeTools = useNativeTools ? this.tools.map(toNativeToolDef) : undefined
 
     try {
       while (turns < maxTurns) {
@@ -99,15 +125,34 @@ export class AgentLoop {
         turns++
 
         this.opts.events.onStatus?.('thinking', `turn ${turns}`)
-        const raw = await this.opts.provider.complete({
+        // streamed token display — throttled, idempotent (full text so far)
+        let lastEmit = 0
+        const emitStream = (full: string, force = false) => {
+          const now = Date.now()
+          if (force || now - lastEmit >= CHUNK_EMIT_MS) {
+            lastEmit = now
+            this.opts.events.onAssistantChunk?.(session.id, displayText(full))
+          }
+        }
+        const result = await this.opts.provider.completeStream({
           model: this.opts.model,
           signal: this.abort.signal,
           messages: this.renderMessages(system),
+          tools: nativeTools,
+          onText: (full) => emitStream(full),
         })
 
         if (this.abort.signal.aborted) return { turns, toolCalls, finished: 'aborted' }
 
+        const raw = result.text
         const { cleanText, actions } = this.parseActions(raw)
+        // merge actions that came through native function calling
+        const nativeActions: ParsedAction[] = (result.toolCalls ?? []).map((c) => ({
+          id: c.id ?? uid(),
+          tool: c.tool,
+          input: (c.input ?? {}) as Record<string, unknown>,
+        }))
+        const allActions = [...actions, ...nativeActions]
 
         const assistantMsg: ChatMessage = {
           id: uid(),
@@ -117,8 +162,8 @@ export class AgentLoop {
         }
         session.messages.push(assistantMsg)
 
-        if (actions.length === 0) {
-          this.opts.events.onAssistantChunk?.(session.id, assistantMsg.content)
+        if (allActions.length === 0) {
+          emitStream(assistantMsg.content, true)
           this.opts.events.onAssistantMessage?.(assistantMsg)
           this.opts.onSessionUpdate?.(session)
           this.opts.events.onStatus?.('done', `turns: ${turns}`)
@@ -126,14 +171,14 @@ export class AgentLoop {
         }
 
         // brief text streams out before the actions execute
-        this.opts.events.onAssistantChunk?.(session.id, assistantMsg.content)
+        emitStream(assistantMsg.content, true)
         this.opts.events.onAssistantMessage?.(assistantMsg)
         this.opts.onSessionUpdate?.(session)
 
         const results: string[] = []
-        this.opts.events.onStatus?.('acting', `${actions.length} action(s)`)
+        this.opts.events.onStatus?.('acting', `${allActions.length} action(s)`)
 
-        for (const action of actions) {
+        for (const action of allActions) {
           if (this.abort.signal.aborted) break
           const record: ToolCallRecord = {
             id: action.id,

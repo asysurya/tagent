@@ -18,6 +18,16 @@ export const taskTool: ToolDefinition = {
     agent: 'string — "general" (default) or "explore" (read-only)',
     max_turns: 'number — turn budget (default 10)',
   },
+  inputSchema: {
+    type: 'object',
+    properties: {
+      description: { type: 'string', description: 'Short label, e.g. "find all API routes"' },
+      prompt: { type: 'string', description: 'Complete, self-contained instructions for the subagent' },
+      agent: { type: 'string', enum: ['general', 'explore'], description: 'Subagent kind (default general; explore is read-only)' },
+      max_turns: { type: 'number', description: 'Turn budget (default 10)' },
+    },
+    required: ['description', 'prompt'],
+  },
   async run(input, ctx) {
     if (!ctx.spawnSubagent) return 'Error: subagents unavailable in this context.'
     if (ctx.depth >= 1) {

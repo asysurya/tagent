@@ -169,12 +169,13 @@ Workspace-local `.tagent/config.json` (gitignored) over `~/.tagent/config.json`:
 
 ## Roadmap
 
-- [ ] MEGA sync UI (adapter exists in `packages/core/src/storage`)
+- [x] Streaming tokens — SSE for OpenAI-compatible, Anthropic, Gemini, Z.ai (v0.3.0)
+- [x] Native tool-calling with automatic fallback to the markdown protocol (v0.3.0)
+- [x] Workspace switcher in the GUI, no daemon restart (v0.3.0)
+- [x] MEGA cloud sync UI — E2E-encrypted memory backup (v0.3.0)
 - [ ] GitHub OAuth device-flow setup wizard (core code ready — needs an OAuth app client id)
-- [ ] Native tool-calling mode for OpenAI/Anthropic/Google (react-mode works today on all providers)
-- [ ] Streaming tokens (event protocol supports it; providers currently return per-turn)
-- [ ] Workspace switcher for multiple concurrent workspaces
 - [ ] Share links, relay mode
+- [ ] Multi-agent timelines
 
 ## Releases & versioning
 

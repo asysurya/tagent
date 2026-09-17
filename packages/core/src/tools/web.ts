@@ -12,6 +12,14 @@ export const webFetchTool: ToolDefinition = {
     'Fetch a URL and return readable text (HTML is stripped) or raw JSON. Max ~20KB. Use for docs, APIs, and raw files.',
   risk: 'low',
   params: { url: 'string (required) — http(s) URL', raw: 'boolean — return raw body without HTML stripping' },
+  inputSchema: {
+    type: 'object',
+    properties: {
+      url: { type: 'string', description: 'http(s) URL to fetch' },
+      raw: { type: 'boolean', description: 'Return raw body without HTML stripping' },
+    },
+    required: ['url'],
+  },
   async run(input) {
     const url = String(input.url ?? '')
     if (!/^https?:\/\//.test(url)) return 'Error: url must start with http(s)://'
@@ -71,6 +79,14 @@ export const ddgSearchTool: ToolDefinition = {
     'Search the web with DuckDuckGo (no API key needed). Returns top results with title, URL, and snippet. Good for finding docs and error solutions.',
   risk: 'low',
   params: { query: 'string (required)', max: 'number — max results (default 5, max 10)' },
+  inputSchema: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'Search query' },
+      max: { type: 'number', description: 'Max results (default 5, max 10)' },
+    },
+    required: ['query'],
+  },
   async run(input) {
     const q = String(input.query ?? '')
     if (!q.trim()) return 'Error: query is required'

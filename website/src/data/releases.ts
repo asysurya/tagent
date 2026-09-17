@@ -17,9 +17,58 @@ export interface Release {
   stable?: boolean
 }
 
-export const LATEST = '0.2.0'
+export const LATEST = '0.3.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.3.0',
+    date: '2026-09-17',
+    title: 'Streaming, native tool-calling, workspace switcher',
+    summary:
+      'Tokens stream live into the chat, providers can call tools natively (with automatic fallback), and you can switch workspaces from the GUI without restarting the daemon.',
+    stable: true,
+    sections: [
+      {
+        name: 'Streaming',
+        items: [
+          'Real token streaming (SSE) for OpenAI-compatible, Anthropic, Gemini and the built-in Z.ai provider — text appears as it is generated',
+          'Throttled, idempotent stream events (full-text-so-far) — smooth on phones, no desync on reconnect',
+          'The markdown action protocol never leaks raw JSON into the chat while streaming',
+        ],
+      },
+      {
+        name: 'Native tool-calling',
+        items: [
+          'OpenAI, Anthropic, Gemini and custom providers receive real function schemas (12/12 tools documented)',
+          'Models can call tools through the native API; permission gates and checkpoints apply exactly as before',
+          'Automatic fallback: endpoints that reject tools (older Ollama models, proxies) silently revert to the markdown protocol',
+          'Config flag: nativeTools (default on) — the markdown protocol always remains available',
+        ],
+      },
+      {
+        name: 'Workspace switcher',
+        items: [
+          'New dropdown in the top bar: current workspace, recent list, and “Open folder…” by path',
+          'Switching rebinds the daemon live — sessions, files, memory and skills reload without a restart',
+          'Recent workspaces are remembered globally (~/.tagent/workspaces.json, capped at 12)',
+        ],
+      },
+      {
+        name: 'MEGA cloud sync',
+        items: [
+          'Settings → Integrations: enable MEGA, set email + password, then “Sync memory ↑” / “Restore ↓”',
+          'End-to-end encrypted backup of AGENTS.md drafts + memory facts across devices (needs bun add megajs)',
+        ],
+      },
+      {
+        name: 'Under the hood',
+        items: [
+          'E2E test suite: real-LLM chat through the daemon (scripts/e2e-chat.ts) and workspace-switch RPC tests',
+          'Removed a leftover scaffold API route that broke static export builds',
+        ],
+      },
+    ],
+  },
   {
     version: '0.2.0',
     date: '2026-09-17',

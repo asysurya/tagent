@@ -1,6 +1,6 @@
 {
-  "version": "0.2.0",
+  "version": "0.3.0",
   "date": "2026-09-17",
-  "notes": "Runs on Android via UserLAnd (no root), the daemon serves the GUI itself, and Tagent now warns when a newer release exists.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.2.0"
+  "notes": "Tokens stream live into the chat, providers can call tools natively (with automatic fallback), and you can switch workspaces from the GUI without restarting the daemon.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.3.0"
 }
