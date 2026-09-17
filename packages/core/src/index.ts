@@ -40,3 +40,4 @@ export {
   PLUGIN_API_VERSION, type TagentPlugin, type PluginHooks,
 } from './plugins'
 export * from './util'
+export { CURRENT_VERSION, checkUpdate, isNewer, type UpdateInfo } from './version'

@@ -12,9 +12,29 @@ import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
 import { createDaemon } from './daemon'
-import { GLOBAL_DIR } from '@tagent/core'
+import { GLOBAL_DIR, CURRENT_VERSION, checkUpdate } from '@tagent/core'
 
 const args = process.argv.slice(2)
+
+// fast paths
+if (args.includes('--version') || args.includes('-v')) {
+  // eslint-disable-next-line no-console
+  console.log(CURRENT_VERSION)
+  process.exit(0)
+}
+if (args.includes('--check-update')) {
+  const info = await import('@tagent/core').then((m) => m.checkUpdate(true))
+  if (!info) {
+    console.log('could not reach the update endpoint (offline?)')
+    process.exit(1)
+  }
+  console.log(
+    info.outdated
+      ? `outdated: v${info.current} → v${info.latest} available\n${info.notes ?? ''}\n${info.url ?? ''}`
+      : `up to date: v${info.current}`,
+  )
+  process.exit(info.outdated ? 2 : 0)
+}
 
 /** Android/UserLAnd detection — no xdg-open there, print phone-browser hints instead. */
 function isAndroidish() {
@@ -58,6 +78,15 @@ async function main() {
 
   const url = `http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`
   const mobile = isAndroidish()
+
+  // Non-blocking update check — a stale version warns but never blocks.
+  void checkUpdate().then((info) => {
+    if (info?.outdated) {
+      console.log(`  ⚠ Update available: Tagent v${info.latest} (you're on v${info.current})`)
+      console.log(`    Get it: ${info.url ?? 'https://github.com/asysurya/tagent/releases'}`)
+      console.log(`    This session continues on v${info.current} — everything still works.`)
+    }
+  })
   console.log(`
   ████████╗ █████╗ ██╗   ██╗██████╗ ███████╗██████╗
   ╚══██╔══╝██╔══██╗██║   ██║██╔══██╗██╔════╝██╔══██╗
@@ -66,7 +95,7 @@ async function main() {
      ██║   ██║  ██║╚██████╔╝██║  ██║███████╗██║  ██║
      ╚═╝   ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝
 
-  ⚡ Tagent daemon is live → ${url}
+  ⚡ Tagent daemon v${CURRENT_VERSION} is live → ${url}
   📂 workspace: ${root}${
     guiDir
       ? `\n  🖥  GUI: ${guiDir} (websocket at /socket)`

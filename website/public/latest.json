@@ -1,0 +1,6 @@
+{
+  "version": "0.2.0",
+  "date": "2026-09-17",
+  "notes": "Runs on Android via UserLAnd (no root), the daemon serves the GUI itself, and Tagent now warns when a newer release exists.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.2.0"
+}

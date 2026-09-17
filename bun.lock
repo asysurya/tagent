@@ -93,7 +93,7 @@
     },
     "packages/cli": {
       "name": "tagent",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "bin": {
         "tagent": "./src/index.ts",
       },
@@ -104,7 +104,24 @@
     },
     "packages/core": {
       "name": "@tagent/core",
-      "version": "0.1.0",
+      "version": "0.2.0",
+    },
+    "website": {
+      "name": "tagent-website",
+      "version": "0.2.0",
+      "dependencies": {
+        "next": "^16.1.1",
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0",
+      },
+      "devDependencies": {
+        "@tailwindcss/postcss": "^4",
+        "@types/node": "^22",
+        "@types/react": "^19",
+        "@types/react-dom": "^19",
+        "tailwindcss": "^4",
+        "typescript": "^5",
+      },
     },
   },
   "packages": {
@@ -1769,6 +1786,8 @@
     "tagent": ["tagent@workspace:packages/cli"],
 
     "tagent-daemon": ["tagent-daemon@workspace:mini-services/tagent-daemon"],
+
+    "tagent-website": ["tagent-website@workspace:website"],
 
     "tailwind-merge": ["tailwind-merge@3.4.0", "https://registry.npmjs.com/tailwind-merge/-/tailwind-merge-3.4.0.tgz", {}, "sha512-uSaO4gnW+b3Y2aWoWfFpX62vn2sR3skfhbjsEnaBI81WD1wBLlHZe5sWf0AqjksNdYTbGBEd0UasQMT3SNV15g=="],
 

@@ -8,6 +8,7 @@ import {
   AgentLoop,
   PermissionManager,
   SessionStore,
+  CURRENT_VERSION,
   listProviderInfos,
   getAdapter,
   loadConfig,
@@ -193,7 +194,7 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   const server = http.createServer((req, res) => {
     if (req.url?.startsWith('/health')) {
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ ok: true, server: 'tagent', version: '0.1.0', gui: !!guiDir }))
+      res.end(JSON.stringify({ ok: true, server: 'tagent', version: CURRENT_VERSION, gui: !!guiDir }))
       return
     }
     if (guiDir) {
@@ -226,7 +227,7 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       const ack = typeof _p === 'function' ? _p : cb
       const resp = {
         server: 'tagent',
-        version: '0.1.0',
+        version: CURRENT_VERSION,
         workspace: {
           id: workspaceId,
           name: path.basename(root),
