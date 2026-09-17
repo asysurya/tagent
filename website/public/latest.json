@@ -1,6 +1,6 @@
 {
-  "version": "0.3.0",
+  "version": "0.4.0",
   "date": "2026-09-17",
-  "notes": "Tokens stream live into the chat, providers can call tools natively (with automatic fallback), and you can switch workspaces from the GUI without restarting the daemon.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.3.0"
+  "notes": "The TUI is now the primary interface — a complete terminal UI with every feature the web GUI has. New command surface (tagent start/web/run/auth/config), share links, subagent timelines, worklog + todos, and caveman mode.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.4.0"
 }

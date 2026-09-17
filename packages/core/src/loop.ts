@@ -55,6 +55,8 @@ export interface AgentLoopOptions {
   readOnly?: boolean
   signal?: AbortSignal
   onSessionUpdate?: (session: SessionData) => void
+  /** timeline support — the host persists subagent sessions through this */
+  onSubagentSession?: (sub: SessionData, phase: 'start' | 'end') => void
 }
 
 interface ParsedAction {
@@ -212,7 +214,7 @@ export class AgentLoop {
             }
             // permission gate — ask the human when the rule says so
             this.opts.events.onStatus?.('waiting-permission', tool.name)
-            const decision = await this.opts.permissions.gate(tool.name, action.input, this.ctx)
+            const decision = await this.opts.permissions.gate(tool.name, action.input, this.ctx, tool.risk)
             if (!decision.approved) {
               record.status = 'denied'
               output = 'Permission denied by the user. Do not retry this exact action; ask the user how to proceed or continue with what you can.'
@@ -286,7 +288,11 @@ export class AgentLoop {
       messageCount: 0,
       messages: [],
       todos: [],
+      // timeline metadata — persisted by the host, hidden from the sidebar
+      parentId: session.id,
+      subagent: true,
     }
+    this.opts.onSubagentSession?.(sub, 'start')
     const events = wrapEventsForSubagent(this.opts.events, description)
     const loop = new AgentLoop({
       session: sub,
@@ -299,8 +305,10 @@ export class AgentLoop {
       depth: (this.opts.depth ?? 0) + 1,
       readOnly: agentKind === 'explore',
       signal: this.abort.signal,
+      onSubagentSession: this.opts.onSubagentSession,
     })
     const summary = await loop.run(prompt)
+    this.opts.onSubagentSession?.(sub, 'end')
     const report =
       sub.messages.filter((m) => m.role === 'assistant' && !m.meta?.toolResults).map((m) => m.content).join('\n\n') ||
       `(subagent produced no text report; finished=${summary.finished})`

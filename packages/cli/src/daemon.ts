@@ -4,77 +4,42 @@ import path from 'node:path'
 import fs from 'node:fs'
 import type { Server as HttpServer } from 'node:http'
 
-import {
-  AgentLoop,
-  PermissionManager,
-  SessionStore,
-  CURRENT_VERSION,
-  listProviderInfos,
-  getAdapter,
-  loadConfig,
-  saveConfig,
-  workspaceDir,
-  listSkills,
-  loadSkill,
-  readAgents,
-  saveAgents,
-  listFacts,
-  saveFact,
-  deleteFact,
-  listCheckpoints,
-  undoCheckpoint,
-  validatePat,
-  pushWorkspace,
-  loadPlugins,
-  emitPluginEvent,
-  buildToolset,
-  listRecentWorkspaces,
-  rememberWorkspace,
-  syncMemoryToMega,
-  pullMemoryFromMega,
-  type AgentEvents,
-  type ChatMessage,
-  type PermissionDecision,
-  type PermissionRequest,
-  type SessionData,
-  type SessionMeta,
-  type TagentConfig,
-  type ToolCallRecord,
-} from '@tagent/core'
+import { readShareFile } from '@tagent/core'
 
-import { walkTree, readWorkspaceFile, saveWorkspaceFile } from './files'
+import { AgentHost } from './host'
+
+/**
+ * The daemon — a thin network adapter over an AgentHost.
+ *
+ * Serves the web GUI (static SPA), the share-link routes and the socket.io
+ * RPC. The TUI talks to the very same host object directly, so terminal and
+ * browser are equals: same sessions, same runs, same permissions.
+ */
 
 export interface DaemonOptions {
   port: number
   host?: string
   workspaceRoot: string
-  configOverride?: Partial<TagentConfig>
+  configOverride?: import('@tagent/core').TagentConfig | Record<string, never>
   socketPath?: string
   guiDir?: string
   quiet?: boolean
-}
-
-interface PendingPermission {
-  resolve: (d: PermissionDecision) => void
-  req: PermissionRequest
-  timer: ReturnType<typeof setTimeout>
+  /** share the host with a TUI running in this process */
+  agentHost?: AgentHost
 }
 
 export interface DaemonHandle {
   server: HttpServer
   io: SocketIOServer
+  host: AgentHost
   close(): Promise<void>
 }
 
 export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
-  // `root` changes when the GUI switches workspace — everything below reads
-  // it through this closure at call time.
-  let root = path.resolve(opts.workspaceRoot)
-  /** session.workspaceId doubles as the absolute workspace root for tools */
-  let workspaceId = root
-  let cfg = loadConfig(root, opts.configOverride)
-  const persist = () => saveConfig(root, cfg)
-  rememberWorkspace(root)
+  const host = opts.agentHost ?? new AgentHost({
+    workspaceRoot: opts.workspaceRoot,
+    quiet: opts.quiet,
+  })
 
   // When a built GUI directory exists we serve it as a static SPA and move
   // the websocket to /socket so it never collides with static assets.
@@ -83,96 +48,7 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     : null
   const socketIoPath = opts.socketPath ?? (guiDir ? '/socket' : '/')
 
-  let sessions = new SessionStore(root, workspaceId)
-  let session: SessionData | undefined
-  let loop: AgentLoop | undefined
-
-  const pendingPermissions = new Map<string, PendingPermission>()
-
   const log = (...a: unknown[]) => { if (!opts.quiet) console.log('[tagent]', ...a) }
-
-  /* ------------------------------------------------------------------ */
-  /* helpers                                                             */
-  /* ------------------------------------------------------------------ */
-
-  function activeProvider() {
-    return getAdapter(cfg.defaultProvider, cfg)
-  }
-
-  /** Full world snapshot — sent on `hello` and after a workspace switch. */
-  function helloPayload() {
-    return {
-      server: 'tagent',
-      version: CURRENT_VERSION,
-      workspace: {
-        id: workspaceId,
-        name: path.basename(root),
-        path: root,
-      },
-      config: sanitizeConfig(),
-      skills: listSkills(root),
-      memory: {
-        agents: readAgents(root),
-        facts: listFacts(root),
-      },
-      sessions: sessions.list(),
-      tools: buildToolset({ config: cfg }).map((t) => ({
-        name: t.name, description: t.description, risk: t.risk,
-      })),
-      checkpoints: listCheckpoints(root).slice(0, 10),
-      recentWorkspaces: listRecentWorkspaces(root),
-    }
-  }
-
-  function sanitizeConfig() {
-    return {
-      defaultProvider: cfg.defaultProvider,
-      defaultModel: cfg.defaultModel,
-      providers: listProviderInfos(cfg),
-      permissions: cfg.permissions,
-      tools: cfg.tools,
-      github: { connected: !!cfg.github?.token, login: cfg.github?.login ?? null, repo: cfg.github?.repo ?? null },
-      mega: { enabled: !!cfg.mega?.enabled, email: cfg.mega?.email ?? null },
-      autoCheckpoint: cfg.autoCheckpoint,
-      maxTurns: cfg.maxTurns,
-      worklog: { enabled: cfg.worklog?.enabled !== false },
-      caveman: cfg.caveman === true,
-      bashEnabled: cfg.tools.bash,
-      browserEnabled: cfg.tools.browser,
-    }
-  }
-
-  async function ensureSession(mode: 'build' | 'plan' = 'build'): Promise<SessionData> {
-    if (session) return session
-    session = sessions.create('New session', cfg.defaultModel, mode)
-    emit('session:active', session)
-    emit('session:list', sessions.list())
-    return session
-  }
-
-  function makeEvents(socketId: string): AgentEvents {
-    return {
-      onStatus: (phase, detail) => emitTo(socketId, 'agent:status', { phase, detail }),
-      onUserMessage: (msg) => emitTo(socketId, 'message:new', { sessionId: session?.id, message: msg }),
-      onAssistantChunk: (sid, delta) => emitTo(socketId, 'agent:chunk', { sessionId: sid, text: delta }),
-      onAssistantMessage: (msg) => emitTo(socketId, 'message:new', { sessionId: session?.id, message: msg }),
-      onToolStart: (call: ToolCallRecord) => emitTo(socketId, 'tool:start', { sessionId: session?.id, call }),
-      onToolEnd: (call: ToolCallRecord) => emitTo(socketId, 'tool:end', { sessionId: session?.id, call }),
-      onTodos: (todos) => emitTo(socketId, 'todos:update', { sessionId: session?.id, todos }),
-      onSubagent: (info) => emitTo(socketId, 'subagent:update', { sessionId: session?.id, info }),
-      onFilesChanged: (paths) => emitTo(socketId, 'files:changed', { paths }),
-      onNotify: (level, message) => emitTo(socketId, 'notify', { level, message }),
-      onPermission: (req) =>
-        new Promise<PermissionDecision>((resolve) => {
-          const timer = setTimeout(() => {
-            pendingPermissions.delete(req.id)
-            resolve({ approved: false })
-          }, 5 * 60 * 1000)
-          pendingPermissions.set(req.id, { resolve, req, timer })
-          emitTo(socketId, 'permission:request', req)
-        }),
-    }
-  }
 
   /* ------------------------------------------------------------------ */
   /* static GUI (built Next.js export)                                   */
@@ -188,7 +64,7 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     '.png': 'image/png',
     '.ico': 'image/x-icon',
     '.txt': 'text/plain; charset=utf-8',
-    '.map': 'application/json',
+    '.map': 'application/json; charset=utf-8',
     '.woff': 'font/woff',
     '.woff2': 'font/woff2',
     '.webp': 'image/webp',
@@ -226,18 +102,37 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   /* ------------------------------------------------------------------ */
 
   const server = http.createServer((req, res) => {
-    if (req.url?.startsWith('/health')) {
+    const url = (req.url ?? '/').split('?')[0]
+
+    if (url.startsWith('/health')) {
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ ok: true, server: 'tagent', version: CURRENT_VERSION, gui: !!guiDir }))
+      res.end(JSON.stringify({
+        ok: true, server: 'tagent',
+        version: host.hello().version, gui: !!guiDir, workspace: host.root,
+      }))
       return
     }
+
+    // share links — /share/<id>.html (read-only snapshot)
+    if (url.startsWith('/share/')) {
+      const html = readShareFile(host.root, url.slice('/share/'.length))
+      if (html) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' })
+        res.end(html)
+      } else {
+        res.writeHead(404, { 'content-type': 'text/plain' })
+        res.end('share not found')
+      }
+      return
+    }
+
     if (guiDir) {
       // never shadow the websocket endpoint with a static file
-      if ((req.url ?? '/').split('?')[0] === socketIoPath || (req.url ?? '').startsWith(socketIoPath + '/')) return
+      if (url === socketIoPath || url.startsWith(socketIoPath + '/')) return
       serveStatic(req, res)
       return
     }
-    res.writeHead(404).end('tagent daemon — connect via websocket')
+    res.writeHead(404).end('tagent daemon — connect via websocket, or run with a GUI bundle for the web UI')
   })
 
   const io = new SocketIOServer(server, {
@@ -248,10 +143,14 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     maxHttpBufferSize: 20e6,
   })
 
-  function emit(event: string, payload?: unknown) { io.emit(event, payload) }
-  function emitTo(socketId: string, event: string, payload?: unknown) {
-    io.to(socketId).emit(event, payload)
-  }
+  // host events broadcast to every attached frontend (browser tabs alike)
+  const forward = [
+    'agent:status', 'message:new', 'agent:chunk', 'tool:start', 'tool:end',
+    'todos:update', 'subagent:update', 'files:changed', 'notify',
+    'permission:request', 'chat:done', 'session:active', 'session:list',
+    'workspace:changed',
+  ]
+  for (const event of forward) host.bus.on(event, (payload) => io.emit(event, payload))
 
   io.on('connection', (socket) => {
     log('gui connected:', socket.id)
@@ -259,335 +158,160 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     /* ------------------------------ hello ------------------------------ */
     socket.on('hello', (_p: unknown, cb?: (resp: unknown) => void) => {
       const ack = typeof _p === 'function' ? _p : cb
-      ack?.(helloPayload())
+      ack?.(host.hello())
     })
 
     /* --------------------------- workspaces ---------------------------- */
     socket.on('workspace:list', (_p: unknown, cb?: (r: unknown) => void) => {
-      cb?.({ current: root, recent: listRecentWorkspaces(root) })
+      cb?.(host.listWorkspaces())
     })
 
     socket.on('workspace:switch', (p: { path: string }, cb?: (r: unknown) => void) => {
-      try {
-        const target = path.resolve(String(p?.path ?? ''))
-        if (!fs.existsSync(target) || !fs.statSync(target).isDirectory()) {
-          return cb?.({ error: `Not a directory: ${target}` })
-        }
-        if (target === root) return cb?.({ ok: true, workspace: helloPayload() })
-        if (loop) loop.stop()
-        root = target
-        workspaceId = target
-        cfg = loadConfig(root, opts.configOverride)
-        sessions = new SessionStore(root, workspaceId)
-        session = undefined
-        rememberWorkspace(root)
-        log('switched workspace →', root)
-        const payload = helloPayload()
-        emit('workspace:changed', payload)
-        cb?.({ ok: true, workspace: payload })
-      } catch (e) {
-        cb?.({ error: (e as Error).message })
-      }
+      cb?.(host.switchWorkspace(p?.path))
     })
 
     /* ----------------------------- sessions ---------------------------- */
-    socket.on('session:new', (p: { mode?: 'build' | 'plan' }, cb?: (s: SessionData) => void) => {
-      session = sessions.create('New session', cfg.defaultModel, p?.mode ?? 'build')
-      emit('session:active', session)
-      emit('session:list', sessions.list())
-      cb?.(session)
+    socket.on('session:new', (p: { mode?: 'build' | 'plan' }, cb?: (s: unknown) => void) => {
+      cb?.(host.newSession(p?.mode ?? 'build'))
     })
 
-    socket.on('session:load', (p: { id: string }, cb?: (s: SessionData | null) => void) => {
-      const s = sessions.load(p?.id)
-      if (s) {
-        session = s
-        emit('session:active', s)
-        emit('todos:update', { sessionId: s.id, todos: s.todos })
-      }
-      cb?.(s ?? null)
+    socket.on('session:load', (p: { id: string }, cb?: (s: unknown) => void) => {
+      cb?.(host.loadSession(p?.id) ?? null)
     })
 
     socket.on('session:delete', (p: { id: string }) => {
-      if (session?.id === p?.id) session = undefined
-      sessions.delete(p?.id)
-      emit('session:list', sessions.list())
+      host.deleteSession(p?.id)
     })
 
     socket.on('session:mode', (p: { mode: 'build' | 'plan' }) => {
-      if (session) {
-        session.mode = p?.mode ?? 'build'
-        sessions.save(session)
-        emit('session:active', session)
-      }
+      host.setSessionMode(p?.mode ?? 'build')
+    })
+
+    socket.on('session:timeline', (p: { sessionId?: string }, cb?: (r: unknown) => void) => {
+      cb?.({ timeline: host.timeline(p?.sessionId) })
+    })
+
+    socket.on('session:share', (p: { id?: string }, cb?: (r: unknown) => void) => {
+      cb?.(host.share(p?.id))
     })
 
     /* ------------------------------- chat ------------------------------ */
-    socket.on(
-      'chat:send',
-      async (p: { text: string; mode?: 'build' | 'plan' }, cb?: (ok: boolean) => void) => {
-        const text = String(p?.text ?? '').trim()
-        if (!text) return cb?.(false)
-        try {
-          const s = await ensureSession(p?.mode ?? session?.mode ?? 'build')
-          if (p?.mode && s.mode !== p.mode) {
-            s.mode = p.mode
-            sessions.save(s)
-          }
-          if (loop) {
-            emitTo(socket.id, 'notify', { level: 'warn', message: 'A run is already in progress — stopped it first.' })
-            loop.stop()
-            await new Promise((r) => setTimeout(r, 100))
-          }
-          const events = makeEvents(socket.id)
-          const plugins = await loadPlugins(root)
-          await emitPluginEvent(plugins, 'onSessionStart', { session: s, config: cfg })
-          const permissions = new PermissionManager(cfg, persist)
-          loop = new AgentLoop({
-            session: s,
-            provider: activeProvider(),
-            model: cfg.defaultModel,
-            events,
-            permissions,
-            config: cfg,
-            mode: s.mode,
-            onSessionUpdate: (sess) => sessions.save(sess),
-          })
-          cb?.(true)
-          const summary = await loop.run(text)
-          await emitPluginEvent(plugins, 'onAgentDone', { summary, session: s })
-          sessions.save(s)
-          emit('session:list', sessions.list())
-          emitTo(socket.id, 'chat:done', { sessionId: s.id, summary, checkpoints: listCheckpoints(root).slice(0, 10) })
-        } catch (e) {
-          emitTo(socket.id, 'notify', { level: 'error', message: `Chat failed: ${(e as Error).message}` })
-          emitTo(socket.id, 'chat:done', { sessionId: session?.id, summary: { turns: 0, toolCalls: 0, finished: 'error', error: (e as Error).message } })
-        } finally {
-          loop = undefined
-        }
-      },
-    )
+    socket.on('chat:send', (p: { text: string; mode?: 'build' | 'plan' }, cb?: (ok: boolean) => void) => {
+      const text = String(p?.text ?? '').trim()
+      if (!text) return cb?.(false)
+      cb?.(true)
+      host.chatSend(text, p?.mode).catch((e: Error) => {
+        host.bus.emit('notify', { level: 'error', message: `Chat failed: ${e.message}` })
+        host.bus.emit('chat:done', {
+          sessionId: undefined,
+          summary: { turns: 0, toolCalls: 0, finished: 'error', error: e.message },
+        })
+      })
+    })
 
     socket.on('chat:interrupt', () => {
-      loop?.stop()
+      host.interrupt()
     })
 
     /* ---------------------------- permissions -------------------------- */
     socket.on(
       'permission:respond',
       (p: { requestId: string; approved: boolean; remember?: 'once' | 'session' | 'always' }) => {
-        const pending = pendingPermissions.get(p?.requestId)
-        if (pending) {
-          clearTimeout(pending.timer)
-          pendingPermissions.delete(p.requestId)
-          pending.resolve({ approved: !!p.approved, remember: p.remember })
-        }
+        host.permissionRespond(p?.requestId, !!p?.approved, p?.remember)
       },
     )
 
     /* ------------------------------- files ----------------------------- */
     socket.on('files:list', (p: { path?: string }, cb?: (tree: unknown) => void) => {
-      try {
-        cb?.(walkTree(root, p?.path ?? '.'))
-      } catch (e) {
-        cb?.({ error: (e as Error).message })
-      }
+      try { cb?.(host.filesList(p?.path)) } catch (e) { cb?.({ error: (e as Error).message }) }
     })
 
     socket.on('file:read', (p: { path: string }, cb?: (r: unknown) => void) => {
-      try {
-        cb?.(readWorkspaceFile(root, p?.path))
-      } catch (e) {
-        cb?.({ error: (e as Error).message })
-      }
+      try { cb?.(host.fileRead(p?.path)) } catch (e) { cb?.({ error: (e as Error).message }) }
     })
 
     socket.on('file:save', (p: { path: string; content: string }, cb?: (r: unknown) => void) => {
-      try {
-        cb?.(saveWorkspaceFile(root, p?.path, p?.content))
-        emit('files:changed', { paths: [p.path] })
-      } catch (e) {
-        cb?.({ error: (e as Error).message })
-      }
+      try { cb?.(host.fileSave(p?.path, p?.content)) } catch (e) { cb?.({ error: (e as Error).message }) }
     })
 
     /* ------------------------------ memory ----------------------------- */
-    socket.on('memory:get', (p: {}, cb?: (r: unknown) => void) => {
-      cb?.({ agents: readAgents(root), facts: listFacts(root) })
+    socket.on('memory:get', (_p: unknown, cb?: (r: unknown) => void) => {
+      cb?.(host.memoryGet())
     })
 
     socket.on('memory:save-agents', (p: { which: 'global' | 'workspace'; content: string }, cb?: (r: unknown) => void) => {
-      try {
-        saveAgents(root, p.which === 'global' ? 'global' : 'workspace', String(p.content ?? ''))
-        cb?.({ ok: true })
-      } catch (e) {
-        cb?.({ error: (e as Error).message })
-      }
+      try { cb?.(host.memorySaveAgents(p?.which === 'global' ? 'global' : 'workspace', p?.content)) }
+      catch (e) { cb?.({ error: (e as Error).message }) }
     })
 
     socket.on('memory:save-fact', (p: { text: string }, cb?: (r: unknown) => void) => {
-      const fact = saveFact(root, String(p?.text ?? ''))
-      cb?.({ fact })
+      cb?.(host.memorySaveFact(p?.text))
     })
 
     socket.on('memory:delete-fact', (p: { id: string }, cb?: (r: unknown) => void) => {
-      cb?.({ ok: deleteFact(root, p?.id) })
+      cb?.(host.memoryDeleteFact(p?.id))
     })
 
     /* ------------------------------ skills ----------------------------- */
-    socket.on('skills:list', (_p: {}, cb?: (r: unknown) => void) => {
-      cb?.(listSkills(root))
+    socket.on('skills:list', (_p: unknown, cb?: (r: unknown) => void) => {
+      cb?.(host.skillsList())
     })
 
     socket.on('skill:read', (p: { name: string }, cb?: (r: unknown) => void) => {
-      try {
-        cb?.({ content: loadSkill(root, p?.name) })
-      } catch (e) {
-        cb?.({ error: (e as Error).message })
-      }
+      try { cb?.(host.skillRead(p?.name)) } catch (e) { cb?.({ error: (e as Error).message }) }
     })
 
     /* ---------------------------- checkpoints -------------------------- */
-    socket.on('checkpoint:undo', async (_p: {}, cb?: (r: unknown) => void) => {
-      try {
-        const meta = undoCheckpoint(root)
-        emit('files:changed', { paths: ['*'] })
-        cb?.({ ok: !!meta, checkpoint: meta ?? null })
-      } catch (e) {
-        cb?.({ error: (e as Error).message })
-      }
+    socket.on('checkpoint:undo', async (_p: unknown, cb?: (r: unknown) => void) => {
+      try { cb?.(host.undoCheckpoint()) } catch (e) { cb?.({ error: (e as Error).message }) }
     })
 
     /* ------------------------------ settings --------------------------- */
-    socket.on('settings:save', (p: Partial<{
-      defaultProvider: string
-      defaultModel: string
-      apiKey: { provider: string; key: string }
-      permissions: TagentConfig['permissions']
-      tools: TagentConfig['tools']
-      maxTurns: number
-      autoCheckpoint: boolean
-      worklogEnabled: boolean
-      caveman: boolean
-    }>, cb?: (r: unknown) => void) => {
-      try {
-        if (p.defaultProvider) cfg.defaultProvider = p.defaultProvider
-        if (p.defaultModel) cfg.defaultModel = p.defaultModel
-        if (p.apiKey?.provider) {
-          const key = String(p.apiKey.key ?? '').trim()
-          if (key) cfg.apiKeys[p.apiKey.provider] = key
-          else delete cfg.apiKeys[p.apiKey.provider]
-        }
-        if (p.permissions) cfg.permissions = p.permissions
-        if (p.tools) cfg.tools = p.tools
-        if (typeof p.maxTurns === 'number') cfg.maxTurns = Math.min(Math.max(p.maxTurns, 1), 80)
-        if (typeof p.autoCheckpoint === 'boolean') cfg.autoCheckpoint = p.autoCheckpoint
-        if (typeof p.worklogEnabled === 'boolean') {
-          cfg.worklog = { ...(cfg.worklog ?? {}), enabled: p.worklogEnabled }
-        }
-        if (typeof p.caveman === 'boolean') cfg.caveman = p.caveman
-        persist()
-        cb?.({ ok: true, config: sanitizeConfig() })
-      } catch (e) {
-        cb?.({ error: (e as Error).message })
-      }
+    socket.on('settings:save', (p: Record<string, unknown>, cb?: (r: unknown) => void) => {
+      try { cb?.(host.settingsSave(p as never)) } catch (e) { cb?.({ error: (e as Error).message }) }
     })
 
     /* ------------------------------ mega sync -------------------------- */
-    socket.on(
-      'mega:save',
-      (p: { enabled: boolean; email?: string; sessionKey?: string }, cb?: (r: unknown) => void) => {
-        try {
-          const email = String(p?.email ?? '').trim()
-          const sessionKey = String(p?.sessionKey ?? '').trim()
-          cfg.mega = {
-            ...(cfg.mega ?? {}),
-            enabled: !!p?.enabled,
-            email: email || undefined,
-            sessionKey: sessionKey || (p?.enabled ? cfg.mega?.sessionKey : undefined),
-          }
-          persist()
-          cb?.({ ok: true, mega: { enabled: cfg.mega.enabled, email: cfg.mega.email ?? null } })
-        } catch (e) {
-          cb?.({ error: (e as Error).message })
-        }
-      },
-    )
+    socket.on('mega:save', (p: { enabled: boolean; email?: string; sessionKey?: string }, cb?: (r: unknown) => void) => {
+      try { cb?.(host.megaSave(p)) } catch (e) { cb?.({ error: (e as Error).message }) }
+    })
 
     socket.on('mega:sync', async (_p: unknown, cb?: (r: unknown) => void) => {
-      try {
-        const result = await syncMemoryToMega(root, cfg)
-        emitTo(socket.id, 'notify', { level: 'info', message: `MEGA sync done — ${result.facts} facts backed up (end-to-end encrypted).` })
-        cb?.({ ok: true, ...result })
-      } catch (e) {
-        cb?.({ error: (e as Error).message })
-      }
+      try { cb?.(await host.megaSync()) } catch (e) { cb?.({ error: (e as Error).message }) }
     })
 
     socket.on('mega:pull', async (_p: unknown, cb?: (r: unknown) => void) => {
-      try {
-        const result = await pullMemoryFromMega(root, cfg)
-        const payload = helloPayload()
-        emit('workspace:changed', payload)
-        cb?.({ ok: true, ...result })
-      } catch (e) {
-        cb?.({ error: (e as Error).message })
-      }
+      try { cb?.(await host.megaPull()) } catch (e) { cb?.({ error: (e as Error).message }) }
     })
 
     /* ------------------------------- github ----------------------------- */
     socket.on('github:pat', async (p: { token: string }, cb?: (r: unknown) => void) => {
-      try {
-        const token = String(p?.token ?? '').trim()
-        const login = await validatePat(token)
-        cfg.github = { ...(cfg.github ?? {}), token, login }
-        persist()
-        cb?.({ ok: true, login })
-      } catch (e) {
-        cb?.({ error: (e as Error).message })
-      }
+      try { cb?.(await host.githubPat(String(p?.token ?? '').trim())) } catch (e) { cb?.({ error: (e as Error).message }) }
+    })
+
+    socket.on('github:logout', async (_p: unknown, cb?: (r: unknown) => void) => {
+      try { cb?.(await host.githubLogout()) } catch (e) { cb?.({ error: (e as Error).message }) }
+    })
+
+    socket.on('github:device:start', async (_p: unknown, cb?: (r: unknown) => void) => {
+      try { cb?.(await host.githubDeviceStart()) } catch (e) { cb?.({ error: (e as Error).message }) }
+    })
+
+    socket.on('github:device:poll', async (_p: unknown, cb?: (r: unknown) => void) => {
+      try { cb?.(await host.githubDevicePoll()) } catch (e) { cb?.({ error: (e as Error).message }) }
     })
 
     socket.on('github:push', async (p: { message?: string }, cb?: (r: unknown) => void) => {
-      try {
-        const result = await pushWorkspace(root, cfg, p?.message || 'Update from Tagent', (line) =>
-          emitTo(socket.id, 'notify', { level: 'info', message: line }),
-        )
-        cb?.({ ok: true, result })
-        emitTo(socket.id, 'notify', { level: 'info', message: `Pushed to ${result.repo} (${result.commit})` })
-      } catch (e) {
-        cb?.({ error: (e as Error).message })
-      }
+      try { cb?.(await host.githubPush(p?.message)) } catch (e) { cb?.({ error: (e as Error).message }) }
     })
 
     /* ----------------------------- terminal ----------------------------- */
     socket.on('terminal:exec', async (p: { command: string }, cb?: (r: unknown) => void) => {
-      if (!cfg.tools.bash) {
-        cb?.({ output: 'Terminal is disabled in this environment (Settings → Tools).' })
-        return
-      }
-      const { execFile } = await import('node:child_process')
-      const { promisify } = await import('node:util')
-      const exec = promisify(execFile)
-      try {
-        const { stdout, stderr } = await exec('bash', ['-lc', String(p?.command ?? '')], {
-          cwd: root,
-          timeout: 30_000,
-          maxBuffer: 1024 * 512,
-          env: { ...process.env, NO_COLOR: '1' },
-        })
-        cb?.({ output: `${stdout}${stderr ? `\n${stderr}` : ''}`.slice(0, 30_000) })
-      } catch (e: unknown) {
-        const err = e as { stdout?: string; stderr?: string; message?: string }
-        cb?.({ output: `${err.stdout ?? ''}${err.stderr ?? err.message ?? ''}`.slice(0, 30_000) })
-      }
+      cb?.({ output: await host.terminalExec(p?.command) })
     })
 
-    socket.on('workspace:stats', (_p: {}, cb?: (r: unknown) => void) => {
-      const dirs = fs.existsSync(path.join(root, '.tagent', 'sessions'))
-        ? fs.readdirSync(path.join(root, '.tagent', 'sessions')).length
-        : 0
-      cb?.({ sessions: dirs, snapshots: listCheckpoints(root).length })
+    socket.on('workspace:stats', (_p: unknown, cb?: (r: unknown) => void) => {
+      cb?.(host.stats())
     })
 
     socket.on('disconnect', () => {
@@ -605,11 +329,12 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       console.error('[tagent] unhandled rejection (daemon stays up):', err)
     })
     server.listen(opts.port, opts.host ?? '127.0.0.1', () => {
-      log(`daemon ready on ${opts.host ?? '127.0.0.1'}:${opts.port} (workspace: ${root})`)
+      log(`daemon ready on ${opts.host ?? '127.0.0.1'}:${opts.port} (workspace: ${host.root})`)
       if (guiDir) log(`serving GUI from ${guiDir} (websocket: ${socketIoPath})`)
       resolve({
         server,
         io,
+        host,
         close: async () => {
           io.close()
           await new Promise<void>((r) => server.close(() => r()))

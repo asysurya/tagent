@@ -38,6 +38,8 @@ export interface SessionMeta {
   createdAt: number
   updatedAt: number
   messageCount: number
+  parentId?: string
+  subagent?: boolean
 }
 
 export interface SessionData extends SessionMeta {
@@ -75,6 +77,7 @@ export interface SanitizedConfig {
   maxTurns: number
   worklog: { enabled: boolean }
   caveman: boolean
+  webGui: boolean
 }
 
 export interface PermissionRequest {

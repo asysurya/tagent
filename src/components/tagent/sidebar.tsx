@@ -3,7 +3,8 @@
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Badge } from '@/components/ui/badge'
-import { Plus, MessageSquare, Trash2, Clock, RotateCcw } from 'lucide-react'
+import { Plus, MessageSquare, Trash2, Clock, RotateCcw, Share2 } from 'lucide-react'
+import { toast } from 'sonner'
 import { useTagent } from '@/lib/tagent/store'
 import { cn } from '@/lib/utils'
 import type { SessionMeta } from '@/lib/tagent/types'
@@ -20,7 +21,26 @@ function SessionRow({ s }: { s: SessionMeta }) {
   const active = useTagent((st) => st.session?.id === s.id)
   const loadSession = useTagent((st) => st.loadSession)
   const deleteSession = useTagent((st) => st.deleteSession)
+  const shareSession = useTagent((st) => st.shareSession)
+  const connection = useTagent((st) => st.connection)
   const running = useTagent((st) => st.running && active)
+
+  const share = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    const r = await shareSession(s.id)
+    if (!r.ok) {
+      toast.error(r.error ?? 'export failed')
+      return
+    }
+    const url = `${window.location.origin}${r.url}`
+    try {
+      await navigator.clipboard.writeText(url)
+      toast.success('Share link copied', { description: url })
+    } catch {
+      toast.success('Share exported', { description: url })
+    }
+    window.open(r.url, '_blank')
+  }
 
   return (
     <div
@@ -44,16 +64,27 @@ function SessionRow({ s }: { s: SessionMeta }) {
         </div>
         {running && <span className="size-1.5 rounded-full bg-orange-400 animate-pulse mt-1" />}
       </div>
-      <button
-        className="absolute right-1.5 top-1.5 opacity-0 group-hover:opacity-100 transition-opacity text-zinc-500 hover:text-red-400"
-        onClick={(e) => {
-          e.stopPropagation()
-          void deleteSession(s.id)
-        }}
-        title="Delete session"
-      >
-        <Trash2 className="size-3.5" />
-      </button>
+      <div className="absolute right-1.5 top-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        {connection === 'ready' && (
+          <button
+            className="text-zinc-500 hover:text-sky-400"
+            onClick={(e) => void share(e)}
+            title="Export a read-only share link (standalone HTML)"
+          >
+            <Share2 className="size-3.5" />
+          </button>
+        )}
+        <button
+          className="text-zinc-500 hover:text-red-400"
+          onClick={(e) => {
+            e.stopPropagation()
+            void deleteSession(s.id)
+          }}
+          title="Delete session"
+        >
+          <Trash2 className="size-3.5" />
+        </button>
+      </div>
     </div>
   )
 }

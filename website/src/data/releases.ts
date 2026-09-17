@@ -17,9 +17,77 @@ export interface Release {
   stable?: boolean
 }
 
-export const LATEST = '0.3.0'
+export const LATEST = '0.4.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.4.0',
+    date: '2026-09-17',
+    title: 'Terminal-first: full TUI, tagent start, share links, timelines',
+    summary:
+      'The TUI is now the primary interface — a complete terminal UI with every feature the web GUI has. New command surface (tagent start/web/run/auth/config), share links, subagent timelines, worklog + todos, and caveman mode.',
+    stable: true,
+    sections: [
+      {
+        name: 'Terminal-first',
+        items: [
+          'New full TUI (`tagent start`): streaming tokens, tool lines, live todo lists, subagent activity, inline permission prompts — pure stdin/stdout, identical on desktop, SSH and a phone (Termux/UserLAnd)',
+          'Zero desktop/mobile feature split: every capability is a slash command in the TUI and a panel in the browser — same engine, same sessions, same permissions',
+          'Shared AgentHost architecture: the terminal and any browser tabs attach to the same agent, stay in sync, and can even answer each other\u2019s permission requests',
+        ],
+      },
+      {
+        name: 'Commands',
+        items: [
+          '`tagent start [path]` — the TUI (primary). `--web-gui` also serves the browser GUI on this run',
+          '`tagent web [path]` — daemon + web GUI only, for phone/remote use',
+          '`tagent run [path] "prompt"` — one-shot agent for scripting (`--json` for structured output)',
+          '`tagent auth` — GitHub login wizard (device flow or PAT); `tagent config get/set/list`, `tagent sessions`, `tagent share`, `tagent doctor`, `tagent --check-update`',
+          'Web GUI on/off: `tagent config set webGui on` (global) or Settings → Agent in the GUI — `tagent start` stays TUI-only by default',
+        ],
+      },
+      {
+        name: 'Worklog + todos',
+        items: [
+          'The agent plans multi-step work as a live todo list you can watch progress on (GUI sidebar / TUI inline)',
+          'After each completed step it appends a timestamped entry to WORKLOG.md — a durable journal a future session reads to pick up where it left off',
+          'New Log tab in the GUI panel + `/todos`, `/log` commands in the TUI; toggle in Settings → Agent or `/worklog`',
+        ],
+      },
+      {
+        name: 'Caveman mode',
+        items: [
+          'Token saver inspired by omni-route: ultra-terse replies (telegraphic, max 5-bullet summaries), compact system prompt, one-line tool docs, tighter tool-output budgets',
+          'Toggle from the top bar bone icon, `/caveman` in the TUI, or `tagent config set caveman on`',
+          'Same tools, same safety — strictly fewer tokens in and out',
+        ],
+      },
+      {
+        name: 'Share links',
+        items: [
+          'Export any session as a standalone read-only HTML file (self-contained, dark theme, collapsible tool calls)',
+          'Served by the daemon at /share/<id>.html — share button in the session sidebar, `/share` in the TUI, `tagent share <id>` from the shell',
+        ],
+      },
+      {
+        name: 'Multi-agent timelines',
+        items: [
+          'Subagent runs (task tool) are now persisted as real sessions with parentId metadata — they survive restarts',
+          'New Timeline tab in the GUI panel shows every subagent run of the active session, live and historical; `/timeline` in the TUI',
+        ],
+      },
+      {
+        name: 'Under the hood',
+        items: [
+          'AgentHost refactor: one brain shared by TUI and daemon — no duplicated session/permission logic',
+          'GitHub device-flow wired end-to-end (CLI wizard + GUI button) using the existing core functions',
+          'PermissionManager honors permissions.defaultMode (previously dead config) and requests now carry real risk levels',
+          'Session titles auto-derive from the first message',
+          'E2E suite extended: caveman round-trip, worklog assertions, host API tests, TUI pipe-mode tests',
+        ],
+      },
+    ],
+  },
   {
     version: '0.3.0',
     date: '2026-09-17',

@@ -43,6 +43,7 @@ export function defaultConfig(): TagentConfig {
     nativeTools: true,
     worklog: { enabled: true },
     caveman: false,
+    webGui: false,
   }
 }
 
@@ -75,6 +76,35 @@ export function saveConfig(root: string, cfg: TagentConfig): void {
   const dir = workspaceDir(root)
   ensureDir(dir)
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(cfg, null, 2))
+}
+
+/* ------------------------------------------------------------------ */
+/* global config patching — powers `tagent config set -g` + auth        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Merge a patch into the GLOBAL config (~/.tagent/config.json) and persist.
+ * Workspace config still overrides global on load — use this for user-level
+ * settings (webGui default, GitHub token, provider keys).
+ */
+export function updateGlobalConfig(patch: Partial<TagentConfig>): TagentConfig {
+  const file = path.join(GLOBAL_DIR, 'config.json')
+  const current = deepMerge(
+    defaultConfig() as unknown as Record<string, unknown>,
+    readJson(file) ?? {},
+  ) as unknown as TagentConfig
+  const next = deepMerge(current as unknown as Record<string, unknown>, patch as Record<string, unknown>) as unknown as TagentConfig
+  ensureDir(GLOBAL_DIR)
+  fs.writeFileSync(file, JSON.stringify(next, null, 2))
+  return next
+}
+
+/** Read the global config (~/.tagent/config.json), defaults if absent. */
+export function readGlobalConfig(): TagentConfig {
+  return deepMerge(
+    defaultConfig() as unknown as Record<string, unknown>,
+    readJson(path.join(GLOBAL_DIR, 'config.json')) ?? {},
+  ) as unknown as TagentConfig
 }
 
 /* ------------------------------------------------------------------ */

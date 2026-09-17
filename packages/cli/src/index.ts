@@ -1,29 +1,101 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
- * Tagent — terminal-native coding agent with a web GUI.
+ * Tagent — terminal-native coding agent.
  *
- * Usage:
- *   tagent [path] [--port N] [--no-open] [--gui <dir>]
+ * The TUI is the primary interface (`tagent start`). The web GUI is an
+ * always-available companion (`--web-gui`, `tagent web`) — same engine, same
+ * sessions, same permissions, on desktop and on a phone.
  *
- * The daemon serves the GUI and the agent API over websockets.
+ * Commands:
+ *   tagent [start] [path]   interactive TUI (add --web-gui for the browser UI)
+ *   tagent web [path]       daemon + web GUI only — for phone / remote use
+ *   tagent run [path] "msg" one-shot agent run, prints the result
+ *   tagent auth             GitHub login wizard (device flow or PAT)
+ *   tagent config …         get / set / list settings
+ *   tagent sessions [path]  list sessions of a workspace
+ *   tagent share [id] [p]   export a session as standalone HTML
+ *   tagent doctor           environment sanity check
+ *   tagent version          print the version
  */
 
 import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
+import readline from 'node:readline'
+
+import {
+  CURRENT_VERSION,
+  GLOBAL_DIR,
+  checkUpdate,
+  loadConfig,
+  saveConfig,
+  defaultConfig,
+  updateGlobalConfig,
+  workspaceDir,
+  listProviderInfos,
+  getAdapter,
+  type SessionData,
+  type ToolCallRecord,
+} from '@tagent/core'
+
+import { AgentHost } from './host'
 import { createDaemon } from './daemon'
-import { GLOBAL_DIR, CURRENT_VERSION, checkUpdate } from '@tagent/core'
+import { Tui, runPiped } from './tui'
 
 const args = process.argv.slice(2)
 
-// fast paths
-if (args.includes('--version') || args.includes('-v')) {
-  // eslint-disable-next-line no-console
+/* ------------------------------------------------------------------ */
+/* helpers                                                             */
+/* ------------------------------------------------------------------ */
+
+function flag<T = string>(name: string): T | undefined {
+  const i = args.indexOf(`--${name}`)
+  if (i === -1) return undefined
+  const v = args[i + 1]
+  return (v && !v.startsWith('--') ? v : true) as T
+}
+const has = (...names: string[]) => args.some((a) => names.includes(a))
+const plain = args.filter((a) => !a.startsWith('--'))
+
+/** Android/UserLAnd detection — no xdg-open there, print phone hints instead. */
+function isAndroidish(): boolean {
+  try {
+    return /android/i.test(os.release()) || fs.existsSync('/.proot') || !!process.env.USERLAND
+  } catch {
+    return false
+  }
+}
+
+function findGuiDir(): string | undefined {
+  const explicit = flag<string>('gui')
+  if (typeof explicit === 'string') return path.resolve(explicit)
+  const candidates = [
+    path.resolve(import.meta.dir, '../../../gui-dist'), // repo root when running from source
+    path.resolve(process.cwd(), 'gui-dist'),
+  ]
+  return candidates.find((d) => fs.existsSync(path.join(d, 'index.html')))
+}
+
+function resolveWorkspace(p?: string): string {
+  return path.resolve(p && fs.existsSync(p) ? p : '.')
+}
+
+function die(msg: string): never {
+  console.error(`[tagent] ${msg}`)
+  process.exit(1)
+}
+
+/* ------------------------------------------------------------------ */
+/* fast paths                                                          */
+/* ------------------------------------------------------------------ */
+
+if (args.length === 0 || args[0] === 'start') {
+  // handled by main() below — `tagent` and `tagent start` are the same thing
+} else if (has('--version', '-v') || args[0] === 'version') {
   console.log(CURRENT_VERSION)
   process.exit(0)
-}
-if (args.includes('--check-update')) {
-  const info = await import('@tagent/core').then((m) => m.checkUpdate(true))
+} else if (has('--check-update')) {
+  const info = await checkUpdate(true)
   if (!info) {
     console.log('could not reach the update endpoint (offline?)')
     process.exit(1)
@@ -34,52 +106,143 @@ if (args.includes('--check-update')) {
       : `up to date: v${info.current}`,
   )
   process.exit(info.outdated ? 2 : 0)
+} else if (has('--help', '-h') || args[0] === 'help') {
+  printHelp()
+  process.exit(0)
 }
 
-/** Android/UserLAnd detection — no xdg-open there, print phone-browser hints instead. */
-function isAndroidish() {
+function printHelp() {
+  console.log(`
+  ${'tagent'} — terminal-native coding agent (v${CURRENT_VERSION})
+
+  ${'USAGE'}
+    tagent [start] [path] [--web-gui] [--port N] [--host H] [--no-open]
+            the interactive TUI — the primary interface.
+            --web-gui       also serve the browser GUI on this workspace
+            --no-web-gui    skip the GUI even if config enables it
+    tagent web [path] [--port N] [--no-open]
+            daemon + web GUI only (no TUI) — phone / remote use
+    tagent run [path] "prompt" [--json]
+            one-shot: run the agent on a prompt, print the result, exit
+    tagent auth
+            GitHub login wizard (device flow or personal access token)
+    tagent config list [path] · get <key> [path] · set <key> <value> [path] [-g]
+            settings from the shell (keys: webGui caveman worklog maxTurns
+            provider model bash browser autoCheckpoint) — -g writes globally
+    tagent sessions [path]
+            list sessions of a workspace
+    tagent share [sessionId] [path]
+            export a session as a standalone HTML file
+    tagent doctor
+            environment sanity check
+    tagent version · --check-update
+
+  ${'TUI'}
+    everything is a slash command inside the TUI — /help there lists them all.
+    text (no slash) talks to the agent. Ctrl+C interrupts a run, twice exits.
+`)
+}
+
+/* ------------------------------------------------------------------ */
+/* main dispatcher — runs after every declaration is initialized        */
+/* ------------------------------------------------------------------ */
+
+const command = args[0] && !args[0].startsWith('--') ? args[0] : 'start'
+
+async function init(): Promise<void> {
+  switch (command) {
+    case 'start': await mainStart(); break
+    case 'web': await mainWeb(); break
+    case 'run': await mainRun(); break
+    case 'auth': await mainAuth(); break
+    case 'config': await mainConfig(); break
+    case 'sessions': await mainSessions(); break
+    case 'share': await mainShare(); break
+    case 'doctor': await mainDoctor(); break
+    default: {
+      // `tagent <path>` — a bare directory arg means "start here"
+      const p = resolveWorkspace(command)
+      if (fs.existsSync(p) && fs.statSync(p).isDirectory()) {
+        await mainStart(command)
+      } else {
+        console.error(`[tagent] unknown command "${command}" — try: tagent help`)
+        process.exit(1)
+      }
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* tagent start — the TUI                                              */
+/* ------------------------------------------------------------------ */
+
+async function mainStart(dirArg?: string) {
+  const root = resolveWorkspace(dirArg ?? (command === 'start' ? plain[1] : plain[0]))
+  fs.mkdirSync(GLOBAL_DIR, { recursive: true })
+
+  const cfg = loadConfig(root)
+  let webGui = cfg.webGui === true
+  if (has('--web-gui')) webGui = true
+  if (has('--no-web-gui')) webGui = false
+
+  const host = new AgentHost({ workspaceRoot: root })
+
+  // optional companion: the web gui on the same shared host
+  let webUrl: string | undefined
+  let stopDaemon: (() => Promise<void>) | undefined
+  if (webGui) {
+    const port = Number(flag('port') ?? 4020)
+    const hostName = typeof flag<string>('host') === 'string' ? flag<string>('host') : '127.0.0.1'
+    const handle = await createDaemon({
+      port, host: hostName, workspaceRoot: root, guiDir: findGuiDir(), agentHost: host, quiet: true,
+    })
+    webUrl = `http://${hostName === '0.0.0.0' ? 'localhost' : hostName}:${port}`
+    stopDaemon = handle.close
+    console.log(dim(`  web gui live → ${webUrl}`))
+    if (!has('--no-open') && !isAndroidish()) {
+      const { exec } = await import('node:child_process')
+      const open = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start ""' : 'xdg-open'
+      exec(`command -v ${open.split(' ')[0]} >/dev/null 2>&1 && ${open} ${webUrl}`, () => undefined)
+    }
+  }
+
+  // non-blocking update check
+  void checkUpdate().then((info) => {
+    if (info?.outdated) {
+      console.log(`  ⚠ update available: v${info.latest} (you're on v${info.current}) — ${info.url ?? ''}`)
+    }
+  })
+
+  const tui = new Tui(host, { workspaceRoot: root, webUrl })
   try {
-    return /android/i.test(os.release()) || fs.existsSync('/.proot') || !!process.env.USERLAND
-  } catch {
-    return false
+    if (process.stdin.isTTY) {
+      await tui.start()
+    } else {
+      // piped input: `echo "fix X" | tagent start`
+      await runPiped(host)
+    }
+  } finally {
+    host.interrupt()
+    await stopDaemon?.().catch(() => undefined)
   }
 }
 
-function flag<T = string>(name: string): T | undefined {
-  const i = args.indexOf(`--${name}`)
-  if (i === -1) return undefined
-  const v = args[i + 1]
-  return (v && !v.startsWith('--') ? v : true) as T
-}
+/* ------------------------------------------------------------------ */
+/* tagent web — daemon + GUI only                                      */
+/* ------------------------------------------------------------------ */
 
-async function main() {
-  const dirArg = args.find((a) => !a.startsWith('--')) ?? '.'
-  const root = path.resolve(dirArg)
+async function mainWeb() {
+  const root = resolveWorkspace(plain[1])
   const port = Number(flag('port') ?? 4020)
-  const noOpen = flag('no-open') === true
-  const host = typeof flag<string>('host') === 'string' ? flag<string>('host') : '127.0.0.1'
+  const noOpen = has('--no-open')
+  const hostName = typeof flag<string>('host') === 'string' ? flag<string>('host') : '127.0.0.1'
+  const guiDir = findGuiDir()
 
-  // GUI bundle: explicit --gui <dir> wins, else look for gui-dist/ in the repo
-  let guiDir: string | undefined = flag<string>('gui')
-  if (typeof guiDir === 'string') {
-    guiDir = path.resolve(guiDir)
-  } else {
-    const candidates = [
-      path.resolve(import.meta.dir, '../../../gui-dist'), // repo root when running from source
-      path.resolve(process.cwd(), 'gui-dist'),
-    ]
-    guiDir = candidates.find((d) => fs.existsSync(path.join(d, 'index.html')))
-  }
-
-  const { mkdirSync } = await import('node:fs')
-  mkdirSync(GLOBAL_DIR, { recursive: true })
-
-  const handle = await createDaemon({ port, host, workspaceRoot: root, guiDir })
-
-  const url = `http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`
+  fs.mkdirSync(GLOBAL_DIR, { recursive: true })
+  const handle = await createDaemon({ port, host: hostName, workspaceRoot: root, guiDir })
+  const url = `http://${hostName === '0.0.0.0' ? 'localhost' : hostName}:${port}`
   const mobile = isAndroidish()
 
-  // Non-blocking update check — a stale version warns but never blocks.
   void checkUpdate().then((info) => {
     if (info?.outdated) {
       console.log(`  ⚠ Update available: Tagent v${info.latest} (you're on v${info.current})`)
@@ -87,6 +250,7 @@ async function main() {
       console.log(`    This session continues on v${info.current} — everything still works.`)
     }
   })
+
   console.log(`
   ████████╗ █████╗ ██╗   ██╗██████╗ ███████╗██████╗
   ╚══██╔══╝██╔══██╗██║   ██║██╔══██╗██╔════╝██╔══██╗
@@ -99,10 +263,10 @@ async function main() {
   📂 workspace: ${root}${
     guiDir
       ? `\n  🖥  GUI: ${guiDir} (websocket at /socket)`
-      : '\n  ⚠ GUI bundle not found — run `bun run build:gui` for the browser UI,\n    or use `next dev` in development.'
+      : '\n  ⚠ GUI bundle not found — run `bun run build:gui` for the browser UI.'
   }
 
-  Open ${url} in your browser to start coding with the agent.${
+  Open ${url} in your browser — or use the TUI instead: tagent start${
     mobile
       ? '\n  📱 You are on Android (UserLAnd) — open that URL in your PHONE browser.'
       : ''
@@ -112,9 +276,7 @@ async function main() {
 
   if (!noOpen && !mobile) {
     const { exec } = await import('node:child_process')
-    const open =
-      process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start ""' : 'xdg-open'
-    // xdg-open is best-effort — on bare WSL/headless boxes it simply no-ops
+    const open = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start ""' : 'xdg-open'
     exec(`command -v ${open.split(' ')[0]} >/dev/null 2>&1 && ${open} ${url}`, () => undefined)
   }
 
@@ -127,7 +289,334 @@ async function main() {
   process.on('SIGTERM', shutdown)
 }
 
-main().catch((e) => {
+/* ------------------------------------------------------------------ */
+/* tagent run — one-shot                                                */
+/* ------------------------------------------------------------------ */
+
+async function mainRun() {
+  const rest = plain.slice(1)
+  let root = '.'
+  let prompt = ''
+  if (rest.length > 0 && fs.existsSync(resolveWorkspace(rest[0])) && fs.statSync(resolveWorkspace(rest[0])).isDirectory()) {
+    root = rest[0]
+    prompt = rest.slice(1).join(' ')
+  } else {
+    prompt = rest.join(' ')
+  }
+  if (!prompt.trim()) die('usage: tagent run [path] "prompt" [--json]')
+  root = resolveWorkspace(root)
+  const json = has('--json')
+
+  const host = new AgentHost({ workspaceRoot: root })
+
+  let session: SessionData | undefined
+  if (!json) {
+    host.bus.on('tool:end', (d: { call: ToolCallRecord }) => {
+      const icon = d.call.status === 'done' ? '✓' : d.call.status === 'error' ? '✗' : '⊘'
+      console.error(`  ${icon} ${d.call.tool}`)
+    })
+  }
+  // one-shot mode cannot answer prompts — deny them explicitly
+  host.bus.on('permission:request', (req: { id: string; tool: string; risk: string }) => {
+    console.error(`[permission] ${req.tool} (risk: ${req.risk}) — denied in one-shot mode (pre-allow with /allow or config)`)
+    host.permissionRespond(req.id, false)
+  })
+
+  try {
+    const summary = await host.chatSend(prompt)
+    session = host.session
+    if (json) {
+      const last = [...(session?.messages ?? [])].reverse().find((m) => m.role === 'assistant' && m.content.trim())
+      console.log(JSON.stringify({ summary, answer: last?.content ?? null }, null, 2))
+    } else {
+      const last = [...(session?.messages ?? [])].reverse().find((m) => m.role === 'assistant' && m.content.trim())
+      if (last) console.log(last.content)
+      console.error(`— ${summary.turns} turns · ${summary.toolCalls} tool calls · ${summary.finished}`)
+    }
+    process.exit(summary.finished === 'error' ? 1 : 0)
+  } catch (e) {
+    die((e as Error).message)
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* tagent auth — GitHub wizard                                          */
+/* ------------------------------------------------------------------ */
+
+async function mainAuth() {
+  const root = resolveWorkspace(plain[1])
+  const host = new AgentHost({ workspaceRoot: root })
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  const ask = (q: string) => new Promise<string>((r) => rl.question(q, (a) => r(a ?? '')))
+
+  const github = host.cfg.github ?? {}
+  if (has('--logout')) {
+    await host.githubLogout()
+    console.log('logged out.')
+    rl.close()
+    return
+  }
+  if (github.token) {
+    console.log(`✔ connected as ${github.login ?? '(unknown)'} — repo: ${github.repo ?? '(auto)'}`)
+    console.log('use --logout to disconnect.')
+    rl.close()
+    return
+  }
+
+  console.log(bold('\n  GitHub login\n'))
+  console.log('  1) device flow — cleanest (needs TAGENT_GH_CLIENT_ID or github.clientId)')
+  console.log('  2) personal access token — works everywhere')
+  const a = (await ask('  choose [1/2] ')).trim()
+  try {
+    if (a === '1') {
+      const start = await host.githubDeviceStart()
+      console.log(`\n  open  ${start.verification_uri}`)
+      console.log(`  code  ${start.user_code}\n`)
+      console.log('  waiting for authorization…')
+      const r = await host.githubDevicePoll()
+      console.log(`✔ logged in as ${r.login}`)
+    } else if (a === '2') {
+      const token = (await ask('  token: ')).trim()
+      if (!token) { console.log('cancelled.'); rl.close(); return }
+      const r = await host.githubPat(token)
+      console.log(`✔ logged in as ${r.login}`)
+    } else {
+      console.log('cancelled.')
+    }
+    console.log('\n  next: `tagent push` or /push in the TUI to sync this workspace.')
+  } catch (e) {
+    die((e as Error).message)
+  }
+  rl.close()
+}
+
+/* ------------------------------------------------------------------ */
+/* tagent config                                                        */
+/* ------------------------------------------------------------------ */
+
+type CfgType = 'bool' | 'number' | 'string'
+const CONFIG_KEYS: Record<string, { path: string[]; type: CfgType; global?: boolean; desc: string }> = {
+  webGui: { path: ['webGui'], type: 'bool', global: true, desc: 'start the web GUI together with `tagent start`' },
+  caveman: { path: ['caveman'], type: 'bool', desc: 'terse replies + compact prompts (token saver)' },
+  worklog: { path: ['worklog', 'enabled'], type: 'bool', desc: 'agent journals to WORKLOG.md + live todos' },
+  maxTurns: { path: ['maxTurns'], type: 'number', desc: 'turn budget per run (1-80)' },
+  provider: { path: ['defaultProvider'], type: 'string', desc: 'default provider id' },
+  model: { path: ['defaultModel'], type: 'string', desc: 'default model id' },
+  bash: { path: ['tools', 'bash'], type: 'bool', desc: 'bash tool available to the agent' },
+  browser: { path: ['tools', 'browser'], type: 'bool', desc: 'browser tool available to the agent' },
+  autoCheckpoint: { path: ['autoCheckpoint'], type: 'bool', desc: 'snapshot before risky writes' },
+}
+
+function readPath(obj: Record<string, unknown>, pathArr: string[]): unknown {
+  let cur: unknown = obj
+  for (const k of pathArr) {
+    if (cur === null || typeof cur !== 'object') return undefined
+    cur = (cur as Record<string, unknown>)[k]
+  }
+  return cur
+}
+
+function mainConfigBad(msg: string): never {
+  console.error(`[tagent] ${msg}\nusage: tagent config list [path] | get <key> [path] | set <key> <value> [path] [-g]`)
+  process.exit(1)
+}
+
+async function mainConfig() {
+  const sub = plain[1]
+  const rest = plain.slice(2).filter((a) => a !== '-g' && a !== '--global')
+  const globalScope = has('-g', '--global')
+
+  if (sub === 'list') {
+    const root = resolveWorkspace(rest[0])
+    const cfg = loadConfig(root) as unknown as Record<string, unknown>
+    console.log(`\n  effective config — workspace: ${root}\n`)
+    for (const [key, def] of Object.entries(CONFIG_KEYS)) {
+      const v = readPath(cfg, def.path)
+      console.log(`    ${key.padEnd(15)} ${String(v).padEnd(10)} ${dim(def.desc)}`)
+    }
+    console.log(`\n  set: tagent config set <key> <value>${dim(' [-g = global (~/.tagent/config.json)]')}`)
+    return
+  }
+
+  if (sub === 'get') {
+    const key = rest[0]
+    const def = key ? CONFIG_KEYS[key] : undefined
+    if (!def) mainConfigBad(`unknown key "${key}"`)
+    const root = resolveWorkspace(rest[1])
+    const v = readPath(loadConfig(root) as unknown as Record<string, unknown>, def.path)
+    console.log(String(v))
+    return
+  }
+
+  if (sub === 'set') {
+    const [key, value] = [rest[0], rest[1]]
+    const def = key ? CONFIG_KEYS[key] : undefined
+    if (!def) mainConfigBad(`unknown key "${key ?? ''}" — keys: ${Object.keys(CONFIG_KEYS).join(', ')}`)
+    if (value === undefined) mainConfigBad(`missing value for ${key}`)
+    let parsed: boolean | number | string
+    if (def.type === 'bool') {
+      const v = value.toLowerCase()
+      if (!['on', 'off', 'true', 'false', '1', '0'].includes(v)) mainConfigBad(`${key} expects on/off`)
+      parsed = ['on', 'true', '1'].includes(v)
+    } else if (def.type === 'number') {
+      parsed = Number(value)
+      if (!Number.isFinite(parsed)) mainConfigBad(`${key} expects a number`)
+      if (key === 'maxTurns') parsed = Math.min(Math.max(Math.round(parsed as number), 1), 80)
+    } else {
+      parsed = value
+    }
+
+    // build a nested patch object from the path
+    const patch: Record<string, unknown> = {}
+    let node = patch
+    for (let i = 0; i < def.path.length; i++) {
+      if (i === def.path.length - 1) node[def.path[i]] = parsed
+      else node = node[def.path[i]] = {}
+    }
+
+    if (def.global || globalScope) {
+      updateGlobalConfig(patch as never)
+      console.log(`✔ ${key} = ${parsed} (global)`)
+    } else {
+      const root = resolveWorkspace(rest[2] ?? '.')
+      const cfg = loadConfig(root)
+      // merge patch into the loaded config, then persist
+      const merged = deepPatch(cfg as unknown as Record<string, unknown>, patch)
+      saveConfig(root, merged as never)
+      console.log(`✔ ${key} = ${parsed} (${workspaceDir(root)}/config.json)`)
+    }
+    return
+  }
+
+  mainConfigBad('missing subcommand')
+}
+
+function deepPatch(target: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...target }
+  for (const [k, v] of Object.entries(patch)) {
+    if (v && typeof v === 'object' && !Array.isArray(v) && typeof out[k] === 'object' && out[k] !== null) {
+      out[k] = deepPatch(out[k] as Record<string, unknown>, v as Record<string, unknown>)
+    } else {
+      out[k] = v
+    }
+  }
+  return out
+}
+
+/* ------------------------------------------------------------------ */
+/* tagent sessions / share                                              */
+/* ------------------------------------------------------------------ */
+
+async function mainSessions() {
+  const root = resolveWorkspace(plain[1])
+  const host = new AgentHost({ workspaceRoot: root })
+  const list = host.listSessions()
+  if (list.length === 0) {
+    console.log('no sessions yet.')
+    return
+  }
+  console.log(`\n  sessions in ${root} (newest first)\n`)
+  for (const s of list) {
+    console.log(`  ${bold(s.title)}  ${dim(`· ${s.mode} · ${s.messageCount} msgs · ${new Date(s.updatedAt).toISOString().slice(0, 16).replace('T', ' ')} · ${s.id.slice(0, 12)}`)}`)
+  }
+  console.log(`\n  resume in the TUI: tagent start ${root} → /open <id>`)
+}
+
+async function mainShare() {
+  const [id, dir] = [plain[1], plain[2]]
+  const root = resolveWorkspace(dir ?? '.')
+  const host = new AgentHost({ workspaceRoot: root })
+  const r = host.share(id)
+  if (!r.ok) die(r.error ?? 'export failed')
+  console.log(`✔ share exported`)
+  console.log(`  file: ${r.file}`)
+  console.log(`  url:  /share/${path.basename(r.file!)}  ${dim('(served by the daemon / tagent web)')}`)
+}
+
+/* ------------------------------------------------------------------ */
+/* tagent doctor                                                        */
+/* ------------------------------------------------------------------ */
+
+async function mainDoctor() {
+  const root = resolveWorkspace(plain[1])
+  const results: [boolean, string][] = []
+  const check = (ok: boolean, label: string) => results.push([ok, label])
+
+  // runtime
+  check(true, `runtime: bun ${Bun.version} on ${process.platform}/${process.arch}`)
+
+  // global dir
+  try {
+    fs.mkdirSync(GLOBAL_DIR, { recursive: true })
+    fs.accessSync(GLOBAL_DIR, fs.constants.W_OK)
+    check(true, `global dir writable: ${GLOBAL_DIR}`)
+  } catch {
+    check(false, `global dir not writable: ${GLOBAL_DIR}`)
+  }
+
+  // config
+  let cfg
+  try {
+    cfg = loadConfig(root)
+    check(true, `config loads (provider: ${cfg.defaultProvider} · model: ${cfg.defaultModel})`)
+  } catch (e) {
+    check(false, `config broken: ${(e as Error).message}`)
+    cfg = defaultConfig()
+  }
+
+  // provider keys
+  const infos = listProviderInfos(cfg)
+  for (const p of infos) {
+    if (p.needsKey) check(p.hasKey, `provider ${p.id}: ${p.hasKey ? 'key set' : 'MISSING key (tagent config set / /apikey)'}`)
+    else check(true, `provider ${p.id}: no key needed`)
+  }
+
+  // adapter instantiation
+  try {
+    getAdapter(cfg.defaultProvider, cfg)
+    check(true, `adapter ok: ${cfg.defaultProvider}`)
+  } catch (e) {
+    check(false, `adapter failed: ${(e as Error).message}`)
+  }
+
+  // workspace
+  check(fs.existsSync(root), `workspace exists: ${root}`)
+  const sessDir = path.join(workspaceDir(root), 'sessions')
+  const nSessions = fs.existsSync(sessDir) ? fs.readdirSync(sessDir).filter((f) => f.endsWith('.json')).length : 0
+  check(true, `sessions on disk: ${nSessions}`)
+
+  // gui bundle
+  const gui = findGuiDir()
+  check(!!gui, `gui bundle: ${gui ?? 'not found (bun run build:gui) — TUI works regardless'}`)
+
+  // github
+  check(!!cfg.github?.token, `github: ${cfg.github?.login ? `connected as ${cfg.github.login}` : 'not connected (tagent auth)'}`)
+
+  // update
+  const upd = await checkUpdate(true).catch(() => undefined)
+  if (upd) check(!upd.outdated, `version: v${upd.current}${upd.outdated ? ` → v${upd.latest} available` : ' (up to date)'}`)
+  else results.push([true, 'version: update check skipped (offline)'])
+
+  console.log(`\n  ${bold('tagent doctor')} · v${CURRENT_VERSION} · ${root}\n`)
+  let bad = 0
+  for (const [ok, label] of results) {
+    console.log(`  ${ok ? green('✔') : red('✗')} ${label}`)
+    if (!ok) bad++
+  }
+  console.log(bad === 0 ? `\n  ${green('all good')}\n` : `\n  ${red(`${bad} issue(s) found`)}\n`)
+  process.exit(bad === 0 ? 0 : 1)
+}
+
+/* ------------------------------------------------------------------ */
+/* tiny ansi (kept dependency-free)                                     */
+/* ------------------------------------------------------------------ */
+
+function bold(s: string): string { return process.stdout.isTTY ? `\x1b[1m${s}\x1b[0m` : s }
+function dim(s: string): string { return process.stdout.isTTY ? `\x1b[2m${s}\x1b[0m` : s }
+function green(s: string): string { return process.stdout.isTTY ? `\x1b[32m${s}\x1b[0m` : s }
+function red(s: string): string { return process.stdout.isTTY ? `\x1b[31m${s}\x1b[0m` : s }
+
+init().catch((e: unknown) => {
   console.error('[tagent] fatal:', e)
   process.exit(1)
 })

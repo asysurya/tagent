@@ -4,10 +4,10 @@ set -u
 cd /home/z/my-project
 PORT="${1:-4023}"
 
-pkill -f "packages/cli/src/index.ts demo-workspace --port $PORT" 2>/dev/null
+pkill -f "packages/cli/src/index.ts web demo-workspace --port $PORT" 2>/dev/null
 sleep 1
 
-bun packages/cli/src/index.ts demo-workspace --port "$PORT" --no-open > /tmp/tagent-gui-test.log 2>&1 &
+bun packages/cli/src/index.ts web demo-workspace --port "$PORT" --no-open > /tmp/tagent-gui-test.log 2>&1 &
 sleep 4
 
 agent-browser open "http://127.0.0.1:$PORT/" >/dev/null 2>&1
@@ -39,5 +39,5 @@ agent-browser press Escape >/dev/null 2>&1
 agent-browser screenshot download/gui-topbar-bone.png >/dev/null 2>&1
 
 agent-browser close >/dev/null 2>&1
-pkill -f "packages/cli/src/index.ts demo-workspace --port $PORT" 2>/dev/null
+pkill -f "packages/cli/src/index.ts web demo-workspace --port $PORT" 2>/dev/null
 echo "done"

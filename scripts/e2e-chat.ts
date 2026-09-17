@@ -66,7 +66,7 @@ async function runOnce(): Promise<boolean> {
     }),
   )
 
-  const daemon = spawn('bun', ['packages/cli/src/index.ts', WS, '--port', String(PORT), '--no-open'], {
+  const daemon = spawn('bun', ['packages/cli/src/index.ts', 'web', WS, '--port', String(PORT), '--no-open'], {
     cwd: REPO,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true, // own process group → clean teardown of bun's children
@@ -143,7 +143,8 @@ async function runOnce(): Promise<boolean> {
     log(`WORKLOG.md: exists=${wlExists} hasMarker=${wlContent.includes(MARKER)}`)
     log(pass ? 'E2E PASS ✓' : 'E2E FAIL ✗')
 
-    /* phase 2 — caveman mode round-trip */
+    /* phase 2 — caveman mode round-trip (retry once: the API rate-limits
+       rapid back-to-back runs with 429) */
     const setR = await new Promise<any>((r) => {
       socket.emit('settings:save', { caveman: true }, (res: any) => r(res))
       setTimeout(() => r(undefined), 5000)
@@ -151,27 +152,39 @@ async function runOnce(): Promise<boolean> {
     const cavemanOn = setR?.config?.caveman === true
     log('caveman toggle ack:', cavemanOn)
 
-    let cavemanReply = ''
-    const events2: string[] = []
-    const replyHandler = (d: { message: { role: string; content: string } }) => {
-      events2.push(`${d.message.role}: ${JSON.stringify(d.message.content.slice(0, 100))}`)
-      if (d.message.role === 'assistant') cavemanReply = d.message.content
+    const askCaveman = async (): Promise<{ ok: boolean; reply: string; summary?: any }> => {
+      let reply = ''
+      const events: string[] = []
+      const replyHandler = (d: { message: { role: string; content: string } }) => {
+        events.push(`${d.message.role}: ${JSON.stringify(d.message.content.slice(0, 100))}`)
+        if (d.message.role === 'assistant') reply = d.message.content
+      }
+      socket.on('message:new', replyHandler)
+      socket.on('notify', (n: { level: string; message: string }) => events.push(`notify[${n.level}]: ${n.message}`))
+      await new Promise<boolean>((r) => {
+        socket.emit('chat:send', { text: 'In one short sentence: what is in WORKLOG.md?', mode: 'build' }, (ok: boolean) => r(ok))
+        setTimeout(() => r(false), 15000)
+      })
+      const s = await new Promise<any>((r) => {
+        socket.once('chat:done', r)
+        setTimeout(() => r(undefined), 120000)
+      })
+      socket.off('message:new', replyHandler)
+      socket.removeAllListeners('notify')
+      return { ok: s?.summary?.finished === 'complete' && reply.trim().length > 0, reply, summary: s?.summary, events }
     }
-    socket.on('message:new', replyHandler)
-    socket.on('notify', (n: { level: string; message: string }) => events2.push(`notify[${n.level}]: ${n.message}`))
-    const ack2 = await new Promise<boolean>((r) => {
-      socket.emit('chat:send', { text: 'In one short sentence: what is in WORKLOG.md?', mode: 'build' }, (ok: boolean) => r(ok))
-      setTimeout(() => r(false), 15000)
-    })
-    const summary2 = await new Promise<any>((r) => {
-      socket.on('chat:done', r)
-      setTimeout(() => r(undefined), 120000)
-    })
-    socket.off('message:new', replyHandler)
-    log('phase2 ack:', ack2, '| summary2:', JSON.stringify(summary2?.summary ?? null))
-    log('phase2 events:', JSON.stringify(events2, null, 1))
-    log('caveman reply:', JSON.stringify(cavemanReply.slice(0, 120)))
-    const cavemanPass = cavemanOn && !!summary2?.summary && summary2.summary.finished === 'complete' && cavemanReply.trim().length > 0 && cavemanReply.length < 600
+
+    log('cooling down 6s to dodge api rate limits…')
+    await new Promise((r) => setTimeout(r, 6000))
+    let phase2 = await askCaveman()
+    if (!phase2.ok) {
+      log(`phase2 attempt 1 failed (${phase2.summary?.error ?? 'no summary'}) — retrying after 12s…`)
+      await new Promise((r) => setTimeout(r, 12000))
+      phase2 = await askCaveman()
+    }
+    log('phase2 events:', JSON.stringify(phase2.events, null, 1))
+    log('caveman reply:', JSON.stringify(phase2.reply.slice(0, 120)))
+    const cavemanPass = cavemanOn && phase2.ok && phase2.reply.length < 600
     log(cavemanPass ? 'CAVEMAN PHASE PASS ✓' : 'CAVEMAN PHASE FAIL ✗')
 
     return pass && cavemanPass

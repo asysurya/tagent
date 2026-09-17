@@ -7,7 +7,7 @@
  */
 
 export * from './types'
-export { loadConfig, saveConfig, defaultConfig, workspaceDir, GLOBAL_DIR, listRecentWorkspaces, rememberWorkspace, type RecentWorkspace } from './config'
+export { loadConfig, saveConfig, defaultConfig, workspaceDir, GLOBAL_DIR, listRecentWorkspaces, rememberWorkspace, updateGlobalConfig, readGlobalConfig, type RecentWorkspace } from './config'
 export { PermissionManager } from './permissions'
 export { AgentLoop, isReadOnlyTool } from './loop'
 export { buildSystemPrompt } from './system-prompt'
@@ -30,6 +30,7 @@ export {
   type NativeToolDef, type NativeToolCall,
 } from './providers'
 export { buildToolset, ALL_TOOLS, worklogTool, worklogPath } from './tools'
+export { exportShare, readShareFile, shareDir, renderShareHtml, type ShareResult } from './share'
 export {
   startDeviceLogin, pollDeviceToken, validatePat, ensureRepo, pushWorkspace,
 } from './github'

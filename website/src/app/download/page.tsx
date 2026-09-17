@@ -17,7 +17,7 @@ const PLATFORMS = [
     body: "Ubuntu 20.04+, Debian, and friends. One script installs Bun, dependencies and gets you running — the web GUI ships pre-built, nothing to compile.",
     code: `git clone https://github.com/asysurya/tagent.git
 cd tagent && bash scripts/setup-ubuntu.sh
-bun packages/cli/src/index.ts ~/my-project`,
+bun link && tagent start ~/my-project`,
     link: "/docs",
     linkLabel: "Full install docs",
   },
@@ -29,7 +29,7 @@ bun packages/cli/src/index.ts ~/my-project`,
     body: "Same flow, Homebrew-installed git is enough. The setup script handles macOS; xdg-open is replaced by `open` automatically.",
     code: `git clone https://github.com/asysurya/tagent.git
 cd tagent && bash scripts/setup-ubuntu.sh
-bun packages/cli/src/index.ts ~/my-project`,
+bun link && tagent start ~/my-project`,
     link: "/docs",
     linkLabel: "Full install docs",
   },
@@ -55,7 +55,7 @@ cd tagent && bash scripts/setup-ubuntu.sh`,
 sudo apt-get install -y git curl
 git clone https://github.com/asysurya/tagent.git
 cd tagent && bash scripts/setup-ubuntu.sh
-bun packages/cli/src/index.ts ~/my-project --no-open`,
+bun link && tagent start ~/my-project --no-open`,
     link: "/docs#userland",
     linkLabel: "Phone setup guide",
   },

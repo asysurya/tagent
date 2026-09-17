@@ -1,4 +1,4 @@
-import type { PermissionDecision, PermissionRequest, TagentConfig, ToolContext } from './types'
+import type { PermissionDecision, PermissionRequest, Risk, TagentConfig, ToolContext } from './types'
 import { uid } from './util'
 
 /**
@@ -19,19 +19,22 @@ export class PermissionManager {
     return this.cfg.permissions?.tools?.[tool]
   }
 
-  async gate(tool: string, input: unknown, ctx: ToolContext): Promise<PermissionDecision> {
+  async gate(tool: string, input: unknown, ctx: ToolContext, risk: Risk = 'medium'): Promise<PermissionDecision> {
     if (this.sessionDenied.has(tool)) return { approved: false }
     if (this.sessionAllowed.has(tool)) return { approved: true }
 
     const rule = this.rule(tool)
     if (rule === 'deny') return { approved: false }
     if (rule === 'allow') return { approved: true }
+    // no explicit tool rule → fall back to the default mode
+    if (this.cfg.permissions?.defaultMode === 'allow') return { approved: true }
     if (!ctx.events.onPermission) return { approved: true } // headless: allow
 
     const req: PermissionRequest = {
       id: uid(),
       tool,
       input,
+      risk,
       reason: `Agent wants to run \`${tool}\``,
     }
     const decision = await ctx.events.onPermission(req)

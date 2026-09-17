@@ -43,6 +43,10 @@ export interface SessionMeta {
   createdAt: number
   updatedAt: number
   messageCount: number
+  /** set for subagent sessions — the parent session id */
+  parentId?: string
+  /** true → hidden from the session list, shown on the parent timeline */
+  subagent?: boolean
 }
 
 export interface SessionData extends SessionMeta {
@@ -212,6 +216,10 @@ export interface TagentConfig {
   }
   /** caveman mode — ultra-terse replies + compact prompts. Big token saver. */
   caveman?: boolean
+  /** start the web GUI together with `tagent start` (default false — the TUI
+   *  is the primary interface; the GUI is a companion). Overridable per run
+   *  with --web-gui / --no-web-gui. Stored in the GLOBAL config. */
+  webGui?: boolean
   /** use native function-calling when the provider supports it (default true).
    *  The markdown action protocol is always available as a fallback. */
   nativeTools?: boolean

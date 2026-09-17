@@ -52,6 +52,7 @@ export function startDemo(): void {
       maxTurns: 40,
       worklog: { enabled: true },
       caveman: false,
+      webGui: false,
     },
     skills: [
       { name: 'web-app-builder', description: 'Playbook for building a complete web app', source: 'builtin', path: '' },

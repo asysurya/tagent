@@ -59,7 +59,8 @@ export default function DocsPage() {
 cd tagent
 bash scripts/setup-ubuntu.sh    # bun + deps; --with-browser adds Playwright Chromium`}</Code>
           <Code>{`# start it on any folder:
-bun packages/cli/src/index.ts ~/my-project
+bun link
+tagent start ~/my-project
 # → http://localhost:4020  (GUI + agent, one process)`}</Code>
         </div>
         <p className="mt-4 text-sm text-zinc-500">
@@ -79,7 +80,7 @@ sudo apt-get update && sudo apt-get install -y git curl
 git clone https://github.com/asysurya/tagent.git
 cd tagent && bash scripts/setup-ubuntu.sh`}</Code>
           <Code>{`# 3. start the agent, then open http://localhost:4020 in Chrome:
-bun packages/cli/src/index.ts ~/my-project --no-open`}</Code>
+tagent web ~/my-project --no-open`}</Code>
         </div>
         <p className="mt-4 text-sm text-zinc-500">
           The setup script detects phones automatically (skips heavy Chromium, prints mobile hints).
@@ -153,7 +154,7 @@ export TAGENT_UPDATE_URL=https://your-host/latest.json`}</Code>
             <tbody className="divide-y divide-zinc-800/70">
               {[
                 ["Port 4020 already in use", "tagent <folder> --port 4021"],
-                ["GUI shows “demo mode”", "daemon not running — start it with bun packages/cli/src/index.ts <folder>"],
+                ["GUI shows “demo mode”", "daemon not running — start it with tagent web <folder>"],
                 ["bun: command not found", "export PATH=\"$HOME/.bun/bin:$PATH\""],
                 ["No provider key", "Settings → add a key, or run a local Ollama and pick it as provider"],
                 ["Accidental edit", "/undo restores the last auto-checkpoint"],

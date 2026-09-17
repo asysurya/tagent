@@ -1,0 +1,554 @@
+import path from 'node:path'
+import fs from 'node:fs'
+import { EventEmitter } from 'node:events'
+
+import {
+  AgentLoop,
+  PermissionManager,
+  SessionStore,
+  CURRENT_VERSION,
+  listProviderInfos,
+  getAdapter,
+  loadConfig,
+  saveConfig,
+  updateGlobalConfig,
+  workspaceDir,
+  listSkills,
+  loadSkill,
+  readAgents,
+  saveAgents,
+  listFacts,
+  saveFact,
+  deleteFact,
+  listCheckpoints,
+  undoCheckpoint,
+  validatePat,
+  startDeviceLogin,
+  pollDeviceToken,
+  pushWorkspace,
+  loadPlugins,
+  emitPluginEvent,
+  buildToolset,
+  listRecentWorkspaces,
+  rememberWorkspace,
+  syncMemoryToMega,
+  pullMemoryFromMega,
+  exportShare,
+  type AgentEvents,
+  type ChatMessage,
+  type LoopSummary,
+  type PermissionDecision,
+  type PermissionRequest,
+  type SessionData,
+  type SessionMeta,
+  type TagentConfig,
+  type ToolCallRecord,
+} from '@tagent/core'
+
+import { walkTree, readWorkspaceFile, saveWorkspaceFile } from './files'
+
+/**
+ * AgentHost — the single brain shared by every frontend.
+ *
+ * The TUI calls these methods directly; the daemon wraps them in
+ * socket.io RPC; both listen to the same `bus` events, so a terminal and a
+ * browser attached to the same agent stay perfectly in sync. No frontend has
+ * features the other lacks — that is the point.
+ */
+
+interface PendingPermission {
+  resolve: (d: PermissionDecision) => void
+  req: PermissionRequest
+  timer: ReturnType<typeof setTimeout>
+}
+
+export interface HostOptions {
+  workspaceRoot: string
+  configOverride?: Partial<TagentConfig>
+  quiet?: boolean
+}
+
+export class AgentHost {
+  root: string
+  workspaceId: string
+  cfg: TagentConfig
+  /** every frontend subscribes here — TUI, browser tabs, future relays */
+  readonly bus = new EventEmitter()
+
+  private sessions: SessionStore
+  session: SessionData | undefined
+  private loop: AgentLoop | undefined
+  private pending = new Map<string, PendingPermission>()
+  /** last device-flow start (github:device:poll consumes it) */
+  private deviceStart: Awaited<ReturnType<typeof startDeviceLogin>> | undefined
+
+  constructor(opts: HostOptions) {
+    this.root = path.resolve(opts.workspaceRoot)
+    this.workspaceId = this.root
+    this.cfg = loadConfig(this.root, opts.configOverride)
+    this.sessions = new SessionStore(this.root, this.workspaceId)
+    rememberWorkspace(this.root)
+    this.bus.setMaxListeners(50)
+  }
+
+  private log(...a: unknown[]) { /* frontends render events; host stays quiet */ }
+
+  private persist() { saveConfig(this.root, this.cfg) }
+
+  /* ------------------------------------------------------------------ */
+  /* world snapshot                                                      */
+  /* ------------------------------------------------------------------ */
+
+  hello() {
+    return {
+      server: 'tagent',
+      version: CURRENT_VERSION,
+      workspace: {
+        id: this.workspaceId,
+        name: path.basename(this.root),
+        path: this.root,
+      },
+      config: this.sanitizeConfig(),
+      skills: listSkills(this.root),
+      memory: {
+        agents: readAgents(this.root),
+        facts: listFacts(this.root),
+      },
+      sessions: this.sessions.list(),
+      tools: buildToolset({ config: this.cfg }).map((t) => ({
+        name: t.name, description: t.description, risk: t.risk,
+      })),
+      checkpoints: listCheckpoints(this.root).slice(0, 10),
+      recentWorkspaces: listRecentWorkspaces(this.root),
+    }
+  }
+
+  sanitizeConfig() {
+    return {
+      defaultProvider: this.cfg.defaultProvider,
+      defaultModel: this.cfg.defaultModel,
+      providers: listProviderInfos(this.cfg),
+      permissions: this.cfg.permissions,
+      tools: this.cfg.tools,
+      github: { connected: !!this.cfg.github?.token, login: this.cfg.github?.login ?? null, repo: this.cfg.github?.repo ?? null },
+      mega: { enabled: !!this.cfg.mega?.enabled, email: this.cfg.mega?.email ?? null },
+      autoCheckpoint: this.cfg.autoCheckpoint,
+      maxTurns: this.cfg.maxTurns,
+      worklog: { enabled: this.cfg.worklog?.enabled !== false },
+      caveman: this.cfg.caveman === true,
+      webGui: this.cfg.webGui === true,
+      bashEnabled: this.cfg.tools.bash,
+      browserEnabled: this.cfg.tools.browser,
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* workspaces                                                          */
+  /* ------------------------------------------------------------------ */
+
+  listWorkspaces() {
+    return { current: this.root, recent: listRecentWorkspaces(this.root) }
+  }
+
+  switchWorkspace(target: string): { ok?: boolean; error?: string; workspace?: unknown } {
+    try {
+      const dir = path.resolve(String(target ?? ''))
+      if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
+        return { error: `Not a directory: ${dir}` }
+      }
+      if (dir === this.root) return { ok: true, workspace: this.hello() }
+      if (this.loop) this.loop.stop()
+      this.root = dir
+      this.workspaceId = dir
+      this.cfg = loadConfig(this.root)
+      this.sessions = new SessionStore(this.root, this.workspaceId)
+      this.session = undefined
+      rememberWorkspace(this.root)
+      const payload = this.hello()
+      this.bus.emit('workspace:changed', payload)
+      return { ok: true, workspace: payload }
+    } catch (e) {
+      return { error: (e as Error).message }
+    }
+  }
+
+  /** webGui preference — launcher behavior, always global */
+  setWebGui(v: boolean) {
+    this.cfg.webGui = v
+    updateGlobalConfig({ webGui: v })
+    return { ok: true }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* sessions                                                            */
+  /* ------------------------------------------------------------------ */
+
+  async ensureSession(mode: 'build' | 'plan' = 'build'): Promise<SessionData> {
+    if (this.session) return this.session
+    this.session = this.sessions.create('New session', this.cfg.defaultModel, mode)
+    this.bus.emit('session:active', this.session)
+    this.bus.emit('session:list', this.sessions.list())
+    return this.session
+  }
+
+  newSession(mode: 'build' | 'plan' = 'build'): SessionData {
+    this.session = this.sessions.create('New session', this.cfg.defaultModel, mode)
+    this.bus.emit('session:active', this.session)
+    this.bus.emit('session:list', this.sessions.list())
+    return this.session
+  }
+
+  loadSession(id: string): SessionData | null {
+    const s = this.sessions.load(id)
+    if (s) {
+      this.session = s
+      this.bus.emit('session:active', s)
+      this.bus.emit('todos:update', { sessionId: s.id, todos: s.todos })
+    }
+    return s ?? null
+  }
+
+  deleteSession(id: string) {
+    if (this.session?.id === id) this.session = undefined
+    this.sessions.delete(id)
+    this.bus.emit('session:list', this.sessions.list())
+  }
+
+  setSessionMode(mode: 'build' | 'plan') {
+    if (this.session) {
+      this.session.mode = mode ?? 'build'
+      this.sessions.save(this.session)
+      this.bus.emit('session:active', this.session)
+    }
+  }
+
+  listSessions(): SessionMeta[] {
+    return this.sessions.list()
+  }
+
+  /** persisted subagent runs of one session — the multi-agent timeline */
+  timeline(sessionId?: string): SessionMeta[] {
+    const id = sessionId ?? this.session?.id
+    if (!id) return []
+    return this.sessions.listSubagents(id)
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* chat — the run                                                       */
+  /* ------------------------------------------------------------------ */
+
+  /** send a message to the agent; resolves when the run finishes */
+  async chatSend(text: string, mode?: 'build' | 'plan'): Promise<LoopSummary> {
+    const body = String(text ?? '').trim()
+    if (!body) throw new Error('empty message')
+    const s = await this.ensureSession(mode ?? this.session?.mode ?? 'build')
+    if (mode && s.mode !== mode) {
+      s.mode = mode
+      this.sessions.save(s)
+    }
+    // auto-title the session from its first real message
+    if (s.title === 'New session') {
+      s.title = body.replace(/\s+/g, ' ').slice(0, 48) || 'New session'
+      this.sessions.save(s)
+      this.bus.emit('session:list', this.sessions.list())
+    }
+    if (this.loop) {
+      this.bus.emit('notify', { level: 'warn', message: 'A run is already in progress — stopped it first.' })
+      this.loop.stop()
+      await new Promise((r) => setTimeout(r, 100))
+    }
+
+    const events = this.makeEvents()
+    const plugins = await loadPlugins(this.root)
+    await emitPluginEvent(plugins, 'onSessionStart', { session: s, config: this.cfg })
+    const permissions = new PermissionManager(this.cfg, () => this.persist())
+    this.loop = new AgentLoop({
+      session: s,
+      provider: getAdapter(this.cfg.defaultProvider, this.cfg),
+      model: this.cfg.defaultModel,
+      events,
+      permissions,
+      config: this.cfg,
+      mode: s.mode,
+      onSessionUpdate: (sess) => this.sessions.save(sess),
+      // subagent runs persist → timeline survives restarts
+      onSubagentSession: (sub) => this.sessions.save(sub),
+    })
+    try {
+      const summary = await this.loop.run(body)
+      await emitPluginEvent(plugins, 'onAgentDone', { summary, session: s })
+      this.sessions.save(s)
+      this.bus.emit('session:list', this.sessions.list())
+      this.bus.emit('chat:done', {
+        sessionId: s.id,
+        summary,
+        checkpoints: listCheckpoints(this.root).slice(0, 10),
+      })
+      return summary
+    } finally {
+      this.loop = undefined
+    }
+  }
+
+  interrupt() {
+    this.loop?.stop()
+  }
+
+  get running(): boolean {
+    return !!this.loop
+  }
+
+  private makeEvents(): AgentEvents {
+    const sid = () => this.session?.id
+    return {
+      onStatus: (phase, detail) => this.bus.emit('agent:status', { phase, detail }),
+      onUserMessage: (msg: ChatMessage) => this.bus.emit('message:new', { sessionId: sid(), message: msg }),
+      onAssistantChunk: (sessionId, delta) => this.bus.emit('agent:chunk', { sessionId, text: delta }),
+      onAssistantMessage: (msg: ChatMessage) => this.bus.emit('message:new', { sessionId: sid(), message: msg }),
+      onToolStart: (call: ToolCallRecord) => this.bus.emit('tool:start', { sessionId: sid(), call }),
+      onToolEnd: (call: ToolCallRecord) => this.bus.emit('tool:end', { sessionId: sid(), call }),
+      onTodos: (todos) => this.bus.emit('todos:update', { sessionId: sid(), todos }),
+      onSubagent: (info) => this.bus.emit('subagent:update', { sessionId: sid(), info }),
+      onFilesChanged: (paths) => this.bus.emit('files:changed', { paths }),
+      onNotify: (level, message) => this.bus.emit('notify', { level, message }),
+      onPermission: (req: PermissionRequest) =>
+        new Promise<PermissionDecision>((resolve) => {
+          const timer = setTimeout(() => {
+            this.pending.delete(req.id)
+            resolve({ approved: false })
+          }, 5 * 60 * 1000)
+          this.pending.set(req.id, { resolve, req, timer })
+          this.bus.emit('permission:request', req)
+        }),
+    }
+  }
+
+  permissionRespond(requestId: string, approved: boolean, remember?: 'once' | 'session' | 'always') {
+    const pending = this.pending.get(requestId)
+    if (!pending) return false
+    clearTimeout(pending.timer)
+    this.pending.delete(requestId)
+    pending.resolve({ approved: !!approved, remember })
+    return true
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* files & terminal                                                     */
+  /* ------------------------------------------------------------------ */
+
+  filesList(sub?: string) {
+    return walkTree(this.root, sub ?? '.')
+  }
+
+  fileRead(p: string) {
+    return readWorkspaceFile(this.root, p)
+  }
+
+  fileSave(p: string, content: string) {
+    const result = saveWorkspaceFile(this.root, p, content)
+    this.bus.emit('files:changed', { paths: [p] })
+    return result
+  }
+
+  async terminalExec(command: string): Promise<string> {
+    if (!this.cfg.tools.bash) return 'Terminal is disabled in this environment (settings → tools).'
+    const { execFile } = await import('node:child_process')
+    const { promisify } = await import('node:util')
+    const exec = promisify(execFile)
+    try {
+      const { stdout, stderr } = await exec('bash', ['-lc', String(command ?? '')], {
+        cwd: this.root,
+        timeout: 30_000,
+        maxBuffer: 1024 * 512,
+        env: { ...process.env, NO_COLOR: '1' },
+      })
+      return `${stdout}${stderr ? `\n${stderr}` : ''}`.slice(0, 30_000)
+    } catch (e: unknown) {
+      const err = e as { stdout?: string; stderr?: string; message?: string }
+      return `${err.stdout ?? ''}${err.stderr ?? err.message ?? ''}`.slice(0, 30_000)
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* memory · skills · checkpoints                                        */
+  /* ------------------------------------------------------------------ */
+
+  memoryGet() {
+    return { agents: readAgents(this.root), facts: listFacts(this.root) }
+  }
+
+  memorySaveAgents(which: 'global' | 'workspace', content: string) {
+    saveAgents(this.root, which === 'global' ? 'global' : 'workspace', String(content ?? ''))
+    return { ok: true }
+  }
+
+  memorySaveFact(text: string) {
+    return { fact: saveFact(this.root, String(text ?? '')) }
+  }
+
+  memoryDeleteFact(id: string) {
+    return { ok: deleteFact(this.root, id) }
+  }
+
+  skillsList() {
+    return listSkills(this.root)
+  }
+
+  skillRead(name: string) {
+    return { content: loadSkill(this.root, name) }
+  }
+
+  undoCheckpoint() {
+    const meta = undoCheckpoint(this.root)
+    this.bus.emit('files:changed', { paths: ['*'] })
+    return { ok: !!meta, checkpoint: meta ?? null }
+  }
+
+  stats() {
+    const dir = workspaceDir(this.root) + '/sessions'
+    const sessions = fs.existsSync(dir) ? fs.readdirSync(dir).length : 0
+    return { sessions, snapshots: listCheckpoints(this.root).length }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* settings                                                             */
+  /* ------------------------------------------------------------------ */
+
+  settingsSave(patch: Partial<{
+    defaultProvider: string
+    defaultModel: string
+    apiKey: { provider: string; key: string }
+    permissions: TagentConfig['permissions']
+    tools: TagentConfig['tools']
+    maxTurns: number
+    autoCheckpoint: boolean
+    worklogEnabled: boolean
+    caveman: boolean
+    webGui: boolean
+  }>) {
+    if (patch.defaultProvider) this.cfg.defaultProvider = patch.defaultProvider
+    if (patch.defaultModel) this.cfg.defaultModel = patch.defaultModel
+    if (patch.apiKey?.provider) {
+      const key = String(patch.apiKey.key ?? '').trim()
+      if (key) this.cfg.apiKeys[patch.apiKey.provider] = key
+      else delete this.cfg.apiKeys[patch.apiKey.provider]
+    }
+    if (patch.permissions) this.cfg.permissions = patch.permissions
+    if (patch.tools) this.cfg.tools = patch.tools
+    if (typeof patch.maxTurns === 'number') this.cfg.maxTurns = Math.min(Math.max(patch.maxTurns, 1), 80)
+    if (typeof patch.autoCheckpoint === 'boolean') this.cfg.autoCheckpoint = patch.autoCheckpoint
+    if (typeof patch.worklogEnabled === 'boolean') {
+      this.cfg.worklog = { ...(this.cfg.worklog ?? {}), enabled: patch.worklogEnabled }
+    }
+    if (typeof patch.caveman === 'boolean') this.cfg.caveman = patch.caveman
+    if (typeof patch.webGui === 'boolean') {
+      // launcher behavior — global so every workspace gets it
+      this.cfg.webGui = patch.webGui
+      updateGlobalConfig({ webGui: patch.webGui })
+    }
+    this.persist()
+    return { ok: true, config: this.sanitizeConfig() }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* MEGA sync                                                           */
+  /* ------------------------------------------------------------------ */
+
+  megaSave(p: { enabled: boolean; email?: string; sessionKey?: string }) {
+    const email = String(p?.email ?? '').trim()
+    const sessionKey = String(p?.sessionKey ?? '').trim()
+    this.cfg.mega = {
+      ...(this.cfg.mega ?? {}),
+      enabled: !!p?.enabled,
+      email: email || undefined,
+      sessionKey: sessionKey || (p?.enabled ? this.cfg.mega?.sessionKey : undefined),
+    }
+    this.persist()
+    return { ok: true, mega: { enabled: this.cfg.mega.enabled, email: this.cfg.mega.email ?? null } }
+  }
+
+  async megaSync() {
+    const result = await syncMemoryToMega(this.root, this.cfg)
+    this.bus.emit('notify', { level: 'info', message: `MEGA sync done — ${result.facts} facts backed up (end-to-end encrypted).` })
+    return { ok: true, ...result }
+  }
+
+  async megaPull() {
+    const result = await pullMemoryFromMega(this.root, this.cfg)
+    const payload = this.hello()
+    this.bus.emit('workspace:changed', payload)
+    return { ok: true, ...result }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* GitHub — PAT, device flow, push                                     */
+  /* ------------------------------------------------------------------ */
+
+  /** clientId for the device flow: config → env. Tagent's own OAuth app is
+   *  bundled; users can override with TAGENT_GH_CLIENT_ID. */
+  private deviceClientId(): string {
+    return this.cfg.github?.clientId || process.env.TAGENT_GH_CLIENT_ID || ''
+  }
+
+  async githubPat(token: string) {
+    const login = await validatePat(token)
+    this.cfg.github = { ...(this.cfg.github ?? {}), token, login }
+    this.persist()
+    return { ok: true, login }
+  }
+
+  async githubLogout() {
+    this.cfg.github = { ...(this.cfg.github ?? {}), token: undefined, login: undefined }
+    this.persist()
+    return { ok: true }
+  }
+
+  /** Start the OAuth device flow. Returns the code the user must enter. */
+  async githubDeviceStart() {
+    const clientId = this.deviceClientId()
+    if (!clientId) {
+      throw new Error('No OAuth client_id configured — set TAGENT_GH_CLIENT_ID or github.clientId in config, or use a PAT instead.')
+    }
+    this.deviceStart = await startDeviceLogin(clientId)
+    return {
+      user_code: this.deviceStart.user_code,
+      verification_uri: this.deviceStart.verification_uri,
+      expires_in: this.deviceStart.expires_in,
+      interval: this.deviceStart.interval,
+    }
+  }
+
+  /** Block until the user authorizes (or timeout). Saves the token on success. */
+  async githubDevicePoll() {
+    if (!this.deviceStart) throw new Error('No device login in progress — call github:device:start first.')
+    const token = await pollDeviceToken(this.deviceClientId(), this.deviceStart)
+    const login = await validatePat(token)
+    this.cfg.github = { ...(this.cfg.github ?? {}), token, login }
+    this.persist()
+    this.deviceStart = undefined
+    return { ok: true, login }
+  }
+
+  async githubPush(message?: string) {
+    const result = await pushWorkspace(this.root, this.cfg, message || 'Update from Tagent', (line) =>
+      this.bus.emit('notify', { level: 'info', message: line }),
+    )
+    this.bus.emit('notify', { level: 'info', message: `Pushed to ${result.repo} (${result.commit})` })
+    return { ok: true, result }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* share links                                                          */
+  /* ------------------------------------------------------------------ */
+
+  /** Export a session as a standalone HTML file (default: the active one). */
+  share(sessionId?: string): { ok: boolean; url?: string; file?: string; error?: string } {
+    const s =
+      (sessionId && this.sessions.load(sessionId)) ||
+      (sessionId ? undefined : this.session) ||
+      (sessionId ? undefined : this.sessions.list()[0] && this.sessions.load(this.sessions.list()[0].id))
+    if (!s) return { ok: false, error: sessionId ? `session not found: ${sessionId}` : 'no session to share' }
+    const r = exportShare(this.root, s)
+    return { ok: true, url: r.url, file: r.file }
+  }
+}

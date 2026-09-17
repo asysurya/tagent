@@ -16,7 +16,7 @@ for (const ws of [A, B]) {
 fs.writeFileSync(path.join(A, 'from-a.txt'), 'workspace A')
 fs.writeFileSync(path.join(B, 'from-b.txt'), 'workspace B')
 
-const daemon = spawn('bun', ['packages/cli/src/index.ts', A, '--port', String(PORT), '--no-open'], {
+const daemon = spawn('bun', ['packages/cli/src/index.ts', 'web', A, '--port', String(PORT), '--no-open'], {
   cwd: REPO, stdio: ['ignore', 'pipe', 'pipe'], detached: true,
 })
 

@@ -91,7 +91,27 @@ else
   ok "web GUI built → gui-dist/"
 fi
 
-# --- 7. optional: Playwright Chromium for the `browser` tool ------------------
+# --- 7. the `tagent` command (launcher on PATH) -------------------------------
+say "installing the tagent command"
+chmod +x bin/tagent
+if [[ $MOBILE -eq 1 ]]; then
+  # UserLAnd: ~/.local/bin, no sudo needed
+  mkdir -p "$HOME/.local/bin"
+  ln -sf "$(pwd)/bin/tagent" "$HOME/.local/bin/tagent"
+  ok "tagent → ~/.local/bin/tagent"
+  warn "if 'tagent: command not found': add ~/.local/bin to PATH"
+  printf "     ${DIM}echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc && source ~/.bashrc${RESET}\n"
+else
+  if ${SUDO} ln -sf "$(pwd)/bin/tagent" /usr/local/bin/tagent 2>/dev/null; then
+    ok "tagent → /usr/local/bin/tagent"
+  else
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$(pwd)/bin/tagent" "$HOME/.local/bin/tagent"
+    ok "tagent → ~/.local/bin/tagent${DIM} (make sure it's on PATH)${RESET}"
+  fi
+fi
+
+# --- 8. optional: Playwright Chromium for the `browser` tool ------------------
 if [[ "${1:-}" == "--with-browser" ]]; then
   if [[ $MOBILE -eq 1 ]]; then
     warn "phones rarely have enough RAM for headless Chromium — skipping."
@@ -112,23 +132,29 @@ echo
 echo "${GREEN}${BOLD}⚡ Tagent is ready!${RESET}"
 echo
 if [[ $MOBILE -eq 1 ]]; then
-  echo "  Start it on any folder (keep this terminal session open):"
-  echo "    ${BOLD}bun packages/cli/src/index.ts ~/my-project --no-open${RESET}"
+  echo "  Start the TUI on any folder (keep this terminal session open):"
+  echo "    ${BOLD}tagent start ~/my-project${RESET}"
   echo
-  echo "  Then open ${BOLD}http://localhost:4020${RESET} in your PHONE browser."
+  echo "  …or serve the web GUI to your PHONE browser:"
+  echo "    ${BOLD}tagent web ~/my-project --no-open${RESET}  ${DIM}# → http://localhost:4020${RESET}"
   echo "  ${DIM}UserLAnd shares the network with Android, so localhost works.${RESET}"
   echo
   echo "  Tips: ${DIM}disable battery optimization for UserLAnd;"
   echo "        expect slower installs than a PC; 2 GB+ free RAM recommended.${RESET}"
 else
-  echo "  Start it on any folder:"
-  echo "    ${BOLD}bun packages/cli/src/index.ts ~/my-project${RESET}"
+  echo "  Start the TUI on any folder (primary interface):"
+  echo "    ${BOLD}tagent start ~/my-project${RESET}"
   echo
-  echo "  Then open ${BOLD}http://localhost:4020${RESET} in your browser."
-  echo "  First run: Settings (gear icon) → add an API key (OpenAI / Anthropic /"
-  echo "  Google / OpenRouter / Groq / Ollama / Z.ai) — or just try the built-in default."
+  echo "  Want the browser GUI too?"
+  echo "    ${BOLD}tagent start ~/my-project --web-gui${RESET}      ${DIM}# this run${RESET}"
+  echo "    ${BOLD}tagent config set webGui on${RESET}          ${DIM}# or make it the default${RESET}"
+  echo "    ${BOLD}tagent web ~/my-project${RESET}              ${DIM}# GUI only (no TUI)${RESET}"
   echo
-  echo "  Useful: ${DIM}tagent <folder> --port N     # different port"
-  echo "          tagent <folder> --host 0.0.0.0    # reach the GUI from your LAN"
-  echo "          Ctrl+C to stop${RESET}"
+  echo "  First run: ${DIM}tagent auth for GitHub, /apikey <provider> in the TUI,"
+  echo "  or Settings → Providers in the GUI (OpenAI / Anthropic / Google /"
+  echo "  OpenRouter / Groq / Ollama / Z.ai) — or just try the built-in default.${RESET}"
+  echo
+  echo "  Useful: ${DIM}tagent run \"fix the bug in app.js\"  # one-shot"
+  echo "          tagent start --port N --host 0.0.0.0   # LAN access"
+  echo "          Ctrl+C interrupts, twice exits${RESET}"
 fi

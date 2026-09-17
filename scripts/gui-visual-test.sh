@@ -4,10 +4,10 @@ set -u
 cd /home/z/my-project
 PORT="${1:-4021}"
 
-pkill -f "packages/cli/src/index.ts demo-workspace --port $PORT" 2>/dev/null
+pkill -f "packages/cli/src/index.ts web demo-workspace --port $PORT" 2>/dev/null
 sleep 1
 
-bun packages/cli/src/index.ts demo-workspace --port "$PORT" --no-open > /tmp/tagent-gui-test.log 2>&1 &
+bun packages/cli/src/index.ts web demo-workspace --port "$PORT" --no-open > /tmp/tagent-gui-test.log 2>&1 &
 sleep 4
 
 agent-browser open "http://127.0.0.1:$PORT/" >/dev/null 2>&1
@@ -31,5 +31,5 @@ agent-browser screenshot /tmp/gui-mega.png >/dev/null 2>&1
 agent-browser snapshot -c 2>/dev/null | grep -i "mega\|cloud" | head -4
 
 agent-browser close >/dev/null 2>&1
-pkill -f "packages/cli/src/index.ts demo-workspace --port $PORT" 2>/dev/null
+pkill -f "packages/cli/src/index.ts web demo-workspace --port $PORT" 2>/dev/null
 echo "done"

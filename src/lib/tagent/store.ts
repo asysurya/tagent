@@ -29,7 +29,7 @@ import type {
   WorkspaceInfo,
 } from './types'
 
-type RightTab = 'files' | 'terminal' | 'memory' | 'skills' | 'worklog'
+type RightTab = 'files' | 'terminal' | 'memory' | 'skills' | 'worklog' | 'timeline'
 
 interface FileBuffer {
   path: string
@@ -52,6 +52,7 @@ interface TagentState {
   availableTools: { name: string; description: string; risk: string }[]
   worklogContent: string
   worklogExists: boolean
+  timeline: SessionMeta[]
 
   /* active session */
   session: SessionData | null
@@ -85,8 +86,11 @@ interface TagentState {
   setToolEnabled: (tool: 'bash' | 'browser', enabled: boolean) => Promise<void>
   setCaveman: (v: boolean) => Promise<void>
   setWorklog: (v: boolean) => Promise<void>
+  setWebGui: (v: boolean) => Promise<void>
   setMaxTurns: (n: number) => Promise<void>
   refreshWorklog: () => Promise<void>
+  shareSession: (id: string) => Promise<{ ok: boolean; url?: string; file?: string; error?: string }>
+  refreshTimeline: () => Promise<void>
   saveGithubPat: (token: string) => Promise<{ ok: boolean; login?: string; error?: string }>
   githubPush: () => Promise<void>
   switchWorkspace: (path: string) => Promise<void>
@@ -135,6 +139,7 @@ const initial = {
   availableTools: [],
   worklogContent: '',
   worklogExists: false,
+  timeline: [],
   session: null,
   stream: '',
   status: null,
@@ -304,6 +309,7 @@ export const useTagent = create<TagentState>((set, get) => ({
         status: { phase: summary.finished === 'error' ? 'error' : 'done', detail: `${summary.turns} turns · ${summary.toolCalls} tool calls` },
       }))
       void get().refreshTree()
+      void get().refreshTimeline()
     },
   },
 
@@ -329,6 +335,7 @@ export const useTagent = create<TagentState>((set, get) => ({
       fileBuffer: null,
       worklogContent: '',
       worklogExists: false,
+      timeline: [],
     })
     if (payload.sessions.length > 0) {
       await get().loadSession(payload.sessions[0].id)
@@ -337,6 +344,7 @@ export const useTagent = create<TagentState>((set, get) => ({
     }
     await get().refreshTree()
     await get().refreshWorklog()
+    await get().refreshTimeline()
   },
 
   async setMode(m) {
@@ -364,7 +372,10 @@ export const useTagent = create<TagentState>((set, get) => ({
     if (connection === 'demo') return
     if (!socket) return
     const s = await call<SessionData | null>(socket, 'session:load', { id })
-    if (s) set({ session: s, subagents: [], stream: '', status: null })
+    if (s) {
+      set({ session: s, subagents: [], stream: '', status: null })
+      void get().refreshTimeline()
+    }
   },
 
   async deleteSession(id) {
@@ -478,6 +489,14 @@ export const useTagent = create<TagentState>((set, get) => ({
     toast(v ? 'Worklog + todos enabled' : 'Worklog disabled')
   },
 
+  async setWebGui(v) {
+    const { socket } = get()
+    if (!socket || get().connection !== 'ready') return
+    const r = await call<{ ok: boolean; config: SanitizedConfig }>(socket, 'settings:save', { webGui: v })
+    if (r.config) set({ config: r.config })
+    toast(v ? 'Web GUI will start with tagent start' : 'Web GUI will stay off (tagent start is TUI-only)')
+  },
+
   async setMaxTurns(n) {
     const { socket } = get()
     if (!socket || get().connection !== 'ready') return
@@ -499,6 +518,20 @@ export const useTagent = create<TagentState>((set, get) => ({
     }
     if (r.error || r.binary) set({ worklogExists: false, worklogContent: '' })
     else set({ worklogExists: true, worklogContent: r.content ?? '' })
+  },
+
+  async refreshTimeline() {
+    const { socket, connection, session } = get()
+    if (connection !== 'ready' || !socket) return
+    const r = await call<{ timeline: SessionMeta[] }>(socket, 'session:timeline', { sessionId: session?.id }, 10000)
+      .catch(() => ({ timeline: [] as SessionMeta[] }))
+    set({ timeline: r.timeline ?? [] })
+  },
+
+  async shareSession(id) {
+    const { socket, connection } = get()
+    if (connection !== 'ready' || !socket) return { ok: false, error: 'daemon not connected' }
+    return call<{ ok: boolean; url?: string; file?: string; error?: string }>(socket, 'session:share', { id })
   },
 
   async saveGithubPat(token) {

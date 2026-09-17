@@ -33,15 +33,16 @@ export default function Home() {
           </h1>
           <p className="mx-auto mt-6 max-w-2xl text-lg text-zinc-400">
             Tagent runs the engine on your machine — loop, subagents, skills, memory,
-            permissions — and you steer it from a real web GUI. Open source, BYOK,
-            guest-first. Works on laptops and Android phones.
+            permissions. The TUI is the interface (terminal or phone), the web GUI is
+            the companion. Open source, BYOK, guest-first. Works on laptops and
+            Android phones — zero feature difference between them.
           </p>
 
           <div className="mx-auto mt-8 max-w-xl text-left">
             <Code>{`git clone https://github.com/asysurya/tagent.git
-cd tagent && bash scripts/setup-ubuntu.sh
-bun packages/cli/src/index.ts ~/my-project
-# → http://localhost:4020`}</Code>
+cd tagent && bash scripts/setup-ubuntu.sh && bun link
+tagent start ~/my-project        # full TUI
+tagent start --web-gui           # TUI + browser GUI`}</Code>
           </div>
 
           <div className="mt-8 flex flex-wrap items-center justify-center gap-3">

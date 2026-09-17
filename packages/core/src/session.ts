@@ -54,6 +54,19 @@ export class SessionStore {
   }
 
   list(): SessionMeta[] {
+    return this.readAll()
+      .filter((s) => !s.subagent)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
+  /** Subagent sessions of one parent, oldest first — the run timeline. */
+  listSubagents(parentId: string): SessionMeta[] {
+    return this.readAll()
+      .filter((s) => s.subagent === true && s.parentId === parentId)
+      .sort((a, b) => a.createdAt - b.createdAt)
+  }
+
+  private readAll(): SessionMeta[] {
     let entries: string[]
     try {
       entries = fs.readdirSync(this.dir)
@@ -74,10 +87,12 @@ export class SessionStore {
           createdAt: s.createdAt,
           updatedAt: s.updatedAt,
           messageCount: s.messageCount,
+          parentId: s.parentId,
+          subagent: s.subagent,
         })
       } catch { /* skip broken */ }
     }
-    return metas.sort((a, b) => b.updatedAt - a.updatedAt)
+    return metas
   }
 
   delete(id: string): void {

@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Check, ExternalLink, Eye, EyeOff, Github, Key, Loader2, ShieldAlert, Terminal, Globe, Bot, Bone, ScrollText, Coins } from 'lucide-react'
+import { Check, ExternalLink, Eye, EyeOff, Github, Key, Loader2, ShieldAlert, Terminal, Globe, Bot, Bone, ScrollText, Coins, MonitorSmartphone } from 'lucide-react'
 import { useTagent } from '@/lib/tagent/store'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -208,6 +208,7 @@ function AgentTab() {
   const config = useTagent((s) => s.config)
   const setCaveman = useTagent((s) => s.setCaveman)
   const setWorklog = useTagent((s) => s.setWorklog)
+  const setWebGui = useTagent((s) => s.setWebGui)
   const setMaxTurns = useTagent((s) => s.setMaxTurns)
   const setRightTab = useTagent((s) => s.setRightTab)
   const [turns, setTurns] = useState('')
@@ -299,6 +300,29 @@ function AgentTab() {
           <span className="text-[11px] text-zinc-600">current: {config.maxTurns}</span>
         </div>
       </div>
+
+      {/* Web GUI companion */}
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <MonitorSmartphone className="size-4 text-orange-400" />
+          <span className="text-sm font-medium text-zinc-200">Web GUI companion</span>
+          {config.webGui ? (
+            <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-800/50 hover:bg-emerald-500/15 text-[9px] h-4 px-1.5">auto-start</Badge>
+          ) : (
+            <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-zinc-700 text-zinc-500">off</Badge>
+          )}
+        </div>
+        <p className="text-xs text-zinc-500 leading-relaxed">
+          <b className="text-zinc-300">The TUI is the primary interface</b> — same engine, same sessions, same
+          permissions in the terminal and the browser. Turn this on to also launch the web GUI with
+          <code className="text-zinc-400"> tagent start</code> (any run can override with
+          <code className="text-zinc-400"> --web-gui</code>). Saved globally.
+        </p>
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-zinc-300">Start the web GUI together with the TUI</span>
+          <Switch aria-label="Web GUI auto-start" checked={config.webGui} onCheckedChange={(v) => void setWebGui(v)} />
+        </div>
+      </div>
     </div>
   )
 }
@@ -316,8 +340,42 @@ function IntegrationsTab() {
   const [megaEmail, setMegaEmail] = useState('')
   const [megaKey, setMegaKey] = useState('')
   const [megaBusy, setMegaBusy] = useState(false)
+  const [device, setDevice] = useState<{ user_code: string; verification_uri: string } | null>(null)
+  const [deviceBusy, setDeviceBusy] = useState(false)
 
   if (!config) return null
+
+  const { socket, connection } = useTagent.getState()
+  const callRpc = async <T,>(event: string, payload: unknown, ms = 20000): Promise<T> => {
+    if (!socket || connection !== 'ready') throw new Error('daemon not connected')
+    return new Promise((resolve) => {
+      const t = setTimeout(() => resolve(undefined as T), ms)
+      socket.emit(event, payload, (res: T) => { clearTimeout(t); resolve(res) })
+    })
+  }
+
+  const startDeviceFlow = async (pollOnly: boolean) => {
+    setDeviceBusy(true)
+    try {
+      if (!pollOnly || !device) {
+        const start = await callRpc<{ user_code: string; verification_uri: string; error?: string }>('github:device:start', {})
+        if (!start?.user_code) throw new Error(start?.error ?? 'device flow unavailable — set TAGENT_GH_CLIENT_ID or use a PAT')
+        setDevice(start)
+        window.open(start.verification_uri, '_blank')
+      }
+      const r = await callRpc<{ ok?: boolean; login?: string; error?: string }>('github:device:poll', {}, 300000)
+      if (r?.ok) {
+        toast(`Connected as @${r.login}`)
+        setDevice(null)
+        window.location.reload()
+      } else {
+        throw new Error(r?.error ?? 'device flow timed out')
+      }
+    } catch (e) {
+      toast.error((e as Error).message)
+      setDeviceBusy(false)
+    }
+  }
 
   return (
     <div className="space-y-5">
@@ -335,34 +393,76 @@ function IntegrationsTab() {
           )}
         </div>
         <p className="text-xs text-zinc-500 leading-relaxed">
-          Paste a Personal Access Token (<code className="text-zinc-400">repo</code> scope) — or complete the device flow from
-          the CLI: <code className="text-zinc-400">tagent auth</code>. The token stays in local config and is used to
-          create a private repo and push your workspace.
+          Paste a Personal Access Token (<code className="text-zinc-400">repo</code> scope) — or use the device flow:
+          open the link, type the code, done. Also available in the CLI: <code className="text-zinc-400">tagent auth</code>.
+          The token stays in local config and is used to create a private repo and push your workspace.
         </p>
         {!config.github.connected && (
-          <div className="flex gap-2">
-            <Input
-              type="password"
-              placeholder="ghp_…"
-              value={pat}
-              onChange={(e) => setPat(e.target.value)}
-              className="h-8 bg-zinc-900 border-zinc-800 font-mono text-xs"
-            />
-            <Button
-              size="sm" className="h-8 text-xs bg-orange-500 hover:bg-orange-400 text-zinc-950"
-              disabled={!pat.trim() || busy}
-              onClick={async () => {
-                setBusy(true)
-                const r = await saveGithubPat(pat.trim())
-                setBusy(false)
-                setPat('')
-                if (r.ok) toast(`Connected as @${r.login}`)
-                else toast.error(r.error ?? 'failed')
-              }}
-            >
-              {busy ? <Loader2 className="size-3.5 animate-spin" /> : 'Connect'}
-            </Button>
-          </div>
+          <>
+            <div className="flex gap-2">
+              <Input
+                type="password"
+                placeholder="ghp_…"
+                value={pat}
+                onChange={(e) => setPat(e.target.value)}
+                className="h-8 bg-zinc-900 border-zinc-800 font-mono text-xs"
+              />
+              <Button
+                size="sm" className="h-8 text-xs bg-orange-500 hover:bg-orange-400 text-zinc-950"
+                disabled={!pat.trim() || busy}
+                onClick={async () => {
+                  setBusy(true)
+                  const r = await saveGithubPat(pat.trim())
+                  setBusy(false)
+                  setPat('')
+                  if (r.ok) toast(`Connected as @${r.login}`)
+                  else toast.error(r.error ?? 'failed')
+                }}
+              >
+                {busy ? <Loader2 className="size-3.5 animate-spin" /> : 'Connect'}
+              </Button>
+            </div>
+            <div className="rounded-lg border border-zinc-800/70 bg-zinc-900/30 p-3 space-y-2">
+              <p className="text-[11px] text-zinc-500">No token at hand? Login in your browser instead:</p>
+              {device ? (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2 rounded-md border border-zinc-800 bg-zinc-950 px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="text-[10px] text-zinc-500 truncate">{device.verification_uri}</p>
+                      <p className="font-mono text-sm text-orange-300 tracking-wider">{device.user_code}</p>
+                    </div>
+                    <Button
+                      size="sm" variant="outline" className="h-7 text-xs border-zinc-700 shrink-0"
+                      onClick={() => window.open(device.verification_uri, '_blank')}
+                    >
+                      <Globe className="size-3.5" /> Open
+                    </Button>
+                  </div>
+                  <p className="text-[11px] text-zinc-500 flex items-center gap-1.5">
+                    {deviceBusy ? <Loader2 className="size-3 animate-spin" /> : null}
+                    {deviceBusy ? 'waiting for authorization…' : 'polling paused — press Retry if it expires'}
+                  </p>
+                  {!deviceBusy && (
+                    <Button
+                      size="sm" variant="outline" className="h-7 text-xs border-zinc-700"
+                      onClick={() => void startDeviceFlow(true)}
+                    >
+                      Retry
+                    </Button>
+                  )}
+                </div>
+              ) : (
+                <Button
+                  size="sm" variant="outline" className="h-7 text-xs border-zinc-700"
+                  disabled={deviceBusy}
+                  onClick={() => void startDeviceFlow(false)}
+                >
+                  {deviceBusy ? <Loader2 className="size-3.5 animate-spin" /> : <Globe className="size-3.5" />}
+                  Login with browser (device flow)
+                </Button>
+              )}
+            </div>
+          </>
         )}
         {config.github.connected && (
           <Button size="sm" variant="outline" className="h-8 text-xs border-zinc-700 gap-1.5" disabled={githubBusy} onClick={() => void githubPush()}>
