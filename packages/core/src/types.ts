@@ -69,6 +69,8 @@ export interface CustomProviderConfig {
   baseUrl: string
   apiKey?: string
   models: string[]
+  /** wire protocol — defaults to 'openai' (OpenAI-compatible) */
+  kind?: 'openai' | 'anthropic' | 'google'
 }
 
 export interface ProviderInfo {
@@ -79,6 +81,12 @@ export interface ProviderInfo {
   hasKey: boolean
   models: ModelInfo[]
   docsUrl?: string
+  /** env var that provides the key when none is stored in config */
+  envVar?: string
+  /** featured in the quick picker */
+  popular?: boolean
+  /** user-defined custom endpoint (deletable) */
+  custom?: boolean
 }
 
 export type Risk = 'low' | 'medium' | 'high'

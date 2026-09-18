@@ -21,9 +21,10 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   Bone, Check, ChevronDown, Cpu, Files, FolderInput, FolderOpen, Github, History, ListTodo,
-  PanelRightClose, PanelRightOpen, Settings, Terminal, TerminalSquare, Zap,
+  PanelRightClose, PanelRightOpen, Search, Settings, Terminal, TerminalSquare, Zap,
 } from 'lucide-react'
 import { useTagent } from '@/lib/tagent/store'
 import { cn } from '@/lib/utils'
@@ -36,7 +37,6 @@ export function TopBar() {
   const config = useTagent((s) => s.config)
   const session = useTagent((s) => s.session)
   const setMode = useTagent((s) => s.setMode)
-  const setModel = useTagent((s) => s.setModel)
   const rightOpen = useTagent((s) => s.rightOpen)
   const toggleRight = useTagent((s) => s.toggleRight)
   const setRightTab = useTagent((s) => s.setRightTab)
@@ -48,6 +48,7 @@ export function TopBar() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [openDialog, setOpenDialog] = useState(false)
+  const [modelQuery, setModelQuery] = useState('')
 
   const provider = config?.providers.find((p) => p.id === config.defaultProvider)
   const modelLabel = provider?.models.find((m) => m.id === config?.defaultModel)?.label ?? config?.defaultModel ?? 'no model'
@@ -96,34 +97,24 @@ export function TopBar() {
             <ChevronDown className="size-3 opacity-50" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-64 bg-zinc-900 border-zinc-800">
-          {config?.providers.map((p) => (
-            <DropdownMenuGroup key={p.id}>
-              <DropdownMenuLabel className="text-[11px] text-zinc-500 flex items-center justify-between">
-                <span>{p.label}</span>
-                {!p.needsKey && <Badge variant="outline" className="text-[9px] h-4 px-1 border-zinc-700 text-zinc-400">free</Badge>}
-                {p.needsKey && !p.hasKey && <Badge variant="outline" className="text-[9px] h-4 px-1 border-zinc-700 text-zinc-500">needs key</Badge>}
-              </DropdownMenuLabel>
-              {p.models.map((m) => (
-                <DropdownMenuItem
-                  key={m.id}
-                  disabled={p.needsKey && !p.hasKey}
-                  onClick={() => void setModel(p.id, m.id)}
-                  className={cn('text-xs font-mono', m.id === config?.defaultModel && 'text-orange-400')}
-                >
-                  {m.label}
-                </DropdownMenuItem>
-              ))}
-              {p.docsUrl && p.needsKey && !p.hasKey && (
-                <DropdownMenuItem className="text-[11px] text-zinc-500" asChild>
-                  <a href={p.docsUrl} target="_blank" rel="noreferrer">Get an API key ↗</a>
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuSeparator className="bg-zinc-800" />
-            </DropdownMenuGroup>
-          ))}
+        <DropdownMenuContent align="end" className="w-72 bg-zinc-900 border-zinc-800">
+          <div className="p-2 sticky top-0 bg-zinc-900 z-10 border-b border-zinc-800/60">
+            <div className="relative">
+              <Search className="size-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-600" />
+              <input
+                value={modelQuery}
+                onChange={(e) => setModelQuery(e.target.value)}
+                placeholder="search providers & models…"
+                className="w-full h-7 bg-zinc-950 border border-zinc-800 rounded-md pl-8 pr-2 text-xs font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-700"
+              />
+            </div>
+          </div>
+          <ScrollArea className="max-h-72">
+            <ModelMenuGroups query={modelQuery} onSelect={() => setModelQuery('')} />
+          </ScrollArea>
+          <DropdownMenuSeparator className="bg-zinc-800" />
           <DropdownMenuItem className="text-xs text-zinc-400" onClick={() => setSettingsOpen(true)}>
-            <Settings className="size-3.5 mr-2" /> Provider settings…
+            <Settings className="size-3.5 mr-2" /> Provider settings — keys & custom endpoints
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -167,6 +158,73 @@ export function TopBar() {
         </span>
       )}
     </header>
+  )
+}
+
+function ModelMenuGroups({ query, onSelect }: { query: string; onSelect: () => void }) {
+  const config = useTagent((s) => s.config)
+  const setModel = useTagent((s) => s.setModel)
+  if (!config) return null
+  const q = query.trim().toLowerCase()
+  const ready = config.providers.filter((p) => !p.needsKey || p.hasKey)
+
+  if (q) {
+    const hits = config.providers
+      .flatMap((p) => p.models
+        .filter((m) => m.id.toLowerCase().includes(q) || m.label.toLowerCase().includes(q))
+        .map((m) => ({ p, m })))
+      .slice(0, 30)
+    if (hits.length === 0) {
+      return <p className="px-3 py-4 text-xs text-zinc-600 text-center">no model matches “{query}”</p>
+    }
+    return (
+      <DropdownMenuGroup>
+        {hits.map(({ p, m }) => (
+          <DropdownMenuItem
+            key={p.id + m.id}
+            disabled={p.needsKey && !p.hasKey}
+            onClick={() => { void setModel(p.id, m.id); onSelect() }}
+            className={cn('text-xs font-mono', m.id === config.defaultModel && p.id === config.defaultProvider && 'text-orange-400')}
+          >
+            <span className="text-zinc-600 mr-1.5 shrink-0">{p.id}</span>
+            <span className="truncate">{m.id}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuGroup>
+    )
+  }
+
+  return (
+    <>
+      {ready.map((p) => (
+        <DropdownMenuGroup key={p.id}>
+          <DropdownMenuLabel className="text-[11px] text-zinc-500 flex items-center justify-between">
+            <span>{p.label}</span>
+            {!p.needsKey && <Badge variant="outline" className="text-[9px] h-4 px-1 border-zinc-700 text-zinc-400">free</Badge>}
+          </DropdownMenuLabel>
+          {p.models.slice(0, 10).map((m) => (
+            <DropdownMenuItem
+              key={m.id}
+              onClick={() => { void setModel(p.id, m.id); onSelect() }}
+              className={cn('text-xs font-mono', m.id === config.defaultModel && p.id === config.defaultProvider && 'text-orange-400')}
+            >
+              <span className="truncate">{m.id}</span>
+            </DropdownMenuItem>
+          ))}
+          {p.models.length > 10 && (
+            <DropdownMenuItem disabled className="text-[10px] text-zinc-600">
+              +{p.models.length - 10} more — type to search
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuSeparator className="bg-zinc-800" />
+        </DropdownMenuGroup>
+      ))}
+      {config.providers.length > ready.length && (
+        <DropdownMenuItem disabled className="text-[11px] text-zinc-600">
+          {config.providers.length - ready.length} more providers need a key — see settings
+        </DropdownMenuItem>
+      )}
+    </>
   )
 }
 

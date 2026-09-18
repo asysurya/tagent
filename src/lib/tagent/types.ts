@@ -73,6 +73,12 @@ export interface ProviderInfo {
   hasKey: boolean
   models: ModelInfo[]
   docsUrl?: string
+  /** env var that provides the key when none is stored in config */
+  envVar?: string
+  /** featured in the quick picker */
+  popular?: boolean
+  /** user-defined custom endpoint (deletable) */
+  custom?: boolean
 }
 
 export interface SanitizedConfig {

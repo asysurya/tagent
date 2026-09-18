@@ -4,6 +4,7 @@ import path from 'node:path'
 
 import {
   listProviderInfos,
+  parseModelRef,
   listCheckpoints,
   listFacts,
   listSkills,
@@ -625,22 +626,63 @@ export class Tui {
 
       case 'model': {
         if (!arg) {
+          const infos = listProviderInfos(host.cfg)
+          const ready = infos.filter((p) => !p.needsKey || p.hasKey)
+          const locked = infos.filter((p) => p.needsKey && !p.hasKey)
           this.println(`  current: ${bold(cfg.defaultModel)} ${dim(`(${cfg.defaultProvider})`)}`)
-          for (const p of listProviderInfos(host.cfg)) {
+          this.println(bold('  ready'))
+          for (const p of ready) {
             const mark = p.id === host.cfg.defaultProvider ? green('▸') : ' '
-            const key = p.hasKey ? green('key✓') : p.needsKey ? red('no key') : dim('free')
-            this.println(`  ${mark} ${bold(p.id.padEnd(12))} ${key} ${dim(p.models.map((m) => m.id).slice(0, 6).join(', '))}`)
+            const key = !p.needsKey ? dim('free') : p.hasKey ? green('key✓') : red('no key')
+            this.println(`  ${mark} ${bold(p.id.padEnd(16))} ${key} ${dim(p.models.map((m) => m.id).slice(0, 4).join(', '))}${p.models.length > 4 ? dim(` +${p.models.length - 4}`) : ''}`)
           }
-          this.println(dim('  set: /model <provider> or /model <provider>:<model>'))
+          if (locked.length) this.println(dim(`  ${locked.length} more in the catalog (add a key): ${locked.slice(0, 8).map((p) => p.id).join(', ')}${locked.length > 8 ? '…' : ''}`))
+          this.println(dim('  set: /model <provider>/<model> · search: /model <text> · /model refresh'))
           return
         }
-        const [prov, model] = arg.includes(':') ? arg.split(':') : [arg, undefined]
-        const info = listProviderInfos(host.cfg).find((p) => p.id === prov)
-        if (!info) return this.println(red(`  unknown provider "${prov}" — /model to list`))
-        const nextModel = model ?? info.models[0]?.id
-        if (!nextModel) return this.println(red(`  provider "${prov}" has no models configured`))
-        host.settingsSave({ defaultProvider: prov, defaultModel: nextModel })
-        this.println(green(`  ✔ ${prov} · ${nextModel}`))
+        if (arg === 'refresh' || arg === 'discover') {
+          this.println(dim('  discovering models (GET /models on every provider with a key)…'))
+          const r = await host.providersRefresh()
+          this.println(green(`  ✔ ${r.updated.length} provider(s) refreshed${r.failed.length ? red(` · ${r.failed.length} unreachable`) : ''}`))
+          if (r.updated.length) this.println(dim(`    ${r.updated.join(', ')}`))
+          return
+        }
+        // "provider/model" (opencode style) or legacy "provider:model"
+        const ref = parseModelRef(arg, host.cfg)
+        if (ref) {
+          const info = listProviderInfos(host.cfg).find((p) => p.id === ref.provider)
+          if (!info) return this.println(red(`  unknown provider "${ref.provider}" — /model to list`))
+          if (info.needsKey && !info.hasKey) return this.println(red(`  ${ref.provider} has no key yet — /apikey ${ref.provider}`))
+          host.settingsSave({ defaultProvider: ref.provider, defaultModel: ref.model })
+          this.println(green(`  ✔ ${ref.provider} · ${ref.model}`))
+          return
+        }
+        // exact provider id → pick its first model
+        const info = listProviderInfos(host.cfg).find((p) => p.id === arg)
+        if (info) {
+          if (info.needsKey && !info.hasKey) return this.println(red(`  ${info.id} has no key yet — /apikey ${info.id}`))
+          const nextModel = info.models[0]?.id
+          if (!nextModel) return this.println(red(`  provider "${info.id}" has no models configured — /model refresh`))
+          host.settingsSave({ defaultProvider: info.id, defaultModel: nextModel })
+          this.println(green(`  ✔ ${info.id} · ${nextModel}`))
+          return
+        }
+        // otherwise: search across providers and models
+        const q = arg.toLowerCase()
+        const infos = listProviderInfos(host.cfg)
+        const provHits = infos.filter((p) => p.id.includes(q) || p.label.toLowerCase().includes(q))
+        const modelHits = infos.flatMap((p) => p.models.filter((m) => m.id.toLowerCase().includes(q)).map((m) => ({ p, m })))
+        if (provHits.length + modelHits.length === 0) return this.println(red(`  nothing matches "${arg}" — /model to list everything`))
+        if (provHits.length + modelHits.length === 1) {
+          const hit = provHits.length ? { provider: provHits[0].id, model: provHits[0].models[0]?.id } : { provider: modelHits[0].p.id, model: modelHits[0].m.id }
+          if (!hit.model) return this.println(red(`  ${hit.provider} has no models — /model refresh`))
+          host.settingsSave({ defaultProvider: hit.provider, defaultModel: hit.model })
+          this.println(green(`  ✔ ${hit.provider} · ${hit.model}`))
+          return
+        }
+        for (const p of provHits.slice(0, 10)) this.println(`  ${bold(p.id)} ${dim(p.label)}${p.needsKey && !p.hasKey ? red(' (no key)') : ''}`)
+        for (const h of modelHits.slice(0, 15)) this.println(`  ${dim(h.p.id + ':')} ${bold(h.m.id)}`)
+        this.println(dim(`  ${provHits.length + modelHits.length} matches — pick one: /model <provider>/<model>`))
         return
       }
 

@@ -17,9 +17,52 @@ export interface Release {
   stable?: boolean
 }
 
-export const LATEST = '0.5.0'
+export const LATEST = '0.6.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.6.0',
+    date: '2026-09-18',
+    title: 'Providers, opencode-style: 40-provider catalog, custom endpoints, live model discovery',
+    summary:
+      'Every provider you can think of, one command away — OpenAI, Anthropic, Google, Groq, DeepSeek, xAI, Mistral, Qwen, Kimi, Zhipu, OpenRouter and ~28 more, plus custom endpoints for anything else. Keys from config or env vars, provider/model refs like groq/llama-3.3-70b-versatile, and live model discovery that fills every picker.',
+    stable: true,
+    sections: [
+      {
+        name: 'The catalog',
+        items: [
+          '40 built-in providers: OpenAI, Anthropic, Google Gemini, OpenRouter, Groq, xAI (Grok), DeepSeek, Mistral, Perplexity, Cohere, AI21, Together, Fireworks, Cerebras, DeepInfra, Nebius, Novita, Hyperbolic, Baseten, Featherless, NVIDIA NIM, Turing, Vercel AI Gateway, Glama, AIHubMix, GitHub Models',
+          'APAC: Qwen (DashScope), Moonshot (Kimi), Zhipu (GLM / open.bigmodel.cn), Z.ai API (api.z.ai), SiliconFlow, Volcengine Ark (Doubao), BytePlus ModelArk — Europe: OVHcloud, Scaleway',
+          'Local runtimes with zero keys: Ollama, LM Studio, vLLM, llama.cpp — and the built-in Z.ai adapter stays the zero-config default',
+          'Keys resolve from config first, then environment variables — export OPENAI_API_KEY=… (or ANTHROPIC_API_KEY, GROQ_API_KEY, …) and it just works',
+        ],
+      },
+      {
+        name: 'Live model discovery',
+        items: [
+          'Refresh hits GET /models on every provider that has a key (OpenAI-compatible, Anthropic and Google wire formats) and caches the result in ~/.tagent/models.json',
+          'Discovery filters noise (embeddings, image/audio models) and merges with curated seeds — every picker shows the provider\'s real model list',
+          'GUI: "Refresh models" button in provider settings; TUI: /model refresh; CLI: tagent models --refresh — plus a background warm-up when the daemon starts',
+        ],
+      },
+      {
+        name: 'provider/model everywhere',
+        items: [
+          'tagent config set model groq/llama-3.3-70b-versatile sets provider + model in one go; unknown providers are rejected with a pointer to tagent models',
+          'tagent models — a browsable catalog (ready vs needs-key, env var hints); tagent doctor now summarizes the catalog instead of spamming 40 lines',
+          'TUI /model: fuzzy search across providers and models, provider/model refs, refresh; the model dropdown in the GUI is searchable too',
+        ],
+      },
+      {
+        name: 'Custom endpoints',
+        items: [
+          'Settings → Providers → Add custom: any OpenAI-compatible endpoint (vLLM, llama.cpp, LiteLLM, OneAPI, Azure …/openai/v1), plus Anthropic-compatible and Google-compatible kinds',
+          'Custom providers get the same treatment as built-ins: key storage, live discovery, model picking, and safe removal (defaults fall back cleanly)',
+          'The GUI provider tab was rebuilt: search across providers and models, Ready/Catalog sections, per-provider env-var hints, and a +N more expander for long model lists',
+        ],
+      },
+    ],
+  },
   {
     version: '0.5.0',
     date: '2026-09-18',

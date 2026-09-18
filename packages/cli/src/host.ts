@@ -39,6 +39,7 @@ import {
   saveRelays,
   revokeRelay as revokeRelayEntry,
   relayUrl as relayLinkUrl,
+  refreshModelCache,
   type RelayEntry,
   type AgentEvents,
   type ChatMessage,
@@ -49,6 +50,7 @@ import {
   type SessionMeta,
   type TagentConfig,
   type ToolCallRecord,
+  type CustomProviderConfig,
 } from '@tagent/core'
 
 import { walkTree, readWorkspaceFile, saveWorkspaceFile } from './files'
@@ -431,6 +433,9 @@ export class AgentHost {
     worklogEnabled: boolean
     caveman: boolean
     webGui: boolean
+    /** upsert a custom provider by id (empty baseUrl + remove → delete) */
+    customProvider?: CustomProviderConfig
+    customProviderRemove?: string
   }>) {
     if (patch.defaultProvider) this.cfg.defaultProvider = patch.defaultProvider
     if (patch.defaultModel) this.cfg.defaultModel = patch.defaultModel
@@ -438,6 +443,31 @@ export class AgentHost {
       const key = String(patch.apiKey.key ?? '').trim()
       if (key) this.cfg.apiKeys[patch.apiKey.provider] = key
       else delete this.cfg.apiKeys[patch.apiKey.provider]
+    }
+    if (patch.customProvider) {
+      const cp = patch.customProvider
+      const list = this.cfg.customProviders ?? (this.cfg.customProviders = [])
+      const i = list.findIndex((p) => p.id === cp.id)
+      const normalized: CustomProviderConfig = {
+        id: String(cp.id || '').trim(),
+        label: String(cp.label || cp.id).trim(),
+        baseUrl: String(cp.baseUrl || '').trim().replace(/\/$/, ''),
+        apiKey: String(cp.apiKey ?? '').trim() || undefined,
+        models: Array.isArray(cp.models) ? cp.models.map((m) => String(m).trim()).filter(Boolean) : [],
+        kind: cp.kind === 'anthropic' || cp.kind === 'google' ? cp.kind : 'openai',
+      }
+      if (!normalized.id || !normalized.baseUrl) {
+        return { error: 'custom provider needs an id and a baseUrl' }
+      }
+      if (i >= 0) list[i] = normalized
+      else list.push(normalized)
+    }
+    if (patch.customProviderRemove) {
+      this.cfg.customProviders = (this.cfg.customProviders ?? []).filter((p) => p.id !== patch.customProviderRemove)
+      if (this.cfg.defaultProvider === patch.customProviderRemove) {
+        this.cfg.defaultProvider = 'zai'
+        this.cfg.defaultModel = 'glm-4.7'
+      }
     }
     if (patch.permissions) this.cfg.permissions = patch.permissions
     if (patch.tools) this.cfg.tools = patch.tools
@@ -454,6 +484,16 @@ export class AgentHost {
     }
     this.persist()
     return { ok: true, config: this.sanitizeConfig() }
+  }
+
+  /** live model discovery — hits every listable provider that has a key */
+  async providersRefresh() {
+    const result = await refreshModelCache(this.cfg)
+    this.bus.emit('notify', {
+      level: 'info',
+      message: `Model discovery: ${result.updated.length} provider(s) refreshed${result.failed.length ? `, ${result.failed.length} unreachable` : ''}.`,
+    })
+    return { ok: true, ...result, config: this.sanitizeConfig() }
   }
 
   /* ------------------------------------------------------------------ */

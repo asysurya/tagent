@@ -44,7 +44,7 @@ process when you want a browser. Same engine, same sessions, same permissions.
 | 💾 **Checkpoints** | Auto-snapshot before writes; one-click `/undo` |
 | 🧠 **Memory** | `AGENTS.md` (global + workspace) + durable facts, injected into every system prompt |
 | 📚 **Skills** | `SKILL.md` playbooks with progressive disclosure (name+description in prompt, full body on demand) |
-| 🔌 **Multi-provider** | Z.ai built-in, OpenAI, Anthropic, Google, OpenRouter, Groq, Ollama + any OpenAI-compatible endpoint (BYOK) |
+| 🔌 **Multi-provider** | 40-provider catalog (OpenAI, Anthropic, Google, Groq, DeepSeek, xAI, Mistral, Qwen, Kimi, Zhipu, OpenRouter, …) + custom endpoints — BYOK or env vars |
 | 🧩 **Plugins** | Hook into session start, tool calls, results, agent done |
 | 🌐 **Web tools** | `web_fetch`, `ddg_search` (no API key), `browser` (Playwright-based e2e signal — optional) |
 | 🗄️ **Storage adapters** | Local today, MEGA.nz (E2E-encrypted snapshots & memory) implemented as an experimental adapter |
@@ -217,6 +217,49 @@ Workspace-local `.tagent/config.json` (gitignored) over `~/.tagent/config.json`:
 }
 ```
 
+## Providers
+
+**40 providers out of the box, custom endpoints for everything else** — opencode-style.
+
+Keys resolve from config first, then environment variables — `export OPENAI_API_KEY=…`
+just works. Model refs are `provider/model` everywhere:
+
+```sh
+tagent models                          # browse the catalog — ready + needs-key
+tagent models --refresh                # live discovery: GET /models per provider
+tagent config set model groq/llama-3.3-70b-versatile   # provider + model in one go
+# TUI: /model <search> · /model groq/llama-3.3-70b-versatile · /model refresh
+```
+
+Built-in catalog (id → key env var): **openai** (OPENAI_API_KEY) · **anthropic**
+(ANTHROPIC_API_KEY) · **google** (GEMINI_API_KEY) · **openrouter** · **groq** ·
+**xai** (Grok) · **deepseek** · **mistral** · **perplexity** · **cohere** · **ai21** ·
+**together** · **fireworks** · **cerebras** · **deepinfra** · **nebius** · **novita** ·
+**hyperbolic** · **baseten** · **featherless** · **nvidia** · **turing** · **qwen**
+(DashScope) · **moonshot** (Kimi) · **zhipu** (GLM, open.bigmodel.cn) · **zai-api**
+(api.z.ai) · **siliconflow** · **volcengine** (Doubao) · **byteplus** · **ovh** ·
+**scaleway** · **github-models** (GITHUB_TOKEN) · **vercel-ai-gateway** · **glama** ·
+**aihubmix** · local runtimes **ollama** · **lmstudio** · **vllm** · **llamacpp** (no key).
+
+**Custom providers** (Settings → Providers → Add custom, or config) cover anything
+else — any OpenAI-compatible endpoint (vLLM, llama.cpp, LiteLLM, OneAPI, Azure's
+`…/openai/v1`), Anthropic-compatible proxies and Google-compatible gateways:
+
+```jsonc
+"customProviders": [{
+  "id": "my-gateway",
+  "label": "My Gateway",
+  "kind": "openai",                    // or "anthropic" / "google"
+  "baseUrl": "https://my-gateway.example.com/v1",
+  "apiKey": "optional — empty for local servers",
+  "models": ["my-model"]               // seed list — refresh discovers the rest
+}]
+```
+
+Live model discovery (`GET /models`) fills every pickable list — GUI button, TUI
+`/model refresh`, CLI `tagent models --refresh`, plus a background warm-up when the
+daemon starts. Results are cached in `~/.tagent/models.json`.
+
 ## Roadmap
 
 - [x] Streaming tokens — SSE for OpenAI-compatible, Anthropic, Gemini, Z.ai (v0.3.0)
@@ -230,6 +273,7 @@ Workspace-local `.tagent/config.json` (gitignored) over `~/.tagent/config.json`:
 - [x] Share links — standalone HTML session exports (v0.4.0)
 - [x] Multi-agent timelines (v0.4.0)
 - [x] Relay mode — share a session with another person over the network (v0.5.0)
+- [x] Provider catalog — 40 providers, env-var keys, custom endpoints, live model discovery (v0.6.0)
 
 Ideas for the next versions (unordered, unpromised):
 

@@ -12,6 +12,7 @@
  *   tagent run [path] "msg" one-shot agent run, prints the result
  *   tagent auth             GitHub login wizard (device flow or PAT)
  *   tagent config …         get / set / list settings
+ *   tagent models [path]    providers + models catalog (--refresh to discover)
  *   tagent sessions [path]  list sessions of a workspace
  *   tagent share [id] [p]   export a session as standalone HTML
  *   tagent relay [id] [p]   share a session LIVE over the network (read-only)
@@ -32,9 +33,12 @@ import {
   saveConfig,
   defaultConfig,
   updateGlobalConfig,
+  readGlobalConfig,
   workspaceDir,
   listProviderInfos,
   getAdapter,
+  parseModelRef,
+  refreshModelCache,
   type SessionData,
   type ToolCallRecord,
 } from '@tagent/core'
@@ -132,6 +136,11 @@ function printHelp() {
     tagent config list [path] · get <key> [path] · set <key> <value> [path] [-g]
             settings from the shell (keys: webGui caveman worklog maxTurns
             provider model bash browser autoCheckpoint) — -g writes globally
+            model accepts provider/model refs: config set model groq/llama-3.3-70b-versatile
+    tagent models [path] [--refresh]
+            list every provider + model. Keys come from config or env vars
+            (OPENAI_API_KEY, ANTHROPIC_API_KEY, GROQ_API_KEY, …).
+            --refresh runs live discovery (GET /models) and caches the result.
     tagent sessions [path]
             list sessions of a workspace
     tagent share [sessionId] [path]
@@ -163,6 +172,7 @@ async function init(): Promise<void> {
     case 'run': await mainRun(); break
     case 'auth': await mainAuth(); break
     case 'config': await mainConfig(); break
+    case 'models': await mainModels(); break
     case 'sessions': await mainSessions(); break
     case 'share': await mainShare(); break
     case 'relay': await mainRelay(); break
@@ -474,6 +484,31 @@ async function mainConfig() {
       parsed = value
     }
 
+    // scope-aware config for the provider-aware keys below
+    const setRoot = resolveWorkspace(rest[2] ?? '.')
+    const scopeCfg = def.global || globalScope ? readGlobalConfig() : loadConfig(setRoot)
+
+    // `config set model <provider>/<model>` — opencode-style ref, sets both keys
+    if (key === 'model' && typeof value === 'string' && value.includes('/')) {
+      const ref = parseModelRef(value, scopeCfg)
+      if (!ref) mainConfigBad(`"${value}" — the part before / must be a known provider id (tagent models)`)
+      const patch = { defaultProvider: ref.provider, defaultModel: ref.model }
+      if (def.global || globalScope) {
+        updateGlobalConfig(patch as never)
+        console.log(`✔ provider = ${ref.provider} · model = ${ref.model} (global)`)
+      } else {
+        saveConfig(setRoot, deepPatch(loadConfig(setRoot) as unknown as Record<string, unknown>, patch) as never)
+        console.log(`✔ provider = ${ref.provider} · model = ${ref.model} (${workspaceDir(setRoot)}/config.json)`)
+      }
+      return
+    }
+
+    // `config set provider <id>` — validate against the catalog + customs
+    if (key === 'provider') {
+      const known = listProviderInfos(scopeCfg).some((p) => p.id === value)
+      if (!known) mainConfigBad(`unknown provider "${value}" — run \`tagent models\` to see every provider id`)
+    }
+
     // build a nested patch object from the path
     const patch: Record<string, unknown> = {}
     let node = patch
@@ -509,6 +544,48 @@ function deepPatch(target: Record<string, unknown>, patch: Record<string, unknow
     }
   }
   return out
+}
+
+/* ------------------------------------------------------------------ */
+/* tagent models — the provider catalog                                 */
+/* ------------------------------------------------------------------ */
+
+async function mainModels() {
+  const root = resolveWorkspace(plain[1])
+  const cfg = loadConfig(root)
+
+  if (has('--refresh', '-r')) {
+    console.log(dim('  discovering models (GET /models on every provider with a key)…'))
+    const r = await refreshModelCache(cfg)
+    console.log(green(`✔ ${r.updated.length} provider(s) refreshed`))
+    if (r.updated.length) console.log(`  ${dim(r.updated.join(', '))}`)
+    if (r.failed.length) console.log(`  ${dim(`unreachable: ${r.failed.join(', ')}`)}`)
+    return
+  }
+
+  const infos = listProviderInfos(cfg)
+  const ready = infos.filter((p) => !p.needsKey || p.hasKey)
+  const locked = infos.filter((p) => p.needsKey && !p.hasKey)
+
+  console.log(`\n  ${bold('tagent models')} · ${infos.length} providers · current: ${cfg.defaultProvider}/${cfg.defaultModel}\n`)
+  console.log(`  ${bold('ready')}${dim(' — key set or no key needed')}`)
+  for (const p of ready) {
+    const mark = p.id === cfg.defaultProvider ? green('▸') : ' '
+    const status = !p.needsKey ? dim('free') : p.hasKey ? green('key✓') : red('no key')
+    const env = p.envVar ? dim(` · env ${p.envVar}`) : ''
+    console.log(`  ${mark} ${bold(p.id.padEnd(18))} ${status.padEnd(6)} ${p.label}${env}`)
+    const models = p.models.slice(0, 6).map((mm) => mm.id)
+    if (models.length) console.log(`      ${dim(models.join(' · '))}${p.models.length > 6 ? dim(` · +${p.models.length - 6} more`) : ''}`)
+  }
+  if (locked.length) {
+    console.log(`\n  ${bold('catalog')}${dim(' — add a key to use')}`)
+    for (const p of locked) {
+      console.log(`    ${p.id.padEnd(18)} ${dim(p.label)}${p.envVar ? dim(` · env ${p.envVar}`) : ''}`)
+      if (p.models.length) console.log(`        ${dim(p.models.slice(0, 4).map((mm) => mm.id).join(' · '))}${p.models.length > 4 ? dim(` · +${p.models.length - 4}`) : ''}`)
+    }
+  }
+  console.log(`\n  ${dim('set: tagent config set model <provider>/<model>   discover: tagent models --refresh')}`)
+  console.log(`${dim('  custom endpoints: settings → providers → add custom (any OpenAI/Anthropic/Google-compatible URL)')}\n`)
 }
 
 /* ------------------------------------------------------------------ */
@@ -674,12 +751,16 @@ async function mainDoctor() {
     cfg = defaultConfig()
   }
 
-  // provider keys
+  // provider keys — detail only the active one, summarize the catalog
   const infos = listProviderInfos(cfg)
-  for (const p of infos) {
-    if (p.needsKey) check(p.hasKey, `provider ${p.id}: ${p.hasKey ? 'key set' : 'MISSING key (tagent config set / /apikey)'}`)
-    else check(true, `provider ${p.id}: no key needed`)
+  const def = infos.find((p) => p.id === cfg.defaultProvider)
+  if (def) {
+    if (!def.needsKey) check(true, `provider ${def.id}: no key needed`)
+    else if (def.hasKey) check(true, `provider ${def.id}: key set${def.envVar ? ` (config or ${def.envVar})` : ''}`)
+    else check(false, `provider ${def.id}: MISSING key — /apikey ${def.id} in the TUI, settings in the GUI${def.envVar ? `, or export ${def.envVar}` : ''}`)
   }
+  const readyN = infos.filter((p) => !p.needsKey || p.hasKey).length
+  check(true, `provider catalog: ${readyN}/${infos.length} ready — tagent models to browse`)
 
   // adapter instantiation
   try {

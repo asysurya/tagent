@@ -383,6 +383,11 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       try { cb?.(host.settingsSave(p as never)) } catch (e) { cb?.({ error: (e as Error).message }) }
     })
 
+    /* --------------------------- providers ----------------------------- */
+    socket.on('providers:refresh', async (_p: unknown, cb?: (r: unknown) => void) => {
+      try { cb?.(await host.providersRefresh()) } catch (e) { cb?.({ error: (e as Error).message }) }
+    })
+
     /* ------------------------------ mega sync -------------------------- */
     socket.on('mega:save', (p: { enabled: boolean; email?: string; sessionKey?: string }, cb?: (r: unknown) => void) => {
       try { cb?.(host.megaSave(p)) } catch (e) { cb?.({ error: (e as Error).message }) }
@@ -443,6 +448,9 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     server.listen(opts.port, opts.host ?? '127.0.0.1', () => {
       log(`daemon ready on ${opts.host ?? '127.0.0.1'}:${opts.port} (workspace: ${host.root})`)
       if (guiDir) log(`serving GUI from ${guiDir} (websocket: ${socketIoPath})`)
+      // background model discovery — warms ~/.tagent/models.json so the
+      // pickers show live model lists without anyone waiting on it
+      setTimeout(() => { host.providersRefresh().catch(() => {}) }, 2000)
       resolve({
         server,
         io,

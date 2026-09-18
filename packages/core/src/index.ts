@@ -29,6 +29,12 @@ export {
   type ProviderAdapter, type CompletionRequest, type CompletionResult,
   type NativeToolDef, type NativeToolCall,
 } from './providers'
+export {
+  CATALOG, catalogById, parseModelRef, resolveApiKey,
+  refreshModelCache, readModelCache, cleanModelIds,
+  modelsFor, modelsForCustom,
+  type CatalogEntry, type AdapterKind, type ModelRef, type DiscoveryResult,
+} from './providers/registry'
 export { buildToolset, ALL_TOOLS, worklogTool, worklogPath } from './tools'
 export { exportShare, readShareFile, shareDir, renderShareHtml, type ShareResult } from './share'
 export {

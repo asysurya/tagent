@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Check, ExternalLink, Eye, EyeOff, Github, Key, Loader2, ShieldAlert, Terminal, Globe, Bot, Bone, ScrollText, Coins, MonitorSmartphone } from 'lucide-react'
+import { Check, ExternalLink, Eye, EyeOff, Github, Key, Loader2, Plus, RefreshCw, Search, ShieldAlert, Terminal, Globe, Bot, Bone, ScrollText, Coins, MonitorSmartphone, Trash2 } from 'lucide-react'
 import { useTagent } from '@/lib/tagent/store'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -66,80 +66,206 @@ function ProvidersTab() {
   const config = useTagent((s) => s.config)
   const setApiKey = useTagent((s) => s.setApiKey)
   const setModel = useTagent((s) => s.setModel)
+  const providersRefresh = useTagent((s) => s.providersRefresh)
+  const saveCustomProvider = useTagent((s) => s.saveCustomProvider)
+  const removeCustomProvider = useTagent((s) => s.removeCustomProvider)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [reveal, setReveal] = useState<Record<string, boolean>>({})
+  const [q, setQ] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const [customForm, setCustomForm] = useState<null | { id: string; label: string; baseUrl: string; apiKey: string; kind: 'openai' | 'anthropic' | 'google'; models: string }>(null)
 
   if (!config) return <p className="text-sm text-zinc-500">No config loaded.</p>
 
-  return (
-    <div className="space-y-4">
-      <p className="text-xs text-zinc-500 leading-relaxed">
-        Bring your own key — keys are stored locally in <code className="text-zinc-400">.tagent/config.json</code> (gitignored)
-        and never leave your machine.
-      </p>
-      {config.providers.map((p) => {
-        const draft = drafts[p.id] ?? ''
-        return (
-          <div key={p.id} className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3 space-y-2.5">
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-zinc-200 font-medium">{p.label}</span>
-              {p.hasKey && <Badge className="text-[9px] h-4 px-1.5 bg-emerald-500/15 text-emerald-400 border-emerald-800/50 hover:bg-emerald-500/15">connected</Badge>}
-              {!p.needsKey && <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-zinc-700 text-zinc-400">no key needed</Badge>}
-              <div className="flex-1" />
-              {p.docsUrl && (
-                <a href={p.docsUrl} target="_blank" rel="noreferrer" className="text-[10px] text-zinc-500 hover:text-zinc-300 inline-flex items-center gap-1">
-                  get key <ExternalLink className="size-3" />
-                </a>
-              )}
+  const query = q.trim().toLowerCase()
+  const matches = (p: (typeof config.providers)[number]) =>
+    !query || p.id.includes(query) || p.label.toLowerCase().includes(query) || p.models.some((m) => m.id.toLowerCase().includes(query))
+  const ready = config.providers.filter((p) => (!p.needsKey || p.hasKey) && !p.custom && matches(p))
+  const locked = config.providers.filter((p) => p.needsKey && !p.hasKey && !p.custom && matches(p))
+  const customs = config.providers.filter((p) => p.custom && matches(p))
+
+  const runRefresh = async () => {
+    setBusy(true)
+    const r = await providersRefresh()
+    setBusy(false)
+    if (r?.error) toast.error(r.error)
+    else if (r?.updated?.length) toast(`Discovered models from ${r.updated.length} provider(s) ✓`)
+    else toast('No new models found — keys present are up to date')
+  }
+
+  const saveCustom = async () => {
+    if (!customForm) return
+    if (!customForm.id.trim() || !customForm.baseUrl.trim()) {
+      toast.error('id and base URL are required')
+      return
+    }
+    const r = await saveCustomProvider({
+      id: customForm.id.trim(),
+      label: customForm.label.trim() || customForm.id.trim(),
+      baseUrl: customForm.baseUrl.trim(),
+      apiKey: customForm.apiKey.trim() || undefined,
+      kind: customForm.kind,
+      models: customForm.models.split(',').map((s) => s.trim()).filter(Boolean),
+    })
+    if (r?.ok || !r?.error) {
+      toast('Custom provider saved ✓')
+      setCustomForm(null)
+    } else toast.error(r?.error ?? 'failed')
+  }
+
+  const ProviderCard = ({ p }: { p: (typeof config.providers)[number] }) => {
+    const draft = drafts[p.id] ?? ''
+    const models = expanded[p.id] ? p.models : p.models.slice(0, 8)
+    return (
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3 space-y-2.5">
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-zinc-200 font-medium">{p.label}</span>
+          <span className="font-mono text-[10px] text-zinc-600">{p.id}</span>
+          {p.hasKey && !p.custom && <Badge className="text-[9px] h-4 px-1.5 bg-emerald-500/15 text-emerald-400 border-emerald-800/50 hover:bg-emerald-500/15">connected</Badge>}
+          {p.custom && <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-orange-800/60 text-orange-400">custom</Badge>}
+          {!p.needsKey && !p.custom && <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-zinc-700 text-zinc-400">no key needed</Badge>}
+          {p.needsKey && p.hasKey && p.envVar && !drafts[p.id] && (
+            <span className="text-[10px] text-zinc-600 font-mono">via {p.envVar}</span>
+          )}
+          <div className="flex-1" />
+          {p.docsUrl && (
+            <a href={p.docsUrl} target="_blank" rel="noreferrer" className="text-[10px] text-zinc-500 hover:text-zinc-300 inline-flex items-center gap-1">
+              get key <ExternalLink className="size-3" />
+            </a>
+          )}
+          {p.custom && (
+            <button className="text-zinc-600 hover:text-red-400" title="remove custom provider" onClick={() => { void removeCustomProvider(p.id); setCustomForm(null) }}>
+              <Trash2 className="size-3.5" />
+            </button>
+          )}
+        </div>
+        {p.needsKey && !p.custom && (
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <Input
+                type={reveal[p.id] ? 'text' : 'password'}
+                placeholder={p.hasKey ? 'key saved — paste a new one to replace' : p.envVar ? `paste API key (or export ${p.envVar})…` : 'paste API key…'}
+                value={draft}
+                onChange={(e) => setDrafts((d) => ({ ...d, [p.id]: e.target.value }))}
+                className="h-8 bg-zinc-900 border-zinc-800 font-mono text-xs pr-8"
+              />
+              <button className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-300" onClick={() => setReveal((r) => ({ ...r, [p.id]: !r[p.id] }))}>
+                {reveal[p.id] ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+              </button>
             </div>
-            {p.needsKey && (
-              <div className="flex gap-2">
-                <div className="relative flex-1">
-                  <Input
-                    type={reveal[p.id] ? 'text' : 'password'}
-                    placeholder={p.hasKey ? 'key saved — paste a new one to replace' : 'paste API key…'}
-                    value={draft}
-                    onChange={(e) => setDrafts((d) => ({ ...d, [p.id]: e.target.value }))}
-                    className="h-8 bg-zinc-900 border-zinc-800 font-mono text-xs pr-8"
-                  />
-                  <button className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-300" onClick={() => setReveal((r) => ({ ...r, [p.id]: !r[p.id] }))}>
-                    {reveal[p.id] ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
-                  </button>
-                </div>
-                <Button
-                  size="sm" className="h-8 text-xs bg-orange-500 hover:bg-orange-400 text-zinc-950"
-                  disabled={!draft.trim()}
-                  onClick={async () => {
-                    await setApiKey(p.id, draft.trim())
-                    setDrafts((d) => ({ ...d, [p.id]: '' }))
-                    toast('Key saved locally ✓')
-                  }}
-                >
-                  Save
-                </Button>
-              </div>
-            )}
-            {p.models.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {p.models.map((m) => (
-                  <button
-                    key={m.id}
-                    disabled={p.needsKey && !p.hasKey}
-                    onClick={() => void setModel(p.id, m.id)}
-                    className={cn('px-2 py-0.5 rounded text-[11px] font-mono border transition-colors',
-                      m.id === config.defaultModel && p.id === config.defaultProvider
-                        ? 'border-orange-500/50 bg-orange-500/10 text-orange-300'
-                        : 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200 disabled:opacity-40')}
-                  >
-                    {m.id === config.defaultModel && p.id === config.defaultProvider && <Check className="size-2.5 inline mr-1" />}
-                    {m.id}
-                  </button>
-                ))}
-              </div>
+            <Button
+              size="sm" className="h-8 text-xs bg-orange-500 hover:bg-orange-400 text-zinc-950"
+              disabled={!draft.trim()}
+              onClick={async () => {
+                await setApiKey(p.id, draft.trim())
+                setDrafts((d) => ({ ...d, [p.id]: '' }))
+                toast('Key saved locally ✓')
+              }}
+            >
+              Save
+            </Button>
+          </div>
+        )}
+        {p.models.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {models.map((m) => (
+              <button
+                key={m.id}
+                disabled={p.needsKey && !p.hasKey}
+                onClick={() => void setModel(p.id, m.id)}
+                className={cn('px-2 py-0.5 rounded text-[11px] font-mono border transition-colors',
+                  m.id === config.defaultModel && p.id === config.defaultProvider
+                    ? 'border-orange-500/50 bg-orange-500/10 text-orange-300'
+                    : 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200 disabled:opacity-40')}
+              >
+                {m.id === config.defaultModel && p.id === config.defaultProvider && <Check className="size-2.5 inline mr-1" />}
+                {m.id}
+              </button>
+            ))}
+            {p.models.length > 8 && !expanded[p.id] && (
+              <button className="px-2 py-0.5 rounded text-[11px] border border-zinc-800 text-zinc-500 hover:text-zinc-300" onClick={() => setExpanded((e) => ({ ...e, [p.id]: true }))}>
+                +{p.models.length - 8} more
+              </button>
             )}
           </div>
-        )
-      })}
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-2 items-center">
+        <div className="relative flex-1">
+          <Search className="size-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-600" />
+          <Input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder={`search ${config.providers.length} providers & models…`}
+            className="h-8 bg-zinc-900 border-zinc-800 text-xs pl-8"
+          />
+        </div>
+        <Button size="sm" variant="outline" className="h-8 text-xs border-zinc-700 gap-1.5 shrink-0" disabled={busy} onClick={() => void runRefresh()}>
+          <RefreshCw className={cn('size-3.5', busy && 'animate-spin')} /> {busy ? 'discovering…' : 'Refresh models'}
+        </Button>
+      </div>
+      <p className="text-xs text-zinc-500 leading-relaxed">
+        Bring your own key — stored locally in <code className="text-zinc-400">.tagent/config.json</code>, or picked up from
+        environment variables (<code className="text-zinc-400">OPENAI_API_KEY</code>, <code className="text-zinc-400">ANTHROPIC_API_KEY</code>, …).
+        <b className="text-zinc-400"> Refresh models</b> discovers the provider's live model list.
+      </p>
+
+      {(ready.length > 0 || customs.length > 0) && (
+        <div className="space-y-2.5">
+          <p className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Ready to use</p>
+          {ready.map((p) => <ProviderCard key={p.id} p={p} />)}
+          {customs.map((p) => <ProviderCard key={p.id} p={p} />)}
+        </div>
+      )}
+
+      {locked.length > 0 && (
+        <div className="space-y-2.5">
+          <p className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">Catalog — add a key to use</p>
+          {locked.map((p) => <ProviderCard key={p.id} p={p} />)}
+        </div>
+      )}
+
+      {/* custom provider form */}
+      {customForm ? (
+        <div className="rounded-lg border border-orange-800/40 bg-zinc-950/60 p-3 space-y-2.5">
+          <p className="text-[11px] font-semibold text-orange-300 uppercase tracking-wider">Custom provider</p>
+          <div className="grid grid-cols-2 gap-2">
+            <Input autoFocus placeholder="id (e.g. my-proxy)" value={customForm.id} onChange={(e) => setCustomForm({ ...customForm, id: e.target.value })} className="h-8 bg-zinc-900 border-zinc-800 font-mono text-xs" />
+            <Input placeholder="label (e.g. My Proxy)" value={customForm.label} onChange={(e) => setCustomForm({ ...customForm, label: e.target.value })} className="h-8 bg-zinc-900 border-zinc-800 text-xs" />
+          </div>
+          <div className="flex gap-2">
+            {(['openai', 'anthropic', 'google'] as const).map((k) => (
+              <button key={k} onClick={() => setCustomForm({ ...customForm, kind: k })}
+                className={cn('px-2 py-1 rounded text-[11px] font-mono border transition-colors',
+                  customForm.kind === k ? 'border-orange-500/50 bg-orange-500/10 text-orange-300' : 'border-zinc-800 text-zinc-500 hover:text-zinc-300')}>
+                {k === 'openai' ? 'OpenAI-compatible' : k}
+              </button>
+            ))}
+          </div>
+          <Input placeholder="base URL — e.g. https://my-gateway.example.com/v1" value={customForm.baseUrl} onChange={(e) => setCustomForm({ ...customForm, baseUrl: e.target.value })} className="h-8 bg-zinc-900 border-zinc-800 font-mono text-xs" />
+          <Input type="password" placeholder="API key (optional — empty for local servers)" value={customForm.apiKey} onChange={(e) => setCustomForm({ ...customForm, apiKey: e.target.value })} className="h-8 bg-zinc-900 border-zinc-800 font-mono text-xs" />
+          <Input placeholder="models, comma-separated (refresh discovers the rest)" value={customForm.models} onChange={(e) => setCustomForm({ ...customForm, models: e.target.value })} className="h-8 bg-zinc-900 border-zinc-800 font-mono text-xs" />
+          <div className="flex gap-2 justify-end">
+            <Button size="sm" variant="outline" className="h-8 text-xs border-zinc-700" onClick={() => setCustomForm(null)}>Cancel</Button>
+            <Button size="sm" className="h-8 text-xs bg-orange-500 hover:bg-orange-400 text-zinc-950" onClick={() => void saveCustom()}>Save provider</Button>
+          </div>
+          <p className="text-[10px] text-zinc-600 leading-relaxed">
+            Works with any OpenAI-compatible endpoint (vLLM, llama.cpp, Azure's /openai/v1, LiteLLM, OneAPI…),
+            Anthropic-compatible proxies and Google-compatible gateways.
+          </p>
+        </div>
+      ) : (
+        <button onClick={() => setCustomForm({ id: '', label: '', baseUrl: '', apiKey: '', kind: 'openai', models: '' })}
+          className="w-full rounded-lg border border-dashed border-zinc-800 hover:border-zinc-700 p-3 text-xs text-zinc-500 hover:text-zinc-300 inline-flex items-center justify-center gap-1.5 transition-colors">
+          <Plus className="size-3.5" /> Add custom provider — any endpoint, any model
+        </button>
+      )}
     </div>
   )
 }

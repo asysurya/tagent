@@ -84,6 +84,9 @@ interface TagentState {
   respondPermission: (approved: boolean, remember?: 'once' | 'session' | 'always') => void
   setModel: (provider: string, model: string) => Promise<void>
   setApiKey: (provider: string, key: string) => Promise<void>
+  providersRefresh: () => Promise<{ ok?: boolean; updated?: string[]; failed?: string[]; error?: string }>
+  saveCustomProvider: (cp: { id: string; label: string; baseUrl: string; apiKey?: string; models: string[]; kind?: 'openai' | 'anthropic' | 'google' }) => Promise<{ ok?: boolean; error?: string }>
+  removeCustomProvider: (id: string) => Promise<void>
   setToolPermission: (tool: string, mode: 'ask' | 'allow' | 'deny') => Promise<void>
   setToolEnabled: (tool: 'bash' | 'browser', enabled: boolean) => Promise<void>
   setCaveman: (v: boolean) => Promise<void>
@@ -460,6 +463,36 @@ export const useTagent = create<TagentState>((set, get) => ({
     if (!socket || get().connection !== 'ready') return
     const r = await call<{ ok: boolean; config: SanitizedConfig }>(socket, 'settings:save', {
       apiKey: { provider, key },
+    })
+    if (r.config) set({ config: r.config })
+  },
+
+  async providersRefresh() {
+    const { socket } = get()
+    if (!socket || get().connection !== 'ready') return { error: 'daemon not connected' }
+    return call<{ ok: boolean; updated: string[]; failed: string[]; config: SanitizedConfig }>(socket, 'providers:refresh', {}, 60000)
+      .then((r) => {
+        if (r.config) set({ config: r.config })
+        return { ok: r.ok, updated: r.updated, failed: r.failed }
+      })
+      .catch((e: Error) => ({ error: e.message }))
+  },
+
+  async saveCustomProvider(cp) {
+    const { socket } = get()
+    if (!socket || get().connection !== 'ready') return { error: 'daemon not connected' }
+    const r = await call<{ ok?: boolean; error?: string; config: SanitizedConfig }>(socket, 'settings:save', {
+      customProvider: cp,
+    })
+    if (r.config) set({ config: r.config })
+    return { ok: r.ok, error: r.error }
+  },
+
+  async removeCustomProvider(id) {
+    const { socket } = get()
+    if (!socket || get().connection !== 'ready') return
+    const r = await call<{ ok?: boolean; config: SanitizedConfig }>(socket, 'settings:save', {
+      customProviderRemove: id,
     })
     if (r.config) set({ config: r.config })
   },
