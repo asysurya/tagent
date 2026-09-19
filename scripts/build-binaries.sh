@@ -4,12 +4,15 @@
 # Each binary embeds the agent (TUI + daemon + RPC), the 40-provider catalog
 # and the full pre-built web GUI — download, run, done. No runtime, no install.
 #
-# Usage: scripts/build-binaries.sh [version]   (default: read from version.ts)
+# Usage: scripts/build-binaries.sh [version] [target-filter]
+#   version        default: read from version.ts
+#   target-filter  optional substring filter, e.g. "windows x64" or "linux"
 # Output: dist/tagent-v<version>/tagent-v<version>-<os>-<arch>[.exe] + SHA256SUMS.txt
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VERSION="${1:-$(grep -oP "(?<=CURRENT_VERSION = ')[0-9][0-9a-zA-Z.]*" packages/core/src/version.ts)}"
+FILTER="${2:-}"
 if [ -z "${VERSION:-}" ]; then echo "[build] cannot determine version" >&2; exit 1; fi
 
 OUT="dist/tagent-v$VERSION"
@@ -83,7 +86,9 @@ TARGETS=(
 )
 
 mkdir -p "$OUT"
+BUILT=0
 for t in "${TARGETS[@]}"; do
+  if [ -n "$FILTER" ] && [[ "$t" != *"$FILTER"* ]]; then continue; fi
   read -r osname arch <<< "$t"
   case "$osname" in
     macos) bun_target="bun-darwin-$arch" ;;
@@ -93,10 +98,17 @@ for t in "${TARGETS[@]}"; do
   echo "[build] → $outfile"
   # playwright is optional (browser tool resolves it at runtime) - keep it out.
   bun build --compile --external playwright --target="$bun_target" "$ENTRY" --outfile "$outfile"
+  BUILT=$((BUILT+1))
 done
 
 # --------------------------------------------------------------- checksums --
-(cd "$OUT" && sha256sum tagent-v* > SHA256SUMS.txt)
+# only when the full set exists (or nothing was filtered)
+EXPECTED=6
+PRESENT=$(ls "$OUT"/tagent-v* 2>/dev/null | wc -l)
+if [ "$PRESENT" -ge "$EXPECTED" ]; then
+  (cd "$OUT" && sha256sum tagent-v* > SHA256SUMS.txt)
+  echo "[build] checksums written"
+fi
 echo
-echo "[build] done:"
+echo "[build] done ($BUILT built this run, $PRESENT/$EXPECTED present):"
 ls -lh "$OUT"
