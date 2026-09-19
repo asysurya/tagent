@@ -49,6 +49,8 @@ export function defaultConfig(): TagentConfig {
     webGui: false,
     mcp: { servers: {} },
     cache: { fileState: true, web: true, webTtlMin: 10 },
+    fallback: [],
+    diagnostics: { command: '' },
   }
 }
 

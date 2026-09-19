@@ -30,12 +30,14 @@ export function connectDaemon(): Socket {
   return io({ path: SOCKET_PATH, transports: ['websocket', 'polling'], reconnection: true })
 }
 
-/** Promise-based request over the socket with ack. */
+/** Promise-based request over the socket with ack.
+ *  timeoutMs <= 0 → no timer (fire-and-forget ack; for RPCs whose reply can
+ *  legitimately arrive long after the action, e.g. chat:send). */
 export function call<T>(socket: Socket, event: string, payload?: unknown, timeoutMs = 15000): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error(`${event} timed out`)), timeoutMs)
+    const t = timeoutMs > 0 ? setTimeout(() => reject(new Error(`${event} timed out`)), timeoutMs) : null
     socket.emit(event, payload, (res: T) => {
-      clearTimeout(t)
+      if (t) clearTimeout(t)
       resolve(res)
     })
   })

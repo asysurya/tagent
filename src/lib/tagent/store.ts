@@ -21,6 +21,7 @@ import type {
   ChatMessage,
   CheckpointMeta,
   Connection,
+  FallbackEntry,
   FileNode,
   HelloPayload,
   LoopSummary,
@@ -77,6 +78,8 @@ interface TagentState {
   subagents: SubagentInfo[]
   pendingPermission: PermissionRequest | null
   permissionHistory: Record<string, 'ask' | 'allow' | 'deny'>
+  /** plan-mode draft awaiting approval (server: `plan:ready` / `plan:approve`) */
+  planOffer: string | null
 
   /* ui */
   rightTab: RightTab
@@ -95,6 +98,8 @@ interface TagentState {
   send: (text: string) => Promise<void>
   interrupt: () => void
   respondPermission: (approved: boolean, remember?: 'once' | 'session' | 'always') => void
+  respondPlan: (execute: boolean) => void
+  saveFallback: (entries: FallbackEntry[]) => Promise<void>
   setModel: (provider: string, model: string) => Promise<void>
   setApiKey: (provider: string, key: string) => Promise<void>
   providersRefresh: () => Promise<{ ok?: boolean; updated?: string[]; failed?: string[]; error?: string }>
@@ -180,12 +185,29 @@ const initial = {
   subagents: [],
   pendingPermission: null,
   permissionHistory: {},
+  planOffer: null,
   rightTab: 'files' as RightTab,
   rightOpen: true,
   fileTree: null,
   fileBuffer: null,
   terminalOutput: [],
   githubBusy: false,
+}
+
+/**
+ * Messages the chat should actually render.
+ * - drops user messages that are internal tool-result blobs (meta.toolResults) —
+ *   they are session-loop plumbing, not conversation; live events already
+ *   filter them, this covers the reload/hello/session:active full-array paths
+ * - drops assistant placeholders with neither text nor tool calls
+ */
+export function visibleMessages(session: SessionData | null | undefined): ChatMessage[] {
+  if (!session) return []
+  return session.messages.filter((m) => {
+    if (m.role === 'user' && m.meta?.toolResults) return false
+    if (m.role === 'assistant' && !m.content && !(m.toolCalls?.length)) return false
+    return true
+  })
 }
 
 export const useTagent = create<TagentState>((set, get) => ({
@@ -226,19 +248,38 @@ export const useTagent = create<TagentState>((set, get) => ({
       if (get().connection === 'connecting') set({ connection: 'demo' })
     })
 
-    /* live events */
-    socket.on('message:new', (d: { message: ChatMessage }) => get()._apply.message(d.message))
-    socket.on('agent:chunk', (d: { text: string }) => get()._apply.chunk(d.text))
+    /* live events — session-scoped ones carry the running session's id and are
+       dropped after the user switched sessions, so a run in flight never
+       bleeds its text/tools/subagents into the newly opened session */
+    const forActiveSession = (d: { sessionId?: string }) =>
+      d?.sessionId == null || !get().session || d.sessionId === get().session?.id
+    socket.on('message:new', (d: { sessionId?: string; message: ChatMessage }) => {
+      if (forActiveSession(d)) get()._apply.message(d.message)
+    })
+    socket.on('agent:chunk', (d: { sessionId?: string; text: string }) => {
+      if (forActiveSession(d)) get()._apply.chunk(d.text)
+    })
     socket.on('agent:status', (s: AgentStatus) => get()._apply.status(s))
-    socket.on('tool:start', (d: { call: ToolCallRecord }) => get()._apply.toolStart(d.call))
-    socket.on('tool:end', (d: { call: ToolCallRecord }) => get()._apply.toolEnd(d.call))
-    socket.on('todos:update', (d: { todos: SessionData['todos'] }) => get()._apply.todos(d.todos))
-    socket.on('subagent:update', (d: { info: SubagentInfo }) => get()._apply.subagent(d.info))
+    socket.on('tool:start', (d: { sessionId?: string; call: ToolCallRecord }) => {
+      if (forActiveSession(d)) get()._apply.toolStart(d.call)
+    })
+    socket.on('tool:end', (d: { sessionId?: string; call: ToolCallRecord }) => {
+      if (forActiveSession(d)) get()._apply.toolEnd(d.call)
+    })
+    socket.on('todos:update', (d: { sessionId?: string; todos: SessionData['todos'] }) => {
+      if (forActiveSession(d)) get()._apply.todos(d.todos)
+    })
+    socket.on('subagent:update', (d: { sessionId?: string; info: SubagentInfo }) => {
+      if (forActiveSession(d)) get()._apply.subagent(d.info)
+    })
     socket.on('files:changed', () => get()._apply.filesChanged())
     socket.on('permission:request', (p: PermissionRequest) => get()._apply.permission(p))
-    socket.on('chat:done', (d: { summary: LoopSummary; checkpoints?: CheckpointMeta[] }) =>
-      get()._apply.chatDone(d.summary),
-    )
+    socket.on('plan:ready', (d: { plan?: string }) => {
+      if (d?.plan) set({ planOffer: d.plan })
+    })
+    socket.on('chat:done', (d: { sessionId?: string; summary: LoopSummary; checkpoints?: CheckpointMeta[] }) => {
+      if (forActiveSession(d)) get()._apply.chatDone(d.summary)
+    })
     socket.on('session:list', (sessions: SessionMeta[]) => set({ sessions }))
     socket.on('workspace:changed', (payload: HelloPayload) => {
       // daemon switched workspaces (local action or mega:pull) — adopt the new world
@@ -251,6 +292,7 @@ export const useTagent = create<TagentState>((set, get) => ({
         stream: '',
         status: null,
         running: false,
+        planOffer: null,
         checkpoints: st.checkpoints,
       }))
     })
@@ -266,8 +308,21 @@ export const useTagent = create<TagentState>((set, get) => ({
         if (!st.session) return st
         const messages = [...st.session.messages]
         const i = messages.findIndex((x) => x.id === m.id)
-        if (i >= 0) messages[i] = m
-        else messages.push(m)
+        if (i >= 0) {
+          messages[i] = m
+        } else {
+          // the daemon echoes our optimistic user message back under a
+          // server-generated id — replace the local bubble in place instead
+          // of pushing a second identical one
+          const last = messages[messages.length - 1]
+          const isLocalEcho =
+            m.role === 'user' &&
+            last?.role === 'user' &&
+            last.id.startsWith('local-') &&
+            last.content === m.content
+          if (isLocalEcho) messages[messages.length - 1] = m
+          else messages.push(m)
+        }
         return {
           session: { ...st.session, messages },
           stream: m.role === 'assistant' ? '' : st.stream,
@@ -278,7 +333,13 @@ export const useTagent = create<TagentState>((set, get) => ({
       set({ stream: text })
     },
     status(s) {
-      set({ status: s, running: !['done', 'error', 'aborted', 'idle'].includes(s.phase) })
+      set((st) => ({
+        status: s,
+        running: !['done', 'error', 'aborted', 'idle'].includes(s.phase),
+        // once streaming is over the text is final — drop the draft so the
+        // next run never flashes the previous turn's stream first
+        stream: s.phase === 'thinking' ? st.stream : '',
+      }))
     },
     toolStart(c) {
       set((st) => {
@@ -301,17 +362,18 @@ export const useTagent = create<TagentState>((set, get) => ({
     toolEnd(c) {
       set((st) => {
         if (!st.session) return st
-        const messages = st.session.messages.map((m) => {
-          if (!m.toolCalls?.length) return m
-          const j = m.toolCalls.findIndex((x) => x.id === c.id)
+        const lastIdx = st.session.messages.length - 1
+        const messages = st.session.messages.map((m, i) => {
+          const j = m.toolCalls?.findIndex((x) => x.id === c.id) ?? -1
           if (j === -1) {
-            // tool call belonging to the newest assistant turn arrived late
-            if (m.role === 'assistant' && m === st.session!.messages[st.session!.messages.length - 1]) {
-              return { ...m, toolCalls: [...m.toolCalls, c] }
+            // result for a call we never saw start — attach to the newest
+            // assistant turn (by index: immutable copies break identity)
+            if (m.role === 'assistant' && i === lastIdx) {
+              return { ...m, toolCalls: [...(m.toolCalls ?? []), c] }
             }
             return m
           }
-          const calls = [...m.toolCalls]
+          const calls = [...(m.toolCalls as ToolCallRecord[])]
           calls[j] = { ...calls[j], ...c }
           return { ...m, toolCalls: calls }
         })
@@ -341,6 +403,8 @@ export const useTagent = create<TagentState>((set, get) => ({
       set((st) => ({
         running: false,
         status: { phase: summary.finished === 'error' ? 'error' : 'done', detail: `${summary.turns} turns · ${summary.toolCalls} tool calls` },
+        // belt-and-braces: a finished run must never leave a draft behind
+        stream: '',
       }))
       void get().refreshTree()
       void get().refreshTimeline()
@@ -367,6 +431,7 @@ export const useTagent = create<TagentState>((set, get) => ({
       running: false,
       subagents: [],
       pendingPermission: null,
+      planOffer: null,
       fileTree: null,
       fileBuffer: null,
       worklogContent: '',
@@ -400,7 +465,7 @@ export const useTagent = create<TagentState>((set, get) => ({
     }
     if (!socket) return
     const s = await call<SessionData>(socket, 'session:new', { mode: get().session?.mode ?? 'build' })
-    set({ session: { ...s, messages: [], todos: [] }, subagents: [], stream: '', status: null })
+    set({ session: { ...s, messages: [], todos: [] }, subagents: [], stream: '', status: null, planOffer: null })
   },
 
   async loadSession(id) {
@@ -409,7 +474,7 @@ export const useTagent = create<TagentState>((set, get) => ({
     if (!socket) return
     const s = await call<SessionData | null>(socket, 'session:load', { id })
     if (s) {
-      set({ session: s, subagents: [], stream: '', status: null })
+      set({ session: s, subagents: [], stream: '', status: null, planOffer: null })
       void get().refreshTimeline()
     }
   },
@@ -452,7 +517,14 @@ export const useTagent = create<TagentState>((set, get) => ({
       running: true,
       status: { phase: 'thinking' },
     }))
-    await call<boolean>(socket, 'chat:send', { text, mode: session.mode }, 30000).catch(() => undefined)
+    // no timeout (0): the ack may only land long after the run completes,
+    // and run outcome is settled by `chat:done` / `notify` events anyway.
+    // Only a dead socket (send refused / disconnect) should fail the UI.
+    await call<boolean>(socket, 'chat:send', { text, mode: session.mode }, 0).catch((e: Error) => {
+      if (get().connection === 'ready') return // daemon alive — chat:done settles the state
+      set({ running: false, status: { phase: 'error', detail: e.message } })
+      toast.error(`Send failed — ${e.message}`)
+    })
   },
 
   interrupt() {
@@ -471,6 +543,28 @@ export const useTagent = create<TagentState>((set, get) => ({
       socket.emit('permission:respond', { requestId: pendingPermission.id, approved, remember })
     }
     set({ pendingPermission: null })
+  },
+
+  respondPlan(execute) {
+    const { socket, connection, planOffer } = get()
+    if (!planOffer) return
+    if (connection === 'ready' && socket) socket.emit('plan:approve', { execute })
+    set({ planOffer: null })
+  },
+
+  async saveFallback(entries) {
+    const { socket } = get()
+    if (!socket || get().connection !== 'ready') return
+    type SaveResult = { ok?: boolean; error?: string; config?: SanitizedConfig }
+    const r = await call<SaveResult>(socket, 'settings:save', { fallback: entries }).catch(
+      (e: Error): SaveResult => ({ error: e.message }),
+    )
+    if (r.error) {
+      toast.error(r.error)
+      return
+    }
+    if (r.config) set({ config: r.config })
+    toast('Fallback chain saved ✓')
   },
 
   async setModel(provider, model) {
@@ -662,8 +756,10 @@ export const useTagent = create<TagentState>((set, get) => ({
       toast.warning('Stop the running agent before switching workspaces')
       return
     }
-    const r = await call<{ ok?: boolean; error?: string; workspace?: HelloPayload }>(socket, 'workspace:switch', { path }, 20000)
-      .catch((e) => ({ error: (e as Error).message }))
+    type SwitchResult = { ok?: boolean; error?: string; workspace?: HelloPayload }
+    const r = await call<SwitchResult>(socket, 'workspace:switch', { path }, 20000).catch(
+      (e: Error): SwitchResult => ({ error: e.message }),
+    )
     if (r.error) {
       toast.error(r.error)
       return
@@ -691,8 +787,10 @@ export const useTagent = create<TagentState>((set, get) => ({
   async megaSync() {
     const { socket } = get()
     if (!socket || get().connection !== 'ready') return
-    const r = await call<{ ok?: boolean; facts?: number; error?: string }>(socket, 'mega:sync', {}, 120000)
-      .catch((e) => ({ error: (e as Error).message }))
+    type SyncResult = { ok?: boolean; facts?: number; error?: string }
+    const r = await call<SyncResult>(socket, 'mega:sync', {}, 120000).catch(
+      (e: Error): SyncResult => ({ error: e.message }),
+    )
     if (r.error) toast.error(r.error)
     else toast(`Synced ${r.facts ?? 0} facts to MEGA (E2E encrypted) ✓`)
   },
@@ -700,8 +798,10 @@ export const useTagent = create<TagentState>((set, get) => ({
   async megaPull() {
     const { socket } = get()
     if (!socket || get().connection !== 'ready') return
-    const r = await call<{ ok?: boolean; imported?: number; total?: number; error?: string }>(socket, 'mega:pull', {}, 120000)
-      .catch((e) => ({ error: (e as Error).message }))
+    type PullResult = { ok?: boolean; imported?: number; total?: number; error?: string }
+    const r = await call<PullResult>(socket, 'mega:pull', {}, 120000).catch(
+      (e: Error): PullResult => ({ error: e.message }),
+    )
     if (r.error) toast.error(r.error)
     else toast(`Imported ${r.imported ?? 0} facts from MEGA (${r.total ?? 0} total) ✓`)
   },

@@ -9,6 +9,7 @@ import {
   listFacts,
   listSkills,
   CURRENT_VERSION,
+  SUBAGENT_TEMPLATE,
   type LoopSummary,
   type PermissionRequest,
   type SessionData,
@@ -295,6 +296,18 @@ export class Tui {
     this.println(approved ? green('  ✔ allowed') : yellow('  ⊘ denied'))
   }
 
+  /** mode switch banner — tells the user (and the next prompt run) what the job is */
+  private printModeBanner(mode: 'build' | 'plan') {
+    if (mode === 'plan') {
+      this.println(green('  ✔ mode: plan — read-only'))
+      this.println(dim('    the agent investigates, INTERVIEWS you for missing detail, then delivers a plan'))
+      this.println(dim('    approving the plan writes PRD.md and switches to build automatically'))
+    } else {
+      this.println(green('  ✔ mode: build — full write access'))
+      this.println(dim('    the agent reads PRD.md first when present, implements, and verifies its work'))
+    }
+  }
+
   private onChatDone(summary: LoopSummary) {
     const secs = ((Date.now() - this.runStartedAt) / 1000).toFixed(1)
     this.hideTicker()
@@ -307,6 +320,8 @@ export class Tui {
     this.println(`  ${mark} ${dim(`· ${summary.turns} turns · ${summary.toolCalls} tool calls · ${secs}s${tok}`)}`)
     if (summary.error) this.println(`  ${red(summary.error)}`)
     this.running = false
+    // plan mode delivered a plan → offer the approve-and-build flow
+    if (summary.plan) void this.offerPlan(summary.plan)
     const next = this.queued.shift()
     if (next) {
       this.println(dim('  ↩ sending queued message…'))
@@ -314,6 +329,19 @@ export class Tui {
     } else {
       this.setPrompt()
     }
+  }
+
+  /** plan approval — arrow-key y/N; yes writes PRD.md and starts the build */
+  private async offerPlan(_plan: string) {
+    // give the done-line a beat before drawing the prompt box
+    await new Promise((r) => setTimeout(r, 150))
+    this.println('')
+    this.println(`  ${bold('┌ plan ready')}`)
+    this.println(dim('  │ approve → writes PRD.md · switches to build · starts implementing'))
+    const yes = await this.askYesNo('└ execute this plan?', true)
+    if (yes === undefined) return this.println(dim('  — ask again anytime, or /mode build to switch manually'))
+    const r = this.host.approvePlan(yes)
+    if (!r.ok && r.error) this.println(red(`  ✗ ${r.error}`))
   }
 
   /* ---------------- ticker (transient bottom row) ---------------- */
@@ -576,7 +604,9 @@ export class Tui {
           ['sessions · new [plan] · open <id> · delete <id>', 'session management'],
           ['share [id] · relay [id|list|stop <code>] · timeline', 'HTML export · live share · subagent runs'],
           ['mode [plan|build] · model [p[:m]]', 'planning vs build · pick llm (arrow keys)'],
-          ['mcp · plugins', 'Model Context Protocol servers · plugin manager'],
+          ['agents · mcp · plugins', 'custom subagents · MCP servers · plugin manager'],
+          ['fallback [add <p> <m> [key]|rm <n>|clear]', 'provider failover chain'],
+          ['diag [cmd|off|test]', 'auto-diagnostics gate (lint/typecheck loop)'],
           ['caveman [on|off] · worklog [on|off] · maxturns <n>', 'agent behavior'],
           ['todos · log [n]', 'live plan · journal tail'],
           ['apikey <provider> · permissions · allow/deny/ask <tool>', 'access'],
@@ -597,7 +627,7 @@ export class Tui {
           const pick = await this.pick(
             [
               { label: 'build', hint: 'the agent can write files & run commands', value: 'build' },
-              { label: 'plan', hint: 'read-only — investigate, then propose', value: 'plan' },
+              { label: 'plan', hint: 'read-only — interview → plan → PRD approval', value: 'plan' },
             ],
             'new session — mode',
           )
@@ -718,20 +748,20 @@ export class Tui {
       case 'mode': {
         if (arg === 'plan' || arg === 'build') {
           host.setSessionMode(arg)
-          this.println(green(`  ✔ mode: ${arg}`))
+          this.printModeBanner(arg)
           return
         }
         const pick = await this.pick(
           [
             { label: 'build', hint: 'write files, run commands, finish the job', value: 'build' },
-            { label: 'plan', hint: 'read-only — investigate & propose', value: 'plan' },
+            { label: 'plan', hint: 'read-only — interview → PRD → approval', value: 'plan' },
           ],
           'mode',
           { selected: (host.session?.mode ?? 'build') === 'build' ? 0 : 1 },
         )
         if (!pick) return this.println(dim('  cancelled'))
         host.setSessionMode(pick)
-        this.println(green(`  ✔ mode: ${pick}`))
+        this.printModeBanner(pick)
         return
       }
 
@@ -902,6 +932,93 @@ export class Tui {
         if (!(n >= 1 && n <= 80)) return this.println(dim('  usage: /maxturns <1-80>'))
         host.settingsSave({ maxTurns: Math.round(n) })
         this.println(green(`  ✔ turn budget: ${Math.round(n)}`))
+        return
+      }
+
+      case 'agents': case 'agent': {
+        const sub = arg.split(/\s+/)[0]
+        if (sub === 'new') {
+          const name = (arg.split(/\s+/)[1] || 'my-specialist').replace(/\.md$/, '')
+          const dir = path.join(host.root, '.tagent', 'agents')
+          fs.mkdirSync(dir, { recursive: true })
+          const file = path.join(dir, `${name}.md`)
+          if (fs.existsSync(file)) return this.println(yellow(`  ${name}.md already exists`))
+          fs.writeFileSync(file, SUBAGENT_TEMPLATE)
+          this.println(green(`  ✔ created .tagent/agents/${name}.md — edit it, it hot-loads next run`))
+          this.println(dim('    fields: name · description · model · tools · mode · maxTurns; body = persona'))
+          return
+        }
+        const { agents } = host.subagentsView()
+        if (!agents.length) {
+          this.println(dim('  no custom subagents — /agents new <name> creates one'))
+          this.println(dim('    workspace: .tagent/agents/ · global: ~/.tagent/agents/'))
+          return
+        }
+        this.println(bold(`  custom subagents (${agents.length})`))
+        for (const a of agents) {
+          this.println(`   ${cyan('▸')} ${bold(a.name)} ${dim(`· ${a.source} · ${a.mode} · ≤${a.maxTurns} turns${a.model ? ` · ${a.model}` : ''}${a.tools ? ` · tools: ${a.tools.join(',')}` : ''}`)}`)
+          this.println(`     ${dim(a.description)}`)
+        }
+        this.println(dim('    spawn: the task tool with agent "<name>" · /agents new <name> to add one'))
+        return
+      }
+
+      case 'diag': {
+        const cur = (host.cfg.diagnostics?.command ?? '').trim()
+        if (arg === 'test') {
+          if (!cur) return this.println(dim('  no diagnostics command configured'))
+          this.println(dim(`  running: ${cur} …`))
+          const r = await host.diagnosticsRun()
+          this.println(r.ok ? green(`  ✔ pass · ${(r.ms / 1000).toFixed(1)}s`) : red(`  ✗ fail · ${(r.ms / 1000).toFixed(1)}s${r.timedOut ? ' (timed out)' : ''}`))
+          if (r.output) this.println(r.output.split('\n').slice(0, 15).map((l) => `  ${dim(l)}`).join('\n'))
+          return
+        }
+        if (arg === 'off' || arg === 'none' || arg === 'clear') {
+          host.settingsSave({ diagnosticsCommand: '' })
+          return this.println(green('  ✔ diagnostics gate off'))
+        }
+        if (arg) {
+          host.settingsSave({ diagnosticsCommand: arg })
+          this.println(green(`  ✔ diagnostics gate: ${bold(arg)}`))
+          this.println(dim('    runs once per edit turn; failures are fed back to the agent'))
+          return
+        }
+        this.println(cur
+          ? `  diagnostics: ${bold(cur)}`
+          : dim('  diagnostics off — /diag "tsc --noEmit" or /diag "npm run lint" to arm the gate'))
+        this.println(dim('    /diag test runs it once · /diag off disarms'))
+        return
+      }
+
+      case 'fallback': {
+        const [verb, ...rest] = arg.split(/\s+/)
+        const list = [...(host.cfg.fallback ?? [])]
+        if (verb === 'add') {
+          const [provider, model, ...keyParts] = rest
+          if (!provider || !model) return this.println(dim('  usage: /fallback add <provider> <model> [apiKey]'))
+          const key = keyParts.join(' ')
+          list.push({ provider, model, ...(key ? { apiKey: key } : {}), enabled: true })
+          host.settingsSave({ fallback: list })
+          return this.println(green(`  ✔ fallback #${list.length}: ${provider}/${model}${key ? ' (own key)' : ''}`))
+        }
+        if (verb === 'rm') {
+          const i = Number(rest[0]) - 1
+          if (!(i >= 0 && i < list.length)) return this.println(dim(`  usage: /fallback rm <1-${list.length}>`))
+          const [gone] = list.splice(i, 1)
+          host.settingsSave({ fallback: list })
+          return this.println(green(`  ✔ removed ${gone.provider}/${gone.model}`))
+        }
+        if (verb === 'clear') {
+          host.settingsSave({ fallback: [] })
+          return this.println(green('  ✔ fallback chain cleared'))
+        }
+        const { chain } = host.fallbackChainView()
+        this.println(bold('  provider fallback chain (try top → bottom)'))
+        for (const [i, c] of chain.entries()) {
+          this.println(`   ${c.primary ? green('①') : dim(String(i + 1))} ${bold(c.label)} ${dim(`· ${c.model}`)}`)
+        }
+        this.println(dim('    add: /fallback add <provider> <model> [apiKey] · rm: /fallback rm <n> · full editor: web gui settings'))
+        this.println(dim('    same provider + different apiKey = key-level failover (stack freely)'))
         return
       }
 

@@ -81,6 +81,15 @@ export interface ProviderInfo {
   custom?: boolean
 }
 
+/** provider fallback — ordered failover chain tried when the primary fails */
+export interface FallbackEntry {
+  provider: string
+  model: string
+  apiKey?: string
+  enabled?: boolean
+  label?: string
+}
+
 export interface SanitizedConfig {
   defaultProvider: string
   defaultModel: string
@@ -95,6 +104,8 @@ export interface SanitizedConfig {
   caveman: boolean
   webGui: boolean
   cache: { fileState: boolean; web: boolean; webTtlMin: number }
+  /** ordered provider failover chain (server-side feature) */
+  fallback?: FallbackEntry[]
   mcp?: { servers?: Record<string, McpServerConfig> }
   mcpStatus?: McpServerStatus[]
 }

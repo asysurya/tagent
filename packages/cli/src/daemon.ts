@@ -164,7 +164,7 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     'agent:status', 'message:new', 'agent:chunk', 'tool:start', 'tool:end',
     'todos:update', 'subagent:update', 'files:changed', 'notify',
     'permission:request', 'chat:done', 'session:active', 'session:list',
-    'workspace:changed',
+    'workspace:changed', 'plan:ready',
   ]
   for (const event of forward) host.bus.on(event, (payload) => io.to('gui').emit(event, payload))
 
@@ -277,6 +277,22 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
 
     socket.on('session:mode', (p: { mode: 'build' | 'plan' }) => {
       host.setSessionMode(p?.mode ?? 'build')
+    })
+
+    socket.on('plan:approve', (p: { execute: boolean }, cb?: (r: unknown) => void) => {
+      try { cb?.(host.approvePlan(!!p?.execute)) } catch (e) { cb?.({ ok: false, error: (e as Error).message }) }
+    })
+
+    socket.on('agents:view', (_p: unknown, cb?: (r: unknown) => void) => {
+      cb?.(host.subagentsView())
+    })
+
+    socket.on('fallback:view', (_p: unknown, cb?: (r: unknown) => void) => {
+      cb?.(host.fallbackChainView())
+    })
+
+    socket.on('diagnostics:run', async (_p: unknown, cb?: (r: unknown) => void) => {
+      cb?.(await host.diagnosticsRun())
     })
 
     socket.on('session:timeline', (p: { sessionId?: string }, cb?: (r: unknown) => void) => {

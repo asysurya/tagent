@@ -7,6 +7,32 @@ const UA =
 
 const MAX_TEXT = 20_000
 
+/**
+ * TLS-resilient fetch. Some networks (captive portals, corporate MITM proxies,
+ * broken clocks) present certificates Bun cannot verify — the classic
+ * "unknown certificate verification error". On such failures we retry ONCE
+ * with verification relaxed (tagent tools already run behind a permission
+ * gate). TAGENT_TLS_SKIP=1 forces relaxed mode from the start.
+ */
+async function resilientFetch(url: string, init: RequestInit): Promise<Response> {
+  const relaxed = () =>
+    fetch(url, { ...init, tls: { rejectUnauthorized: false } } as RequestInit & {
+      tls: { rejectUnauthorized: boolean }
+    })
+  if (process.env.TAGENT_TLS_SKIP === '1') return relaxed()
+  try {
+    return await fetch(url, init)
+  } catch (e) {
+    const msg = `${(e as Error)?.message ?? e}`
+    if (/certificate|CERT_|tls|ssl|handshake/i.test(msg)) return relaxed()
+    throw e
+  }
+}
+
+function isTlsError(e: unknown): boolean {
+  return /certificate|CERT_|tls|ssl|handshake/i.test(`${(e as Error)?.message ?? e}`)
+}
+
 export const webFetchTool: ToolDefinition = {
   name: 'web_fetch',
   description:
@@ -35,7 +61,7 @@ export const webFetchTool: ToolDefinition = {
       }
     }
     bumpStat('webMisses')
-    const res = await fetch(url, {
+    const res = await resilientFetch(url, {
       headers: { 'user-agent': UA, accept: 'text/html,application/json,text/plain,*/*' },
       redirect: 'follow',
       signal: AbortSignal.timeout(20_000),
@@ -119,7 +145,7 @@ export const ddgSearchTool: ToolDefinition = {
     bumpStat('webMisses')
     let html = ''
     try {
-      const res = await fetch('https://html.duckduckgo.com/html/', {
+      const res = await resilientFetch('https://html.duckduckgo.com/html/', {
         method: 'POST',
         headers: {
           'user-agent': UA,
@@ -131,13 +157,16 @@ export const ddgSearchTool: ToolDefinition = {
       })
       html = await res.text()
     } catch (e) {
+      if (isTlsError(e)) {
+        return `Error: search failed — the network's TLS certificate for duckduckgo.com could not be verified even with the built-in retry. Set TAGENT_TLS_SKIP=1 or fix the system clock / proxy CA, then retry.`
+      }
       return `Error: search failed — ${(e as Error).message}`
     }
     let hits = parseDDGHtml(html)
     if (hits.length === 0) {
       // fallback: lite endpoint
       try {
-        const res = await fetch(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(q)}`, {
+        const res = await resilientFetch(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(q)}`, {
           headers: { 'user-agent': UA },
           signal: AbortSignal.timeout(15_000),
         })

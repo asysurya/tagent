@@ -40,6 +40,10 @@ process when you want a browser. Same engine, same sessions, same permissions.
 |---|---|
 | 🔁 **Agentic loop** | Prompt → model → tool actions → results → repeat, with max-turns, interrupt & steer |
 | 🤖 **Subagents** | `task` tool spawns isolated agents (read-only `explore` or `general`) with their own budget |
+| 🧭 **Plan → PRD → build** | Plan mode INTERVIEWS you until requirements are detailed, then approval writes `PRD.md` and auto-switches to build; build mode checks for a PRD first and offers plan mode when missing |
+| 🛟 **Provider fallback** | Ordered multi-key failover chain — stack the same provider under different keys (1. openrouter/keyA/modelX · 2. openrouter/keyB/modelX · 3. groq…) with automatic mid-run failover (`/fallback`, Settings in the GUI) |
+| 👥 **Custom subagents** | `.tagent/agents/*.md` — persona, tool whitelist, model override, turn budget; spawn via `{"agent": "code-reviewer"}` (`/agents`) |
+| 🩺 **Auto-diagnostics** | Arm a gate like `/diag "tsc --noEmit"` — runs after edit turns and feeds failures back so the agent self-corrects before saying "done" |
 | ⚡ **Smart cache** | The token economist — unchanged-file re-reads return a tiny stub, `read_files` batches known paths into one turn, "read X" subagent prompts get fast-pathed, `@path` mentions attach files inline, old tool outputs auto-compact, and repeated fetches/searches hit a TTL cache (`tagent cache` to inspect) |
 | 🔐 **Credentials store** | Secrets live in `~/.tagent/credentials.json` (chmod 600), separate from the shareable config — resolution order: credentials → config → env |
 | 🧩 **MCP servers** | Any stdio [Model Context Protocol](https://modelcontextprotocol.io) server — Context7, filesystem, memory, sequential-thinking or your own. Tools appear as `mcp_<server>_<tool>`, same permission gates (`/mcp` in the TUI, Settings → MCP in the GUI) |
@@ -62,7 +66,11 @@ process when you want a browser. Same engine, same sessions, same permissions.
 | 🖥️ **Terminal in GUI** | Run shell commands in the workspace, see output |
 | 👤 **Guest-first** | Works fully offline & local; accounts are optional |
 
-## Install — single-file binary (any OS)
+## Install
+
+> **Windows 7 / 8 / 32-bit?** The main binaries need Windows 10+ 64-bit. Use
+> **tagent-native** (`native/` in the repo, also on the release page): a single
+> static Go binary — `tagent-native-windows-386.exe` runs on Windows 7+ 32-bit.
 
 Grab the file for your platform from [releases](https://github.com/asysurya/tagent/releases/latest)
 (or the website's [download page](https://tagent-website.vercel.app/download), which auto-detects it)
@@ -71,18 +79,18 @@ and self-extracts on first launch:
 
 ```bash
 # linux / macOS
-chmod +x tagent-v0.8.0-linux-x64
-./tagent-v0.8.0-linux-x64 start ~/my-project
+chmod +x tagent-v0.9.0-linux-x64
+./tagent-v0.9.0-linux-x64 start ~/my-project
 ```
 
 | File | Platform |
 | --- | --- |
-| `tagent-v0.8.0-windows-x64.exe` | Windows 10+ · 64-bit |
-| `tagent-v0.8.0-windows-arm64.exe` | Windows 10+ · ARM64 |
-| `tagent-v0.8.0-linux-x64` | Linux x86-64 (glibc) |
-| `tagent-v0.8.0-linux-arm64` | Linux ARM64 (Pi 5, ARM servers) |
-| `tagent-v0.8.0-macos-x64` | macOS Intel |
-| `tagent-v0.8.0-macos-arm64` | macOS Apple silicon |
+| `tagent-v0.9.0-windows-x64.exe` | Windows 10+ · 64-bit |
+| `tagent-v0.9.0-windows-arm64.exe` | Windows 10+ · ARM64 |
+| `tagent-v0.9.0-linux-x64` | Linux x86-64 (glibc) |
+| `tagent-v0.9.0-linux-arm64` | Linux ARM64 (Pi 5, ARM servers) |
+| `tagent-v0.9.0-macos-x64` | macOS Intel |
+| `tagent-v0.9.0-macos-arm64` | macOS Apple silicon |
 
 Verify downloads against `SHA256SUMS.txt` (`sha256sum --check` ·
 `certutil -hashfile <file> SHA256` on Windows). Windows needs

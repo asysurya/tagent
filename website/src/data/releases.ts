@@ -17,9 +17,74 @@ export interface Release {
   stable?: boolean
 }
 
-export const LATEST = '0.8.0'
+export const LATEST = '0.9.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.9.0',
+    date: '2026-09-19',
+    title: 'Plan mode interviews + PRD flow, provider fallback chain, custom subagents, auto-diagnostics, Windows 7/32-bit native port',
+    summary:
+      'Plan mode now interviews you until requirements are detailed, then approval writes PRD.md and auto-switches to build. Stack a multi-key provider fallback chain (same provider, different keys — ordered). Custom subagents as .tagent/agents/*.md. Auto-diagnostics feeds lint/tsc errors back to the agent. tagent-native: a Go port for Windows 7+ including 32-bit machines.',
+    stable: true,
+    sections: [
+      {
+        name: 'Plan mode — interview → plan → PRD → build',
+        items: [
+          'The plan agent INTERVIEWS you: it asks focused questions when requirements are ambiguous instead of guessing — asking is the job',
+          'A delivered plan triggers an arrow-key approval prompt (TUI) / dialog (web GUI)',
+          'Approve = writes PRD.md, switches the session to build mode, and starts implementing automatically',
+          'Build mode checks for PRD.md on the first task: missing → the agent asks "continue without a PRD, or switch to plan mode first?"',
+          'Build agent is instructed to read PRD.md first and implement it faithfully',
+        ],
+      },
+      {
+        name: 'Provider fallback — ordered multi-key failover',
+        items: [
+          'Configure an ordered chain: 1. openrouter (key A, model X) · 2. openrouter (key B, model X) · 3. openrouter (key C, model Y) · 4. groq (key A) …',
+          'A per-entry apiKey overrides the stored key — stack the SAME provider under many accounts freely',
+          'Provider errors (network, 401/429/5xx) fail over mid-conversation, transparently, with a notice',
+          'Manage in the web GUI Settings (reorder ↑/↓) or /fallback add|rm|clear in the TUI',
+        ],
+      },
+      {
+        name: 'Custom subagents — .tagent/agents/*.md',
+        items: [
+          'Define specialists with persona, tool whitelist, model override (provider/model), plan/build mode, and turn budget — front-matter + markdown body',
+          'Spawn via the task tool: {"agent": "code-reviewer"} — workspace agents override global (~/.tagent/agents) by name',
+          '/agents lists them, /agents new <name> scaffolds one from the template',
+        ],
+      },
+      {
+        name: 'Auto-diagnostics — the quality gate',
+        items: [
+          'Arm it with /diag "tsc --noEmit" (or npm run lint) — it runs once per turn where files were edited',
+          'Failures are fed back to the model with a fix-before-finishing instruction — a self-correcting loop',
+          '/diag test runs it on demand; runs in the background — tool output never renders as user chat',
+        ],
+      },
+      {
+        name: 'Windows 7+ / 32-bit native port — tagent-native',
+        items: [
+          'Single static Go 1.21 binary (the last toolchain supporting Win7/8): windows-386 PE32, windows-amd64, linux amd64/arm64',
+          'OpenAI-compatible function calling, workspace-jailed read/write/edit/list/bash tools, interactive REPL + one-shot run',
+          'Same ~/.tagent/config.json — including the fallback chain; per-entry keys stack identically',
+          'TAGENT_TLS_SKIP=1 escape hatch for networks with broken TLS interception',
+        ],
+      },
+      {
+        name: 'Fixes',
+        items: [
+          'Web GUI: double user message after send (optimistic id vs server id) — replaced in place, not duplicated',
+          'Web GUI: internal TOOL RESULTS blobs no longer render as user chat bubbles (live + reload + hello paths)',
+          'Web GUI: chat:send no longer times out at 30s for long runs; failures surface instead of hanging',
+          'Server: session-scoped events were stamped with whatever session was loaded at emit time — now pinned to the run\u2019s session',
+          'ddg_search/web_fetch: certificate verification errors now auto-retry with relaxed TLS once, with a clear hint if the network is the problem',
+        ],
+      },
+    ],
+  },
+
   {
     version: '0.8.0',
     date: '2026-09-19',

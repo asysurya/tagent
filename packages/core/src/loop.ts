@@ -22,6 +22,7 @@ import { fileStateFor } from './cache'
 import { buildToolset } from './tools'
 import { findSubagent, listSubagents } from './subagents'
 import { diagnosticsCommand, renderDiagnosticsBlock, runDiagnostics } from './diagnostics'
+import { completeWithFallback, fallbackTail, type ResolvedChainEntry } from './fallback'
 
 const ACTION_RE = /```tagent:action\s*\n([\s\S]*?)```/g
 const MAX_TOOL_OUTPUT = 24_000
@@ -91,12 +92,18 @@ export class AgentLoop {
   private snapshots = new Map<string, boolean>()
   readonly tools: ToolDefinition[]
   readonly ctx: ToolContext
+  /** primary first, then the ordered fallback chain */
+  private chain: ResolvedChainEntry[]
 
   constructor(private opts: AgentLoopOptions) {
     this.tools = [
       ...buildToolset({ readOnly: opts.readOnly, depth: opts.depth ?? 0, config: opts.config }),
       ...(opts.readOnly ? [] : (opts.extraTools ?? [])),
     ].filter((t) => !opts.toolsFilter || opts.toolsFilter.includes(t.name))
+    this.chain = [
+      { adapter: opts.provider, model: opts.model, label: 'primary' },
+      ...fallbackTail(opts.config),
+    ]
     this.ctx = {
       workspaceRoot: opts.session.workspaceId,
       sessionId: opts.session.id,
@@ -135,6 +142,9 @@ export class AgentLoop {
       subagent: (this.opts.depth ?? 0) > 0,
       caveman,
       ...(this.opts.agentPrompt ? { agentPrompt: this.opts.agentPrompt } : {}),
+      ...(diagnosticsCommand(this.opts.config) && !this.opts.readOnly
+        ? { diagnostics: diagnosticsCommand(this.opts.config) }
+        : {}),
       // the primary agent keeps the journal; subagents & plan mode stay lean
       worklog:
         this.opts.config.worklog?.enabled !== false &&
@@ -171,13 +181,21 @@ export class AgentLoop {
             this.opts.events.onAssistantChunk?.(session.id, displayText(full))
           }
         }
-        const result = await this.opts.provider.completeStream({
-          model: this.opts.model,
-          signal: this.abort.signal,
-          messages: this.renderMessages(system),
-          tools: nativeTools,
-          onText: (full) => emitStream(full),
-        })
+        const result = await completeWithFallback(
+          this.chain,
+          {
+            model: this.opts.model,
+            signal: this.abort.signal,
+            messages: this.renderMessages(system),
+            tools: nativeTools,
+            onText: (full) => emitStream(full),
+          },
+          (info) =>
+            this.opts.events.onNotify?.(
+              'warn',
+              `provider ${info.failed} failed — ${info.error.slice(0, 140)}${info.next ? ` · switching to ${info.next}` : ' · no fallback left'}`,
+            ),
+        )
 
         if (this.abort.signal.aborted) return { turns, toolCalls, finished: 'aborted', usage: usageTotal }
 
@@ -535,17 +553,20 @@ function listSubagentNames(workspaceRoot: string): string[] {
 /**
  * Detect a presented implementation plan in a plan-mode final answer.
  * Accepts a "## Plan"-style heading (returns the text under it) or a bare
- * numbered step list (>= 3 steps) — questions/clarifications don't count.
+ * numbered step list (>= 4 steps, no question marks) — questions and short
+ * chatter don't count.
  */
 export function extractPlan(text: string): string | undefined {
-  if (!text) return undefined
-  const heading = text.match(/^\s*#{1,3}\s*plan\b[^\n]*\n?/im)
+  if (!text || !text.trim()) return undefined
+  const heading = text.match(/^\s*#{1,3}\s*(?:implementation\s+)?plan\b[^\n]*\n?/im)
   if (heading && heading.index !== undefined) {
     const rest = text.slice(heading.index).trim()
-    return rest.length >= 40 ? rest.slice(0, 16_000) : undefined
+    return rest.length >= 24 ? rest.slice(0, 16_000) : undefined
   }
-  const steps = text.match(/^\s*(?:\d+[.)]|-)\s+\S/gm) ?? []
-  if (steps.length >= 3 && text.trim().length >= 80) return text.trim().slice(0, 16_000)
+  const steps = text.match(/^\s*(?:\d+[.)]|[-*])\s+\S/gm) ?? []
+  if (steps.length >= 4 && !text.includes('?') && text.trim().length >= 20) {
+    return text.trim().slice(0, 16_000)
+  }
   return undefined
 }
 

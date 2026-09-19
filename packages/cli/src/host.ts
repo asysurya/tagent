@@ -48,6 +48,12 @@ import {
   revokeRelay as revokeRelayEntry,
   relayUrl as relayLinkUrl,
   refreshModelCache,
+  listSubagents,
+  SUBAGENT_TEMPLATE,
+  sanitizeFallback,
+  describeChain,
+  diagnosticsCommand,
+  runDiagnostics,
   type RelayEntry,
   type AgentEvents,
   type ChatMessage,
@@ -99,6 +105,8 @@ export class AgentHost {
   private deviceStart: Awaited<ReturnType<typeof startDeviceLogin>> | undefined
   /** MCP connections — one manager per workspace config */
   private mcp = new McpManager()
+  /** a plan-mode run that presented a plan — awaiting approve/reject */
+  private lastPlan: { sessionId: string; plan: string } | undefined
 
   constructor(opts: HostOptions) {
     this.root = path.resolve(opts.workspaceRoot)
@@ -163,6 +171,14 @@ export class AgentHost {
         web: this.cfg.cache?.web !== false,
         webTtlMin: this.cfg.cache?.webTtlMin ?? 10,
       },
+      fallback: (this.cfg.fallback ?? []).map((f) => ({
+        provider: f.provider,
+        model: f.model,
+        enabled: f.enabled !== false,
+        label: f.label,
+        ...(f.apiKey ? { apiKey: '••••' } : {}),
+      })),
+      diagnostics: { command: diagnosticsCommand(this.cfg) ?? '' },
       bashEnabled: this.cfg.tools.bash,
       browserEnabled: this.cfg.tools.browser,
       mcp: this.cfg.mcp ?? { servers: {} },
@@ -270,12 +286,22 @@ export class AgentHost {
 
   /** send a message to the agent; resolves when the run finishes */
   async chatSend(text: string, mode?: 'build' | 'plan'): Promise<LoopSummary> {
-    const body = String(text ?? '').trim()
+    let body = String(text ?? '').trim()
     if (!body) throw new Error('empty message')
     const s = await this.ensureSession(mode ?? this.session?.mode ?? 'build')
     if (mode && s.mode !== mode) {
       s.mode = mode
       this.sessions.save(s)
+    }
+    // build-mode PRD gate — the first build task without a PRD gets one chance
+    // to route through plan mode (the agent asks; the user decides)
+    if (s.mode === 'build' && s.messages.length === 0 && !fs.existsSync(path.join(this.root, 'PRD.md'))) {
+      body =
+        `[system] No PRD.md exists in this workspace yet. BEFORE doing the task, ask the user in ONE short message: ` +
+        `(a) continue WITHOUT a PRD (they may answer "lanjut tanpa prd" / "continue"), or (b) switch to plan mode first ` +
+        `(/mode plan) so you can interview them and produce one. ` +
+        `If they say continue, do the task normally and never ask again this session. ` +
+        `If they choose plan mode, stop immediately and tell them to switch.\n\n${body}`
     }
     // auto-title the session from its first real message
     if (s.title === 'New session') {
@@ -289,7 +315,7 @@ export class AgentHost {
       await new Promise((r) => setTimeout(r, 100))
     }
 
-    const events = this.makeEvents()
+    const events = this.makeEvents(s.id)
     const plugins = await loadPlugins(this.root, this.cfg)
     await emitPluginEvent(plugins, 'onSessionStart', { session: s, config: this.cfg })
     // MCP servers: lazy-connect on the first run of the workspace
@@ -322,10 +348,40 @@ export class AgentHost {
         summary,
         checkpoints: listCheckpoints(this.root).slice(0, 10),
       })
+      // plan mode delivered a plan → offer the approve-and-build flow
+      if (summary.plan && s.mode === 'plan') {
+        this.lastPlan = { sessionId: s.id, plan: summary.plan }
+        this.bus.emit('plan:ready', { sessionId: s.id, plan: summary.plan })
+      }
       return summary
     } finally {
       this.loop = undefined
     }
+  }
+
+  /**
+   * Respond to a presented plan. execute=true writes PRD.md, switches the
+   * session to build mode, and kicks off the implementation.
+   */
+  approvePlan(execute: boolean): { ok: boolean; error?: string } {
+    const lp = this.lastPlan
+    this.lastPlan = undefined
+    if (!lp) return { ok: false, error: 'no plan waiting for approval' }
+    if (!this.session || this.session.id !== lp.sessionId) return { ok: false, error: 'session changed — plan expired' }
+    if (this.running) return { ok: false, error: 'a run is already in progress' }
+    if (!execute) return { ok: true } // keep planning
+    try {
+      const prd = renderPrdFromPlan(lp.plan, this.session.title)
+      fs.writeFileSync(path.join(this.root, 'PRD.md'), prd)
+    } catch (e) {
+      return { ok: false, error: `could not write PRD.md: ${(e as Error).message}` }
+    }
+    this.setSessionMode('build')
+    this.bus.emit('notify', { level: 'info', message: 'Plan approved — PRD.md written, switching to build mode.' })
+    void this.chatSend(
+      'The plan above was approved and saved to PRD.md. Execute it now, step by step, verifying as you go.',
+    ).catch(() => undefined)
+    return { ok: true }
   }
 
   interrupt() {
@@ -336,17 +392,16 @@ export class AgentHost {
     return !!this.loop
   }
 
-  private makeEvents(): AgentEvents {
-    const sid = () => this.session?.id
+  private makeEvents(runSessionId: string): AgentEvents {
     return {
       onStatus: (phase, detail) => this.bus.emit('agent:status', { phase, detail }),
-      onUserMessage: (msg: ChatMessage) => this.bus.emit('message:new', { sessionId: sid(), message: msg }),
-      onAssistantChunk: (sessionId, delta) => this.bus.emit('agent:chunk', { sessionId, text: delta }),
-      onAssistantMessage: (msg: ChatMessage) => this.bus.emit('message:new', { sessionId: sid(), message: msg }),
-      onToolStart: (call: ToolCallRecord) => this.bus.emit('tool:start', { sessionId: sid(), call }),
-      onToolEnd: (call: ToolCallRecord) => this.bus.emit('tool:end', { sessionId: sid(), call }),
-      onTodos: (todos) => this.bus.emit('todos:update', { sessionId: sid(), todos }),
-      onSubagent: (info) => this.bus.emit('subagent:update', { sessionId: sid(), info }),
+      onUserMessage: (msg: ChatMessage) => this.bus.emit('message:new', { sessionId: runSessionId, message: msg }),
+      onAssistantChunk: (sessionId, delta) => this.bus.emit('agent:chunk', { sessionId: sessionId || runSessionId, text: delta }),
+      onAssistantMessage: (msg: ChatMessage) => this.bus.emit('message:new', { sessionId: runSessionId, message: msg }),
+      onToolStart: (call: ToolCallRecord) => this.bus.emit('tool:start', { sessionId: runSessionId, call }),
+      onToolEnd: (call: ToolCallRecord) => this.bus.emit('tool:end', { sessionId: runSessionId, call }),
+      onTodos: (todos) => this.bus.emit('todos:update', { sessionId: runSessionId, todos }),
+      onSubagent: (info) => this.bus.emit('subagent:update', { sessionId: runSessionId, info }),
       onFilesChanged: (paths) => this.bus.emit('files:changed', { paths }),
       onNotify: (level, message) => this.bus.emit('notify', { level, message }),
       onPermission: (req: PermissionRequest) =>
@@ -568,6 +623,10 @@ export class AgentHost {
     /** smart cache toggles — unchanged-file stubs + web TTL cache */
     cacheFileState?: boolean
     cacheWeb?: boolean
+    /** ordered provider failover chain (replaces the whole list) */
+    fallback?: import('@tagent/core').FallbackEntry[]
+    /** auto-diagnostics command — "" clears the gate */
+    diagnosticsCommand?: string
     /** upsert a custom provider by id (empty baseUrl + remove → delete) */
     customProvider?: CustomProviderConfig
     customProviderRemove?: string
@@ -623,6 +682,12 @@ export class AgentHost {
       if (typeof patch.cacheFileState === 'boolean') cur.fileState = patch.cacheFileState
       if (typeof patch.cacheWeb === 'boolean') cur.web = patch.cacheWeb
       this.cfg.cache = cur
+    }
+    // provider fallback chain (full replace — the GUI/TUI sends the ordered list)
+    if (patch.fallback !== undefined) this.cfg.fallback = sanitizeFallback(patch.fallback)
+    // auto-diagnostics gate
+    if (typeof patch.diagnosticsCommand === 'string') {
+      this.cfg.diagnostics = { ...(this.cfg.diagnostics ?? {}), command: patch.diagnosticsCommand.trim().slice(0, 300) }
     }
     this.persist()
     return { ok: true, config: this.sanitizeConfig() }
@@ -778,4 +843,35 @@ export class AgentHost {
   close() {
     this.mcp.close()
   }
+
+  /* ------------------------------------------------------------------ */
+  /* new surface: custom subagents · diagnostics · fallback view          */
+  /* ------------------------------------------------------------------ */
+
+  /** custom subagent definitions + the template for /agents new */
+  subagentsView() {
+    return { agents: listSubagents(this.root), template: SUBAGENT_TEMPLATE }
+  }
+
+  /** ordered failover chain as shown by /fallback */
+  fallbackChainView() {
+    return { chain: describeChain(this.cfg), entries: this.cfg.fallback ?? [] }
+  }
+
+  /** run the configured diagnostics command once (for /diag test) */
+  async diagnosticsRun() {
+    const r = await runDiagnostics(this.root, this.cfg)
+    return r ?? { ok: false, output: 'no diagnostics command configured', command: '', ms: 0, timedOut: false }
+  }
+}
+
+/** PRD.md rendered from an approved plan — the handoff artifact plan → build. */
+function renderPrdFromPlan(plan: string, title: string): string {
+  return `# PRD — ${title.replace(/\n/g, ' ').slice(0, 80)}
+
+> Approved plan generated by Tagent on ${new Date().toISOString().slice(0, 10)}.
+> The build agent reads this file first; material deviations should be confirmed with the user.
+
+${plan.trim()}
+`
 }

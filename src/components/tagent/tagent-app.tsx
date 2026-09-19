@@ -10,7 +10,7 @@ import { ChatPanel } from './chat-panel'
 import { RightPanel } from './right-panel'
 import { MobileShell } from './mobile-shell'
 import { PermissionDialog } from './permission-dialog'
-import { SettingsDialog } from './settings-dialog'
+import { PlanDialog } from './plan-dialog'
 
 export function TagentApp() {
   const boot = useTagent((s) => s.boot)
@@ -44,7 +44,7 @@ export function TagentApp() {
       </div>
 
       <PermissionDialog />
-      <SettingsDialog />
+      <PlanDialog />
 
       {connection === 'demo' && (
         <div className="px-3 py-1 text-[11px] bg-amber-500/10 text-amber-300 border-t border-amber-500/20 text-center">

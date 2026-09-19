@@ -53,6 +53,8 @@ export function startDemo(): void {
       worklog: { enabled: true },
       caveman: false,
       webGui: false,
+      cache: { fileState: true, web: true, webTtlMin: 10 },
+      fallback: [],
     },
     skills: [
       { name: 'web-app-builder', description: 'Playbook for building a complete web app', source: 'builtin', path: '' },

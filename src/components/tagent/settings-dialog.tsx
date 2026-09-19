@@ -9,10 +9,12 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Check, ExternalLink, Eye, EyeOff, Github, Key, Loader2, Plus, RefreshCw, Search, ShieldAlert, Terminal, Globe, Bot, Bone, ScrollText, Coins, MonitorSmartphone, Trash2, Plug, Puzzle, Power, FileCode2, Zap } from 'lucide-react'
+import { Check, ChevronDown, ChevronUp, ExternalLink, Eye, EyeOff, Github, Key, Loader2, Plus, RefreshCw, Search, ShieldAlert, Terminal, Globe, Bot, Bone, ScrollText, Coins, MonitorSmartphone, Trash2, Plug, Puzzle, Power, FileCode2, Waypoints, Zap } from 'lucide-react'
 import { useTagent } from '@/lib/tagent/store'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
+import { Checkbox } from '@/components/ui/checkbox'
+import type { FallbackEntry } from '@/lib/tagent/types'
 
 type Tab = 'providers' | 'mcp' | 'permissions' | 'agent' | 'integrations' | 'plugins'
 
@@ -521,6 +523,124 @@ function ProvidersTab() {
           <Plus className="size-3.5" /> Add custom provider — any endpoint, any model
         </button>
       )}
+
+      <FallbackCard />
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* Provider fallback — ordered failover chain                          */
+/* ------------------------------------------------------------------ */
+
+function FallbackCard() {
+  const config = useTagent((s) => s.config)
+  const saveFallback = useTagent((s) => s.saveFallback)
+  // edits stay local until "Save chain"; resets from config on dialog open
+  const [chain, setChain] = useState<FallbackEntry[] | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  if (!config) return null
+  const rows = chain ?? config.fallback ?? []
+
+  const update = (i: number, patch: Partial<FallbackEntry>) =>
+    setChain(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)))
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir
+    if (j < 0 || j >= rows.length) return
+    const next = [...rows]
+    ;[next[i], next[j]] = [next[j], next[i]]
+    setChain(next)
+  }
+  const add = () => setChain([...rows, { provider: config.providers[0]?.id ?? '', model: '', enabled: true }])
+  const remove = (i: number) => setChain(rows.filter((_, j) => j !== i))
+
+  const save = async () => {
+    setBusy(true)
+    await saveFallback(rows.map((r) => ({ ...r, apiKey: r.apiKey?.trim() || undefined })))
+    setBusy(false)
+  }
+
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3 space-y-2.5">
+      <div className="flex items-center gap-2">
+        <Waypoints className="size-4 text-orange-400" />
+        <span className="text-sm font-medium text-zinc-200">Provider fallback</span>
+        <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-zinc-700 text-zinc-500">ordered failover chain</Badge>
+      </div>
+      <p className="text-xs text-zinc-500 leading-relaxed">
+        If the primary model fails (rate limit, outage, bad key), the run falls through this chain top-down —
+        same conversation, next provider.
+      </p>
+
+      {rows.length === 0 && (
+        <p className="text-xs text-zinc-600">No fallbacks — the run stops when the primary provider fails.</p>
+      )}
+
+      <div className="space-y-2">
+        {rows.map((f, i) => (
+          <div key={i} className="rounded-lg border border-zinc-800/70 bg-zinc-900/30 p-2 space-y-1.5">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-mono text-zinc-600 w-4 shrink-0 text-center">{i + 1}</span>
+              <Checkbox
+                checked={f.enabled !== false}
+                onCheckedChange={(v) => update(i, { enabled: v === true })}
+                title="enabled"
+              />
+              <select
+                value={f.provider}
+                onChange={(e) => update(i, { provider: e.target.value })}
+                className="h-7 rounded-md border border-zinc-800 bg-zinc-900 px-1.5 text-[11px] text-zinc-200 focus:outline-none focus:border-orange-500/50"
+              >
+                {config.providers.map((p) => (
+                  <option key={p.id} value={p.id}>{p.label}</option>
+                ))}
+              </select>
+              <Input
+                placeholder="model"
+                value={f.model}
+                onChange={(e) => update(i, { model: e.target.value })}
+                className="h-7 text-[11px] font-mono bg-zinc-900 border-zinc-800 flex-1 min-w-0"
+              />
+              <div className="flex items-center gap-0.5 shrink-0">
+                <Button variant="ghost" size="icon" className="size-6 text-zinc-500" disabled={i === 0} onClick={() => move(i, -1)} title="move up">
+                  <ChevronUp className="size-3.5" />
+                </Button>
+                <Button variant="ghost" size="icon" className="size-6 text-zinc-500" disabled={i === rows.length - 1} onClick={() => move(i, 1)} title="move down">
+                  <ChevronDown className="size-3.5" />
+                </Button>
+                <Button variant="ghost" size="icon" className="size-6 text-zinc-600 hover:text-red-400" onClick={() => remove(i)} title="remove">
+                  <Trash2 className="size-3.5" />
+                </Button>
+              </div>
+            </div>
+            <div className="flex gap-2 pl-6">
+              <Input
+                type="password"
+                placeholder={f.apiKey ? 'key saved — paste to replace' : 'API key (optional — uses stored key)'}
+                value={f.apiKey ?? ''}
+                onChange={(e) => update(i, { apiKey: e.target.value })}
+                className="h-7 text-[11px] font-mono bg-zinc-900 border-zinc-800"
+              />
+              <Input
+                placeholder="label (optional)"
+                value={f.label ?? ''}
+                onChange={(e) => update(i, { label: e.target.value })}
+                className="h-7 text-[11px] bg-zinc-900 border-zinc-800 w-32 shrink-0"
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex items-center justify-between">
+        <Button size="sm" variant="outline" className="h-7 text-xs border-dashed border-zinc-700" onClick={add}>
+          <Plus className="size-3" /> Add fallback
+        </Button>
+        <Button size="sm" className="h-7 text-xs bg-orange-500 hover:bg-orange-400" disabled={busy} onClick={() => void save()}>
+          {busy ? <Loader2 className="size-3 animate-spin" /> : null} Save chain
+        </Button>
+      </div>
     </div>
   )
 }

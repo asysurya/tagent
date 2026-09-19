@@ -275,10 +275,24 @@ export interface TagentConfig {
     /** web cache window in minutes (default 10) */
     webTtlMin?: number
   }
+  /** ordered provider failover — primary first, then these entries */
+  fallback?: FallbackEntry[]
   /** auto-diagnostics — a command (tsc --noEmit, npm run lint, …) run after
    *  edit turns; failures are fed back so the model self-corrects */
   diagnostics?: {
     command?: string
     timeoutMs?: number
   }
+}
+
+/** One link in the provider fallback chain. A per-entry apiKey overrides the
+ *  stored key — that is how the same provider can be stacked under multiple
+ *  accounts (e.g. three OpenRouter keys in a row). */
+export interface FallbackEntry {
+  provider: string
+  model: string
+  apiKey?: string
+  enabled?: boolean
+  /** short display name, e.g. "openrouter backup key" */
+  label?: string
 }

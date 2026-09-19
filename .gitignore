@@ -64,3 +64,9 @@ website/.next/
 # cross-compiled release binaries (scripts/build-binaries.sh)
 /dist/
 /scripts/.tmp-probe/
+
+# native Go port (task 5) — toolchain + build outputs are not committed
+/.toolchains/
+native/dist/
+.toolchains/
+native/dist/

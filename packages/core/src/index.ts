@@ -9,7 +9,19 @@
 export * from './types'
 export { loadConfig, saveConfig, defaultConfig, workspaceDir, GLOBAL_DIR, listRecentWorkspaces, rememberWorkspace, updateGlobalConfig, readGlobalConfig, type RecentWorkspace } from './config'
 export { PermissionManager } from './permissions'
-export { AgentLoop, isReadOnlyTool } from './loop'
+export { AgentLoop, isReadOnlyTool, extractPlan } from './loop'
+export {
+  listSubagents, findSubagent, subagentDirs, renderSubagentsBlock,
+  SUBAGENT_TEMPLATE, type SubagentDef,
+} from './subagents'
+export {
+  fallbackTail, describeChain, completeWithFallback, sanitizeFallback,
+  type ResolvedChainEntry,
+} from './fallback'
+export {
+  diagnosticsCommand, runDiagnostics, renderDiagnosticsBlock,
+  DIAGNOSTICS_DEFAULT_TIMEOUT_MS, type DiagnosticsResult,
+} from './diagnostics'
 export { buildSystemPrompt } from './system-prompt'
 export { SessionStore } from './session'
 export {

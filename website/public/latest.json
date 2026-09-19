@@ -1,6 +1,6 @@
 {
-  "version": "0.8.0",
+  "version": "0.9.0",
   "date": "2026-09-19",
-  "notes": "The token economist arrives: unchanged-file re-reads return a stub, read_files batches known paths into one turn, \"read X\" subagents are fast-pathed, and @path mentions attach files inline. Plus: MCP servers, plugins with tools & commands, opencode-style arrow-key menus, and self-update on startup.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.8.0"
+  "notes": "Plan mode now interviews you until requirements are detailed, then approval writes PRD.md and auto-switches to build. Stack a multi-key provider fallback chain (same provider, different keys — ordered). Custom subagents as .tagent/agents/*.md. Auto-diagnostics feeds lint/tsc errors back to the agent. tagent-native: a Go port for Windows 7+ including 32-bit machines.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.9.0"
 }

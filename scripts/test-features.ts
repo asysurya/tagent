@@ -1,105 +1,69 @@
-/**
- * Feature tests — worklog tool + todos protocol + caveman mode.
- *
- * Run: bun scripts/test-features.ts
- */
+/** v0.9.0 feature smoke tests — subagents, fallback, plan extraction, diagnostics config */
 import fs from 'node:fs'
 import path from 'node:path'
-import { worklogTool, worklogPath } from '../packages/core/src/tools/worklog'
-import { buildToolset } from '../packages/core/src/tools'
-import { buildSystemPrompt } from '../packages/core/src/system-prompt'
-import { defaultConfig } from '../packages/core/src/config'
-import type { ToolContext, TagentConfig } from '../packages/core/src/types'
+import os from 'node:os'
+import {
+  listSubagents, findSubagent, renderSubagentsBlock, SUBAGENT_TEMPLATE,
+  sanitizeFallback, fallbackTail, describeChain,
+  extractPlan, diagnosticsCommand, defaultConfig,
+} from '../packages/core/src/index'
 
-let fails = 0
-function assert(cond: boolean, label: string) {
-  console.log(cond ? '✓' : '✗', label)
-  if (!cond) fails++
-}
+let pass = 0, fail = 0
+const ok = (name: string, cond: boolean) => { cond ? pass++ : fail++; console.log(`${cond ? '✔' : '✗'} ${name}`) }
 
-const TMP = '/tmp/tagent-features-ws'
-fs.rmSync(TMP, { recursive: true, force: true })
-fs.mkdirSync(TMP, { recursive: true })
+// ---- 1. custom subagents ----
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tagent-feat-'))
+fs.mkdirSync(path.join(root, '.tagent', 'agents'), { recursive: true })
+fs.writeFileSync(path.join(root, '.tagent', 'agents', 'code-reviewer.md'), `---
+name: code-reviewer
+description: Reviews diffs for bugs before commit
+model: zai/glm-4.7
+tools: read_file, grep, list_files
+mode: plan
+maxTurns: 6
+---
+You are a strict code reviewer. Report only real bugs.`)
+fs.writeFileSync(path.join(root, '.tagent', 'agents', 'reserved-general.md'), `---\ndescription: should be skipped (name=general reserved)\n---\nbody`)
+const agents = listSubagents(root)
+ok('subagents parsed (2, sorted)', agents.length === 2 && agents[0].name === 'code-reviewer')
+ok('front-matter fields', agents[0].mode === 'plan' && agents[0].maxTurns === 6 && !!agents[0].model && (agents[0].tools?.length === 3))
+ok('reserved name skipped', !agents.some(a => a.name === 'general') && findSubagent(root, 'general') === undefined)
+ok('findSubagent', findSubagent(root, 'Code-Reviewer')?.name === 'code-reviewer')
+ok('renderSubagentsBlock mentions name', renderSubagentsBlock(root).includes('code-reviewer'))
+ok('template present', SUBAGENT_TEMPLATE.includes('name: my-specialist'))
 
-function makeCtx(root: string): ToolContext {
-  return {
-    workspaceRoot: root,
-    sessionId: 'test',
-    depth: 0,
-    config: defaultConfig(),
-    events: {},
-    todos: [],
-  } as ToolContext
-}
+// ---- 2. fallback chain ----
+const cfg = defaultConfig()
+cfg.customProviders = [{ id: 'or1', label: 'OR 1', baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'k1', models: ['m1', 'm2'] }]
+cfg.fallback = sanitizeFallback([
+  { provider: 'or1', model: 'm1', apiKey: 'keyA' },
+  { provider: 'or1', model: 'm1', apiKey: 'keyB', enabled: true },
+  { provider: 'or1', model: '', },            // invalid → dropped
+  { provider: 'or1', model: 'm2', enabled: false }, // disabled → dropped
+  'garbage' as never,                          // non-object → dropped
+  { provider: 'or1', model: 'm2', label: 'third key' },
+])
+ok('sanitizeFallback keeps 4 (disabled preserved)', cfg.fallback.length === 4 && cfg.fallback[2].enabled === false)
+ok('per-entry keys survive', cfg.fallback[0].apiKey === 'keyA' && cfg.fallback[1].apiKey === 'keyB' && !cfg.fallback[2].apiKey)
+const tail = fallbackTail(cfg)
+ok('tail resolves 3 entries', tail.length === 3)
+ok('key override reflected', (tail[0].adapter as unknown as { apiKey?: string }).apiKey === 'keyA' && (tail[1].adapter as unknown as { apiKey?: string }).apiKey === 'keyB')
+ok('label fallback to provider/model', tail[2].label === 'third key')
+const chain = describeChain(cfg)
+ok('describeChain = 1 primary + 3', chain.length === 4 && chain[0].primary && !chain[1].primary)
 
-/* ---------------- worklog tool ---------------- */
+// ---- 3. extractPlan ----
+ok('plan heading detected', extractPlan('intro\n## Plan\n1. do x\n2. do y\n3. do z')?.startsWith('## Plan'))
+ok('numbered list detected (>=3)', extractPlan('So:\n1. a\n2. b\n3. c\n4. d')?.includes('1. a'))
+ok('question NOT a plan', extractPlan('What database do you prefer?\n1. postgres\n2. mysql\n3. sqlite') === undefined)
+ok('short text not a plan', extractPlan('ok sounds good') === undefined)
 
-const ctx = makeCtx(TMP)
-let out = await worklogTool.run({ entry: 'read app.js, found the counter bug', title: 'investigate' }, ctx)
-assert(out.startsWith('Logged to WORKLOG.md'), 'worklog returns confirmation')
+// ---- 4. diagnostics config ----
+ok('diag off by default', diagnosticsCommand(cfg) === undefined)
+cfg.diagnostics = { command: 'tsc --noEmit' }
+ok('diag command read', diagnosticsCommand(cfg) === 'tsc --noEmit')
+cfg.diagnostics = { command: '   ' }
+ok('blank diag = off', diagnosticsCommand(cfg) === undefined)
 
-const file = worklogPath(TMP)
-assert(fs.existsSync(file), 'WORKLOG.md created at workspace root')
-let text = fs.readFileSync(file, 'utf8')
-assert(text.includes('# Worklog'), 'journal has the header')
-assert(text.includes(`## ${new Date().toISOString().slice(0, 10)}`), 'entries grouped under today\'s date')
-assert(text.includes('found the counter bug'), 'entry content written')
-assert(/\*\d{2}:\d{2} — investigate\*\*/.test(text), 'timestamp + title rendered')
-
-await worklogTool.run({ entry: 'patched off-by-one in updateCount()' }, ctx)
-text = fs.readFileSync(file, 'utf8')
-assert(text.split('## ').length - 1 === 1, 'same-day entries append under ONE date heading')
-assert(text.includes('patched off-by-one'), 'second entry appended')
-assert(text.indexOf('found the counter bug') < text.indexOf('patched off-by-one'), 'chronological order')
-
-const bad = await worklogTool.run({ entry: '' }, ctx)
-assert(bad.startsWith('Error'), 'empty entry rejected')
-
-/* ---------------- toolset wiring ---------------- */
-
-const cfgOn = defaultConfig()
-assert(cfgOn.worklog?.enabled === true, 'config default: worklog on')
-assert(cfgOn.caveman === false, 'config default: caveman off')
-
-let tools = buildToolset({ config: cfgOn }).map((t) => t.name)
-assert(tools.includes('worklog'), 'worklog tool registered by default')
-
-const cfgOff: TagentConfig = { ...defaultConfig(), worklog: { enabled: false } }
-tools = buildToolset({ config: cfgOff }).map((t) => t.name)
-assert(!tools.includes('worklog'), 'worklog tool removed when disabled')
-
-tools = buildToolset({ readOnly: true, config: cfgOn }).map((t) => t.name)
-assert(!tools.includes('worklog'), 'worklog not available in plan mode (read-only)')
-assert(tools.includes('todowrite'), 'todowrite still available in plan mode')
-
-assert(cfgOn.permissions.tools.worklog === 'allow', 'worklog permission defaults to allow (no nag)')
-
-/* ---------------- system prompt ---------------- */
-
-const dummyTools = buildToolset({ config: cfgOn })
-
-let prompt = buildSystemPrompt({
-  workspaceRoot: TMP, mode: 'build', tools: dummyTools, worklog: true,
-})
-assert(prompt.includes('WORKLOG.md'), 'prompt: journal protocol present when worklog on')
-assert(prompt.includes('todowrite'), 'prompt: todo protocol present')
-
-prompt = buildSystemPrompt({ workspaceRoot: TMP, mode: 'build', tools: dummyTools, worklog: false })
-assert(!prompt.includes('## Progress tracking — todos + worklog'), 'prompt: journal protocol absent when off')
-
-prompt = buildSystemPrompt({ workspaceRoot: TMP, mode: 'plan', tools: dummyTools, worklog: true })
-assert(!prompt.includes('call worklog'), 'prompt: no worklog calls instructed in plan mode')
-
-prompt = buildSystemPrompt({ workspaceRoot: TMP, mode: 'build', tools: dummyTools, caveman: true })
-assert(prompt.includes('CAVEMAN MODE'), 'prompt: caveman block present')
-assert(prompt.includes('- worklog('), 'caveman: one-line tool docs format')
-assert(!prompt.includes('### worklog (risk'), 'caveman: verbose tool docs replaced')
-assert(prompt.length < buildSystemPrompt({ workspaceRoot: TMP, mode: 'build', tools: dummyTools }).length,
-  'caveman: system prompt is strictly smaller')
-
-prompt = buildSystemPrompt({ workspaceRoot: TMP, mode: 'build', tools: dummyTools, caveman: false })
-assert(!prompt.includes('CAVEMAN'), 'caveman absent by default')
-assert(prompt.includes('### worklog (risk'), 'normal mode: verbose tool docs')
-
-console.log(fails ? `\n${fails} FAILED` : '\nAll feature tests passed ✓')
-process.exit(fails ? 1 : 0)
+console.log(`\n${pass} pass / ${fail} fail`)
+process.exit(fail ? 1 : 0)

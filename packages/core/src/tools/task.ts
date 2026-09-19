@@ -78,12 +78,12 @@ function tryFastRead(prompt: string, ctx: ToolContext): string | null {
 export const taskTool: ToolDefinition = {
   name: 'task',
   description:
-    'Spawn a subagent for a self-contained subtask and get its report. ONLY for broad searches (unknown location, many files) or isolated drafting/review work. NEVER for reading files whose paths you already know — use read_file / read_files directly (a full subagent for one read wastes tokens and turns). The subagent CANNOT see your conversation.',
+    'Spawn a subagent for a self-contained subtask and get its report. ONLY for broad searches (unknown location, many files) or isolated drafting/review work. NEVER for reading files whose paths you already know — use read_file / read_files directly (a full subagent for one read wastes tokens and turns). The subagent CANNOT see your conversation. agent: "general" (default), "explore" (read-only), or a custom specialist name from the "Custom subagents" list in your system prompt (persona/tool whitelist/model come from its definition).',
   risk: 'medium',
   params: {
     description: 'string (required) — short label, e.g. "find all API routes"',
     prompt: 'string (required) — complete, self-contained instructions for the subagent',
-    agent: 'string — "general" (default) or "explore" (read-only)',
+    agent: 'string — "general" (default), "explore" (read-only), or a custom subagent name',
     max_turns: 'number — turn budget (default 10)',
   },
   inputSchema: {
@@ -91,7 +91,7 @@ export const taskTool: ToolDefinition = {
     properties: {
       description: { type: 'string', description: 'Short label, e.g. "find all API routes"' },
       prompt: { type: 'string', description: 'Complete, self-contained instructions for the subagent' },
-      agent: { type: 'string', enum: ['general', 'explore'], description: 'Subagent kind (default general; explore is read-only)' },
+      agent: { type: 'string', description: 'general | explore | custom subagent name from the system prompt' },
       max_turns: { type: 'number', description: 'Turn budget (default 10)' },
     },
     required: ['description', 'prompt'],
@@ -109,7 +109,7 @@ export const taskTool: ToolDefinition = {
     const fast = tryFastRead(prompt, ctx)
     if (fast) return fast
 
-    const agent = input.agent === 'explore' ? 'explore' : 'general'
+    const agent = String(input.agent ?? 'general') || 'general'
     const maxTurns = Math.min(Number(input.max_turns ?? 10), 25)
     ctx.events.onSubagent?.({
       id: uid(),

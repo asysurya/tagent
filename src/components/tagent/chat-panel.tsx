@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ArrowUp, Bot, CircleStop, ListChecks, Loader2, Sparkles, Zap } from 'lucide-react'
-import { useTagent } from '@/lib/tagent/store'
+import { useTagent, visibleMessages } from '@/lib/tagent/store'
 import { cn } from '@/lib/utils'
 import { AssistantMessage, UserMessage } from './message'
 import type { TodoItem } from '@/lib/tagent/types'
@@ -130,7 +130,9 @@ export function ChatPanel() {
   const interrupt = useTagent((s) => s.interrupt)
   const [text, setText] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
-  const messages = session?.messages ?? []
+  // render-filtered view of the session transcript: internal tool-result
+  // blobs and empty assistant placeholders never reach the chat
+  const messages = visibleMessages(session)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
