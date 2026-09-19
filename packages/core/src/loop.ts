@@ -13,12 +13,15 @@ import type {
   ToolContext,
   ToolDefinition,
 } from './types'
-import type { NativeToolDef } from './providers'
+import { getAdapter, type NativeToolDef } from './providers'
+import { parseModelRef } from './providers/registry'
 import { buildSystemPrompt } from './system-prompt'
 import { createCheckpoint, shouldCheckpoint } from './checkpoints'
 import { jailPath, trunc, uid } from './util'
 import { fileStateFor } from './cache'
 import { buildToolset } from './tools'
+import { findSubagent, listSubagents } from './subagents'
+import { diagnosticsCommand, renderDiagnosticsBlock, runDiagnostics } from './diagnostics'
 
 const ACTION_RE = /```tagent:action\s*\n([\s\S]*?)```/g
 const MAX_TOOL_OUTPUT = 24_000
@@ -66,6 +69,10 @@ export interface AgentLoopOptions {
   onSubagentSession?: (sub: SessionData, phase: 'start' | 'end') => void
   /** extra tools injected by the host (MCP servers, plugins, …) */
   extraTools?: ToolDefinition[]
+  /** custom subagent persona — replaces the default identity in the system prompt */
+  agentPrompt?: string
+  /** custom subagent tool whitelist (tool names) */
+  toolsFilter?: string[]
 }
 
 interface ParsedAction {
@@ -89,7 +96,7 @@ export class AgentLoop {
     this.tools = [
       ...buildToolset({ readOnly: opts.readOnly, depth: opts.depth ?? 0, config: opts.config }),
       ...(opts.readOnly ? [] : (opts.extraTools ?? [])),
-    ]
+    ].filter((t) => !opts.toolsFilter || opts.toolsFilter.includes(t.name))
     this.ctx = {
       workspaceRoot: opts.session.workspaceId,
       sessionId: opts.session.id,
@@ -127,6 +134,7 @@ export class AgentLoop {
       tools: this.tools,
       subagent: (this.opts.depth ?? 0) > 0,
       caveman,
+      ...(this.opts.agentPrompt ? { agentPrompt: this.opts.agentPrompt } : {}),
       // the primary agent keeps the journal; subagents & plan mode stay lean
       worklog:
         this.opts.config.worklog?.enabled !== false &&
@@ -208,7 +216,10 @@ export class AgentLoop {
           this.opts.events.onAssistantMessage?.(assistantMsg)
           this.opts.onSessionUpdate?.(session)
           this.opts.events.onStatus?.('done', usageDetail(turns, usageTotal))
-          return { turns, toolCalls, finished: 'complete', usage: usageTotal }
+          // plan mode: a clean finish that presents a plan enables the
+          // approve-and-build flow in the host
+          const plan = this.opts.mode === 'plan' ? extractPlan(assistantMsg.content) : undefined
+          return { turns, toolCalls, finished: 'complete', usage: usageTotal, ...(plan ? { plan } : {}) }
         }
 
         // brief text streams out before the actions execute
@@ -218,6 +229,7 @@ export class AgentLoop {
 
         const results: string[] = []
         this.opts.events.onStatus?.('acting', `${allActions.length} action(s)`)
+        let editedThisTurn = false
 
         for (const action of allActions) {
           if (this.abort.signal.aborted) break
@@ -259,6 +271,9 @@ export class AgentLoop {
               }
               output = await tool.run(action.input, this.ctx)
               record.status = 'done'
+              if (record.status === 'done' && (tool.name === 'write_file' || tool.name === 'edit_file')) {
+                editedThisTurn = true
+              }
             }
           } catch (e) {
             record.status = 'error'
@@ -276,6 +291,19 @@ export class AgentLoop {
         this.opts.onSessionUpdate?.(session)
 
         if (this.abort.signal.aborted) return { turns, toolCalls, finished: 'aborted', usage: usageTotal }
+
+        // auto-diagnostics: one quality-gate run per edit turn — failures are
+        // fed straight back so the model self-corrects before saying "done"
+        if (editedThisTurn && diagnosticsCommand(this.opts.config)) {
+          this.opts.events.onStatus?.('acting', 'diagnostics')
+          const diag = await runDiagnostics(session.workspaceId, this.opts.config)
+          if (diag) {
+            results.push(renderDiagnosticsBlock(diag))
+            if (!diag.ok) {
+              this.opts.events.onNotify?.('warn', `diagnostics failed — the agent is fixing it (${(diag.ms / 1000).toFixed(1)}s)`)
+            }
+          }
+        }
 
         // feed results back as the next user turn
         const resultMsg: ChatMessage = {
@@ -335,19 +363,51 @@ export class AgentLoop {
     return `${expanded}\n\n${attachments.join('\n\n')}`
   }
 
+  /**
+   * Spawn a subagent. `agentKind` is "general", "explore", or the name of a
+   * custom subagent (.tagent/agents/<name>.md) — persona, tool whitelist,
+   * model override, and turn budget come from the definition.
+   */
   private async spawnSubagent(
     description: string,
     prompt: string,
-    agentKind: 'general' | 'explore',
+    agentKind: string,
     maxTurns: number,
   ): Promise<string> {
     const { session } = this.opts
+    const def =
+      agentKind !== 'general' && agentKind !== 'explore'
+        ? findSubagent(session.workspaceId, agentKind)
+        : undefined
+    if (agentKind !== 'general' && agentKind !== 'explore' && !def) {
+      return `Error: unknown agent "${agentKind}" — available: general, explore${
+        listSubagentNames(session.workspaceId)
+          .map((n) => `, ${n}`)
+          .join('')
+      }`
+    }
+    // model override: "provider/model" (cross-provider) or a bare model id
+    let provider = this.opts.provider
+    let model = this.opts.model
+    if (def?.model) {
+      const ref = parseModelRef(def.model, this.opts.config)
+      if (ref) {
+        try {
+          provider = getAdapter(ref.provider, this.opts.config)
+          model = ref.model
+        } catch {
+          /* fall back to the parent's provider */
+        }
+      } else {
+        model = def.model
+      }
+    }
     const sub: SessionData = {
       id: uid(),
       workspaceId: session.workspaceId,
-      title: description,
-      model: this.opts.model,
-      mode: this.opts.mode,
+      title: `${def ? `${def.name}: ` : ''}${description}`,
+      model,
+      mode: def ? def.mode : this.opts.mode,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       messageCount: 0,
@@ -358,19 +418,20 @@ export class AgentLoop {
       subagent: true,
     }
     this.opts.onSubagentSession?.(sub, 'start')
-    const events = wrapEventsForSubagent(this.opts.events, description)
+    const events = wrapEventsForSubagent(this.opts.events, sub.title)
     const loop = new AgentLoop({
       session: sub,
-      provider: this.opts.provider,
-      model: this.opts.model,
+      provider,
+      model,
       events,
       permissions: this.opts.permissions,
-      config: { ...this.opts.config, maxTurns },
-      mode: this.opts.mode,
+      config: { ...this.opts.config, maxTurns: def?.maxTurns ?? maxTurns },
+      mode: def ? def.mode : this.opts.mode,
       depth: (this.opts.depth ?? 0) + 1,
-      readOnly: agentKind === 'explore',
+      readOnly: agentKind === 'explore' || def?.mode === 'plan',
       signal: this.abort.signal,
       onSubagentSession: this.opts.onSubagentSession,
+      ...(def ? { agentPrompt: def.systemPrompt, toolsFilter: def.tools } : {}),
     })
     const summary = await loop.run(prompt)
     this.opts.onSubagentSession?.(sub, 'end')
@@ -460,6 +521,32 @@ const READ_ONLY_TOOLS = new Set([
 
 export function isReadOnlyTool(name: string): boolean {
   return READ_ONLY_TOOLS.has(name)
+}
+
+/** custom subagent names — for unknown-agent error messages */
+function listSubagentNames(workspaceRoot: string): string[] {
+  try {
+    return listSubagents(workspaceRoot).map((a) => a.name)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Detect a presented implementation plan in a plan-mode final answer.
+ * Accepts a "## Plan"-style heading (returns the text under it) or a bare
+ * numbered step list (>= 3 steps) — questions/clarifications don't count.
+ */
+export function extractPlan(text: string): string | undefined {
+  if (!text) return undefined
+  const heading = text.match(/^\s*#{1,3}\s*plan\b[^\n]*\n?/im)
+  if (heading && heading.index !== undefined) {
+    const rest = text.slice(heading.index).trim()
+    return rest.length >= 40 ? rest.slice(0, 16_000) : undefined
+  }
+  const steps = text.match(/^\s*(?:\d+[.)]|-)\s+\S/gm) ?? []
+  if (steps.length >= 3 && text.trim().length >= 80) return text.trim().slice(0, 16_000)
+  return undefined
 }
 
 /** 12345 → "12.3k" */

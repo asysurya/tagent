@@ -153,6 +153,9 @@ export interface LoopSummary {
   error?: string
   /** cumulative tokens across all turns of this run (when the provider reports usage) */
   usage?: TokenUsage
+  /** set when a plan-mode run finished by presenting an implementation plan —
+   *  hosts use it to offer the approve-and-build flow */
+  plan?: string
 }
 
 export interface ToolContext {
@@ -164,11 +167,12 @@ export interface ToolContext {
   signal?: AbortSignal
   /** mutable shared per-session todo list */
   todos: TodoItem[]
-  /** injected by AgentLoop — spawns an isolated subagent */
+  /** injected by AgentLoop — spawns an isolated subagent. agent is "general",
+   *  "explore", or a custom subagent name from .tagent/agents/ */
   spawnSubagent?: (
     description: string,
     prompt: string,
-    agent: 'general' | 'explore',
+    agent: string,
     maxTurns: number,
   ) => Promise<string>
 }
@@ -270,5 +274,11 @@ export interface TagentConfig {
     web?: boolean
     /** web cache window in minutes (default 10) */
     webTtlMin?: number
+  }
+  /** auto-diagnostics — a command (tsc --noEmit, npm run lint, …) run after
+   *  edit turns; failures are fed back so the model self-corrects */
+  diagnostics?: {
+    command?: string
+    timeoutMs?: number
   }
 }
