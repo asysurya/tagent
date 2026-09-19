@@ -17,9 +17,48 @@ export interface Release {
   stable?: boolean
 }
 
-export const LATEST = '0.9.0'
+export const LATEST = '0.10.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.10.0',
+    date: '2026-09-19',
+    title: 'The app TUI — full-screen, shortcut-driven, opencode-style — plus tagent uninstall',
+    summary:
+      'tagent start now opens a real full-screen terminal application: alternate screen, boxed input editor, scrollable transcript, slash-command palette with tab completion, @file mentions, and a ctrl+x quick-action menu so you rarely type. Falls back to the classic readline TUI on tiny terminals or with --classic. tagent uninstall removes everything — command, ~/.tagent data, the repo and/or the binary — each behind its own confirmation.',
+    stable: true,
+    sections: [
+      {
+        name: 'App TUI — a terminal application, not a scrolling log',
+        items: [
+          'Full-screen takeover (alternate screen buffer): header bar with workspace · mode chip · model · session, boxed input editor, status ticker, and a shortcut footer',
+          'ctrl+x quick-action menu: Continue, Explain last change, Run diagnostics, Summarize session, switch mode, new session, pick model, undo checkpoint, skills/subagents/fallback/MCP/plugins — arrow keys over typing',
+          'Slash-command palette: type / to browse every command with descriptions, filter as you type, tab to complete',
+          '@file mentions: type @ to list workspace files, tab to insert — the file rides along into the next message',
+          'Input editor with cursor movement, history (↑/↓), alt+enter newline, ctrl+u/ctrl+w line editing',
+          'Permission prompts and plan approvals render as bordered overlays (arrow keys + enter); tool calls render as compact one-line cards with status and duration',
+          'Scrollable transcript: pgup/pgdn with a new-lines indicator; word-wrapping (CJK-aware) survives terminal resize',
+          'Ctrl+C interrupts a run; pressed twice it exits cleanly and always restores your terminal — even on crashes',
+          'Non-TTY pipes and terminals under 12 rows fall back to the classic readline TUI automatically; --classic forces it',
+        ],
+      },
+      {
+        name: 'tagent uninstall — remove everything, to the roots',
+        items: [
+          'Enumerates what it found first: the tagent command, ~/.tagent (config, credentials, caches), the bun link registration, the source repo, the downloaded binary',
+          'One arrow-key confirmation for the data; the repo and the binary each ask separately (even with --yes) — they may contain your work',
+          'Reports per-workspace .tagent/ folders it deliberately does NOT touch, with a find one-liner to locate them',
+        ],
+      },
+      {
+        name: 'Fixes',
+        items: [
+          'Source installs under proot/UserLAnd: bun --linker=hoisted + post-install verification with automatic self-healing retry (the “Cannot find package socket.io” trap)',
+          'Scripts and bin/tagent are committed with their executable bit — git pull no longer breaks the command with “Permission denied”',
+        ],
+      },
+    ],
+  },
   {
     version: '0.9.0',
     date: '2026-09-19',

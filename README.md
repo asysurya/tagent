@@ -49,7 +49,8 @@ process when you want a browser. Same engine, same sessions, same permissions.
 | 🧩 **MCP servers** | Any stdio [Model Context Protocol](https://modelcontextprotocol.io) server — Context7, filesystem, memory, sequential-thinking or your own. Tools appear as `mcp_<server>_<tool>`, same permission gates (`/mcp` in the TUI, Settings → MCP in the GUI) |
 | 🔌 **Multi-provider** | 40-provider catalog (OpenAI, Anthropic, Google, Groq, DeepSeek, xAI, Mistral, Qwen, Kimi, Zhipu, OpenRouter, …) + custom endpoints — BYOK or env vars. Anthropic prompt caching on by default; live token usage in the TUI done-line |
 | 🧩 **Plugins v2** | Hook into the loop AND contribute custom agent tools (`plugin_<name>_<tool>`) and slash commands — hot-reloading `.mjs` files |
-| 🎛️ **Interactive TUI** | Arrow-key menus everywhere — model picker with type-to-filter, session browser, permission prompts, y/N confirms — like opencode |
+| 🖥️ **App TUI** | Full-screen terminal app (opencode-style): alternate screen, boxed input editor, scrollable transcript, slash-command palette with tab completion, `@file` mentions, `ctrl+x` quick-action menu — arrow keys over typing (`--classic` for the readline TUI, auto-fallback on tiny terminals) |
+| 🎛️ **Classic TUI** | Arrow-key menus everywhere — model picker with type-to-filter, session browser, permission prompts, y/N confirms — like opencode |
 | ⬆️ **Self-update** | Checks for releases on startup and offers an arrow-key y/N update — binary installs swap in place (`tagent update` too) |
 | 🔐 **Permissions** | Per-tool ask/allow/deny, remember once/session/always — every write asks first |
 | 💾 **Checkpoints** | Auto-snapshot before writes; one-click `/undo` |
@@ -63,7 +64,7 @@ process when you want a browser. Same engine, same sessions, same permissions.
 | 🔗 **Share links** | Export any session as a standalone read-only HTML file |
 | 📡 **Relay mode** | Share a session LIVE over the network — a read-only viewer page that streams messages, tool calls and todos as they happen |
 | 🕸️ **Timelines** | Subagent runs persist as sessions — inspect the multi-agent timeline after the fact |
-| 🖥️ **Terminal in GUI** | Run shell commands in the workspace, see output |
+| 🗑️ **Self-uninstall** | `tagent uninstall` removes the command, `~/.tagent` data, the source repo and/or the binary — each behind its own confirmation |
 | 👤 **Guest-first** | Works fully offline & local; accounts are optional |
 
 ## Install
@@ -97,6 +98,13 @@ Verify downloads against `SHA256SUMS.txt` (`sha256sum --check` ·
 [Git for Windows](https://git-scm.com/download/win) for the bash tool
 (`tagent doctor` checks it). Binaries are rebuilt the same way as the releases:
 `bash scripts/build-binaries.sh`.
+
+## Uninstall
+
+`tagent uninstall` removes the `tagent` command, the `~/.tagent` data (config,
+credentials, caches) and — each behind its own confirmation — the source repo
+and/or the downloaded binary. It works the same from a binary install without
+the repo; per-workspace `.tagent/` folders in your projects are left alone.
 
 ## Quick start — from source (Ubuntu / Debian / WSL2)
 

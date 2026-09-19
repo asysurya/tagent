@@ -1,8 +1,12 @@
 {
   "name": "tagent",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": true,
-  "workspaces": ["packages/*", "mini-services/*", "website"],
+  "workspaces": [
+    "packages/*",
+    "mini-services/*",
+    "website"
+  ],
   "scripts": {
     "dev": "next dev -p 3000 2>&1 | tee dev.log",
     "build": "next build && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/",

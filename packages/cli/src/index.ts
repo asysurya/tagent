@@ -17,6 +17,7 @@
  *   tagent share [id] [p]   export a session as standalone HTML
  *   tagent relay [id] [p]   share a session LIVE over the network (read-only)
  *   tagent doctor           environment sanity check
+ *   tagent uninstall         remove everything tagent (confirm per step)
  *   tagent version          print the version
  */
 
@@ -53,9 +54,11 @@ import { GUI_BUNDLE_FILES } from './generated/gui-bundle'
 import { AgentHost } from './host'
 import { createDaemon } from './daemon'
 import { Tui, runPiped } from './tui'
+import { runApp, appCapable } from './tui-app'
 import { lanIPv4s } from './net'
 import { loadRelays, revokeRelay } from '@tagent/core'
 import { selfUpdate, detectInstallKind } from './updater'
+import { uninstall } from './uninstall'
 
 const args = process.argv.slice(2)
 
@@ -210,6 +213,11 @@ function printHelp() {
             check for a newer release and self-update (y/N prompt)
             — binary installs download the matching release asset,
               npm/bun installs run the global upgrade, source runs git pull
+    tagent uninstall [--yes]
+            remove EVERYTHING tagent: the command, ~/.tagent data
+            (config, credentials, caches) and — each behind its own
+            confirmation — the source repo and/or the release binary.
+            per-workspace .tagent/ dirs are left alone (one optional offer)
     tagent version · --check-update
 
   ${'TUI'}
@@ -226,6 +234,7 @@ const command = args[0] && !args[0].startsWith('--') ? args[0] : 'start'
 
 async function init(): Promise<void> {
   switch (command) {
+    case 'uninstall': await mainUninstall(); break // before start — it may delete the repo the TUI would run in
     case 'start': await mainStart(); break
     case 'web': await mainWeb(); break
     case 'run': await mainRun(); break
@@ -292,13 +301,17 @@ async function mainStart(dirArg?: string) {
     })
   }
 
-  const tui = new Tui(host, { workspaceRoot: root, webUrl })
   try {
-    if (process.stdin.isTTY) {
-      await tui.start()
-    } else {
+    if (!process.stdin.isTTY) {
       // piped input: `echo "fix X" | tagent start`
       await runPiped(host)
+    } else if (appCapable() && !has('--classic')) {
+      // full-screen app TUI (opencode-style) — default on capable terminals
+      await runApp(host, { workspaceRoot: root, webUrl })
+    } else {
+      // classic readline TUI — small terminals or --classic
+      const tui = new Tui(host, { workspaceRoot: root, webUrl })
+      await tui.start()
     }
   } finally {
     host.interrupt()
@@ -994,6 +1007,15 @@ async function mainCache() {
   const cfg = loadConfig(root)
   console.log(`  web cache     ${cfg.cache?.web !== false ? green(`on · TTL ${cfg.cache?.webTtlMin ?? 10} min`) : red('off')} (in-memory, per session)\n`)
   console.log(dim(`  tagent cache clear wipes file-state · --all also resets models + update checks\n`))
+}
+
+/* ------------------------------------------------------------------ */
+/* tagent uninstall — remove everything                                */
+/* ------------------------------------------------------------------ */
+
+async function mainUninstall() {
+  await uninstall({ yes: has('--yes') })
+  process.exit(0)
 }
 
 /* ------------------------------------------------------------------ */

@@ -1,6 +1,6 @@
 {
-  "version": "0.9.0",
+  "version": "0.10.0",
   "date": "2026-09-19",
-  "notes": "Plan mode now interviews you until requirements are detailed, then approval writes PRD.md and auto-switches to build. Stack a multi-key provider fallback chain (same provider, different keys — ordered). Custom subagents as .tagent/agents/*.md. Auto-diagnostics feeds lint/tsc errors back to the agent. tagent-native: a Go port for Windows 7+ including 32-bit machines — the download page now auto-offers it to 32-bit/Windows-7 visitors. The web GUI renames and organizes sessions.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.9.0"
+  "notes": "tagent start now opens a real full-screen terminal application: alternate screen, boxed input editor, scrollable transcript, slash-command palette with tab completion, @file mentions, and a ctrl+x quick-action menu so you rarely type. Falls back to the classic readline TUI on tiny terminals or with --classic. tagent uninstall removes everything — command, ~/.tagent data, the repo and/or the binary — each behind its own confirmation.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.10.0"
 }

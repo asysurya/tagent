@@ -1,12 +1,21 @@
 {
   "name": "tagent",
-  "version": "0.9.0",
-  "description": "Tagent — terminal-native coding agent with a web GUI. Loop, subagents, skills, memory, plugins, MEGA + GitHub sync.",
+  "version": "0.10.0",
+  "description": "Tagent \u2014 terminal-native coding agent with a web GUI. Loop, subagents, skills, memory, plugins, MEGA + GitHub sync.",
   "type": "module",
-  "bin": { "tagent": "./src/index.ts" },
+  "bin": {
+    "tagent": "./src/index.ts"
+  },
   "main": "src/index.ts",
   "license": "MIT",
-  "keywords": ["ai", "agent", "coding-agent", "cli", "gui", "tagent"],
+  "keywords": [
+    "ai",
+    "agent",
+    "coding-agent",
+    "cli",
+    "gui",
+    "tagent"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/asysurya/tagent"
