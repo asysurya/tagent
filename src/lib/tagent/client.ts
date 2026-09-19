@@ -1,7 +1,7 @@
 'use client'
 
 import { io, type Socket } from 'socket.io-client'
-import type { HelloPayload } from './types'
+import type { HelloPayload, McpServerStatus, McpTemplate, PluginMeta } from './types'
 
 /**
  * Tagent daemon client.
@@ -43,4 +43,43 @@ export function call<T>(socket: Socket, event: string, payload?: unknown, timeou
 
 export function hello(socket: Socket): Promise<HelloPayload> {
   return call<HelloPayload>(socket, 'hello', {}, 20000)
+}
+
+/* ------------------------------- MCP -------------------------------- */
+
+export function mcpList(socket: Socket): Promise<{ status: McpServerStatus[] }> {
+  return call(socket, 'mcp:list', {}, 10000)
+}
+
+export function mcpEnsure(socket: Socket): Promise<{ status: McpServerStatus[] }> {
+  return call(socket, 'mcp:ensure', {}, 60000)
+}
+
+export function mcpTemplates(socket: Socket): Promise<{ templates: McpTemplate[] }> {
+  return call(socket, 'mcp:templates', {}, 10000)
+}
+
+export function mcpSave(
+  socket: Socket,
+  server: { name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean },
+): Promise<{ ok?: boolean; error?: string; status?: McpServerStatus[] }> {
+  return call(socket, 'mcp:save', server, 90000)
+}
+
+export function mcpRemove(socket: Socket, name: string): Promise<{ ok?: boolean; error?: string }> {
+  return call(socket, 'mcp:remove', { name }, 30000)
+}
+
+export function mcpToggle(socket: Socket, name: string): Promise<{ ok?: boolean; error?: string; enabled?: boolean }> {
+  return call(socket, 'mcp:toggle', { name }, 60000)
+}
+
+/* ----------------------------- plugins ------------------------------ */
+
+export function pluginsList(socket: Socket): Promise<{ plugins: PluginMeta[] }> {
+  return call(socket, 'plugins:list', {}, 10000)
+}
+
+export function pluginScaffold(socket: Socket, name: string): Promise<{ ok?: boolean; file?: string; error?: string }> {
+  return call(socket, 'plugins:scaffold', { name }, 15000)
 }

@@ -9,12 +9,12 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Check, ExternalLink, Eye, EyeOff, Github, Key, Loader2, Plus, RefreshCw, Search, ShieldAlert, Terminal, Globe, Bot, Bone, ScrollText, Coins, MonitorSmartphone, Trash2 } from 'lucide-react'
+import { Check, ExternalLink, Eye, EyeOff, Github, Key, Loader2, Plus, RefreshCw, Search, ShieldAlert, Terminal, Globe, Bot, Bone, ScrollText, Coins, MonitorSmartphone, Trash2, Plug, Puzzle, Power, FileCode2 } from 'lucide-react'
 import { useTagent } from '@/lib/tagent/store'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 
-type Tab = 'providers' | 'permissions' | 'agent' | 'integrations'
+type Tab = 'providers' | 'mcp' | 'permissions' | 'agent' | 'integrations' | 'plugins'
 
 export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const [tab, setTab] = useState<Tab>('providers')
@@ -34,6 +34,8 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
         <div className="flex gap-1 px-5 pt-3 pb-2 border-b border-zinc-800/60">
           {([
             ['providers', 'Providers', Key],
+            ['mcp', 'MCP', Plug],
+            ['plugins', 'Plugins', Puzzle],
             ['permissions', 'Permissions', ShieldAlert],
             ['agent', 'Agent', Bot],
             ['integrations', 'Integrations', Github],
@@ -52,6 +54,8 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
         <ScrollArea className="max-h-[60vh]">
           <div className="p-5 pt-4">
             {tab === 'providers' && <ProvidersTab />}
+            {tab === 'mcp' && <McpTab />}
+            {tab === 'plugins' && <PluginsTab />}
             {tab === 'permissions' && <PermissionsTab />}
             {tab === 'agent' && <AgentTab />}
             {tab === 'integrations' && <IntegrationsTab />}
@@ -61,6 +65,257 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
     </Dialog>
   )
 }
+
+/* ------------------------------------------------------------------ */
+/* MCP — Model Context Protocol servers                                */
+/* ------------------------------------------------------------------ */
+
+function McpTab() {
+  const mcpStatus = useTagent((s) => s.mcpStatus)
+  const mcpTemplates = useTagent((s) => s.mcpTemplates)
+  const mcpRefresh = useTagent((s) => s.mcpRefresh)
+  const mcpAddServer = useTagent((s) => s.mcpAddServer)
+  const mcpRemoveServer = useTagent((s) => s.mcpRemoveServer)
+  const mcpToggleServer = useTagent((s) => s.mcpToggleServer)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [showCustom, setShowCustom] = useState(false)
+  const [form, setForm] = useState({ name: '', command: 'npx', args: '-y @modelcontextprotocol/server-memory' })
+
+  useEffect(() => {
+    if (mcpStatus.length === 0 && mcpTemplates.length === 0) void mcpRefresh()
+  }, [mcpStatus.length, mcpTemplates.length, mcpRefresh])
+
+  const add = async (tpl: (typeof mcpTemplates)[number]) => {
+    setBusy(tpl.name)
+    const r = await mcpAddServer({ name: tpl.name, command: tpl.command, args: tpl.args })
+    setBusy(null)
+    if (r.error) toast.error(r.error)
+    else toast(`${tpl.name} added — starting…`)
+    await mcpRefresh()
+  }
+
+  const addCustom = async () => {
+    if (!form.name.trim() || !form.command.trim()) {
+      toast.error('name and command are required')
+      return
+    }
+    setBusy('__custom')
+    const r = await mcpAddServer({
+      name: form.name.trim(),
+      command: form.command.trim(),
+      args: form.args.trim() ? form.args.trim().split(/\s+/) : undefined,
+    })
+    setBusy(null)
+    if (r.error) toast.error(r.error)
+    else {
+      toast(`${form.name.trim()} added ✓`)
+      setShowCustom(false)
+      setForm({ name: '', command: 'npx', args: '-y @modelcontextprotocol/server-memory' })
+    }
+    await mcpRefresh()
+  }
+
+  const stateBadge = (s: (typeof mcpStatus)[number]) => {
+    if (s.state === 'ready') return <Badge className="text-[9px] h-4 px-1.5 bg-emerald-500/15 text-emerald-400 border-emerald-800/50 hover:bg-emerald-500/15">{s.tools} tools</Badge>
+    if (s.state === 'error') return <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-red-800/60 text-red-400">error</Badge>
+    if (s.state === 'disabled') return <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-zinc-700 text-zinc-500">off</Badge>
+    return <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-amber-800/60 text-amber-400"><Loader2 className="size-2.5 animate-spin" /></Badge>
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <p className="text-xs text-zinc-500 flex-1">
+          Model Context Protocol servers — extra tools for the agent (stdio, local). Tools appear as <code className="font-mono text-[10px] text-orange-300">mcp_&lt;server&gt;_&lt;tool&gt;</code> and go through the same permission gates.
+        </p>
+        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => void mcpRefresh()}>
+          <RefreshCw className="size-3" /> Refresh
+        </Button>
+      </div>
+
+      {/* configured servers */}
+      {mcpStatus.length > 0 && (
+        <div className="space-y-2">
+          {mcpStatus.map((s) => (
+            <div key={s.name} className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
+              <div className="flex items-center gap-2">
+                <Plug className="size-3.5 text-orange-400" />
+                <span className="text-sm text-zinc-200 font-medium">{s.name}</span>
+                {stateBadge(s)}
+                <span className="font-mono text-[10px] text-zinc-600 truncate flex-1">{s.command}</span>
+                <button
+                  className="text-zinc-500 hover:text-orange-300"
+                  title={s.enabled ? 'disable' : 'enable'}
+                  onClick={() => void mcpToggleServer(s.name)}
+                >
+                  <Power className="size-3.5" />
+                </button>
+                <button className="text-zinc-600 hover:text-red-400" title="remove" onClick={() => void mcpRemoveServer(s.name)}>
+                  <Trash2 className="size-3.5" />
+                </button>
+              </div>
+              {s.error && <p className="mt-1.5 text-[11px] text-red-400/80 font-mono">{s.error.slice(0, 120)}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+      {mcpStatus.length === 0 && (
+        <p className="text-xs text-zinc-600">No servers configured — add one below.</p>
+      )}
+
+      {/* templates */}
+      <div>
+        <p className="text-[11px] font-medium text-zinc-400 mb-2">Add a server</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {mcpTemplates.map((t) => (
+            <button
+              key={t.name}
+              disabled={busy === t.name || mcpStatus.some((s) => s.name === t.name)}
+              onClick={() => void add(t)}
+              className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-2.5 text-left transition-colors hover:border-orange-500/40 disabled:opacity-40"
+            >
+              <div className="text-xs text-zinc-200 font-medium flex items-center gap-1.5">
+                {busy === t.name ? <Loader2 className="size-3 animate-spin" /> : <Plus className="size-3" />}
+                {t.label}
+              </div>
+              <p className="mt-0.5 text-[10px] text-zinc-500 line-clamp-2">{t.note}</p>
+              <p className="mt-1 font-mono text-[9px] text-zinc-600 truncate">{t.command} {t.args.join(' ')}</p>
+            </button>
+          ))}
+          <button
+            onClick={() => setShowCustom((v) => !v)}
+            className="rounded-lg border border-dashed border-zinc-700 p-2.5 text-left transition-colors hover:border-orange-500/40"
+          >
+            <div className="text-xs text-zinc-300 font-medium flex items-center gap-1.5">
+              <FileCode2 className="size-3" /> Custom server…
+            </div>
+            <p className="mt-0.5 text-[10px] text-zinc-500">any stdio MCP server — command + args</p>
+          </button>
+        </div>
+      </div>
+
+      {/* custom form */}
+      {showCustom && (
+        <div className="rounded-lg border border-orange-500/30 bg-zinc-950/40 p-3 space-y-2">
+          <div className="grid grid-cols-[1fr_auto] gap-2">
+            <Input
+              className="h-8 text-xs bg-zinc-900 border-zinc-800"
+              placeholder="name (e.g. my-tools)"
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            />
+          </div>
+          <Input
+            className="h-8 text-xs bg-zinc-900 border-zinc-800"
+            placeholder="command (npx / uvx / node / path)"
+            value={form.command}
+            onChange={(e) => setForm((f) => ({ ...f, command: e.target.value }))}
+          />
+          <Input
+            className="h-8 text-xs font-mono bg-zinc-900 border-zinc-800"
+            placeholder="args (space separated)"
+            value={form.args}
+            onChange={(e) => setForm((f) => ({ ...f, args: e.target.value }))}
+          />
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setShowCustom(false)}>Cancel</Button>
+            <Button size="sm" className="h-7 text-xs bg-orange-500 hover:bg-orange-400" disabled={busy === '__custom'} onClick={() => void addCustom()}>
+              {busy === '__custom' ? <Loader2 className="size-3 animate-spin" /> : <Plus className="size-3" />} Add server
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <p className="text-[10px] text-zinc-600">
+        TUI equivalent: <code className="font-mono">/mcp</code> · servers live in <code className="font-mono">.tagent/config.json</code> · every tool call still asks permission by default
+      </p>
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* Plugins                                                             */
+/* ------------------------------------------------------------------ */
+
+function PluginsTab() {
+  const plugins = useTagent((s) => s.plugins)
+  const pluginsRefresh = useTagent((s) => s.pluginsRefresh)
+  const pluginNew = useTagent((s) => s.pluginNew)
+  const [newName, setNewName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const connection = useTagent((s) => s.connection)
+
+  useEffect(() => {
+    if (connection === 'ready') void pluginsRefresh()
+  }, [connection, pluginsRefresh])
+
+  const create = async () => {
+    const name = newName.trim()
+    if (!name) return
+    setBusy(true)
+    const r = await pluginNew(name)
+    setBusy(false)
+    if (r.error) toast.error(r.error)
+    else {
+      toast(`Scaffold created — ${r.file}`)
+      setNewName('')
+    }
+    await pluginsRefresh()
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <p className="text-xs text-zinc-500 flex-1">
+          Plugins are <code className="font-mono text-[10px] text-orange-300">.mjs</code> files exporting hooks, custom agent tools (<code className="font-mono text-[10px] text-orange-300">plugin_&lt;name&gt;_&lt;tool&gt;</code>) and slash commands. They hot-reload every turn.
+        </p>
+        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => void pluginsRefresh()}>
+          <RefreshCw className="size-3" /> Refresh
+        </Button>
+      </div>
+
+      {plugins.length === 0 ? (
+        <p className="text-xs text-zinc-600">No plugins installed yet.</p>
+      ) : (
+        <div className="space-y-2">
+          {plugins.map((p) => (
+            <div key={p.file} className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3 flex items-center gap-2">
+              <Puzzle className="size-3.5 text-orange-400" />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm text-zinc-200 font-medium flex items-center gap-2">
+                  {p.name}
+                  <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-zinc-700 text-zinc-500">{p.scope}</Badge>
+                </div>
+                <p className="font-mono text-[10px] text-zinc-600 truncate">{p.file}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3 space-y-2">
+        <p className="text-[11px] font-medium text-zinc-400">New plugin scaffold</p>
+        <div className="flex gap-2">
+          <Input
+            className="h-8 text-xs bg-zinc-900 border-zinc-800"
+            placeholder="my-plugin"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && void create()}
+          />
+          <Button size="sm" className="h-8 text-xs bg-orange-500 hover:bg-orange-400" disabled={busy || !newName.trim()} onClick={() => void create()}>
+            {busy ? <Loader2 className="size-3 animate-spin" /> : <Plus className="size-3" />} Create
+          </Button>
+        </div>
+        <p className="text-[10px] text-zinc-600">
+          Creates <code className="font-mono">.tagent/plugins/&lt;name&gt;.mjs</code> with hooks + a sample tool + a sample command. Edit it, no restart needed.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
 
 function ProvidersTab() {
   const config = useTagent((s) => s.config)

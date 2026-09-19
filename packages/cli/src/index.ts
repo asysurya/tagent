@@ -53,6 +53,7 @@ import { createDaemon } from './daemon'
 import { Tui, runPiped } from './tui'
 import { lanIPv4s } from './net'
 import { loadRelays, revokeRelay } from '@tagent/core'
+import { selfUpdate, detectInstallKind } from './updater'
 
 const args = process.argv.slice(2)
 
@@ -200,6 +201,10 @@ function printHelp() {
             --host 0.0.0.0 exposes it on your LAN (prints LAN urls)
     tagent doctor
             environment sanity check
+    tagent update
+            check for a newer release and self-update (y/N prompt)
+            — binary installs download the matching release asset,
+              npm/bun installs run the global upgrade, source runs git pull
     tagent version · --check-update
 
   ${'TUI'}
@@ -226,6 +231,7 @@ async function init(): Promise<void> {
     case 'share': await mainShare(); break
     case 'relay': await mainRelay(); break
     case 'doctor': await mainDoctor(); break
+    case 'update': await mainUpdate(); break
     default: {
       // `tagent <path>` — a bare directory arg means "start here"
       const p = resolveWorkspace(command)
@@ -271,12 +277,14 @@ async function mainStart(dirArg?: string) {
     }
   }
 
-  // non-blocking update check
-  void checkUpdate().then((info) => {
-    if (info?.outdated) {
-      console.log(`  ⚠ update available: v${info.latest} (you're on v${info.current}) — ${info.url ?? ''}`)
-    }
-  })
+  // non-blocking update check — pipe mode only (interactive TUI asks with y/N)
+  if (!process.stdout.isTTY) {
+    void checkUpdate().then((info) => {
+      if (info?.outdated) {
+        console.log(`  ⚠ update available: v${info.latest} (you're on v${info.current}) — ${info.url ?? ''}`)
+      }
+    })
+  }
 
   const tui = new Tui(host, { workspaceRoot: root, webUrl })
   try {
@@ -288,6 +296,7 @@ async function mainStart(dirArg?: string) {
     }
   } finally {
     host.interrupt()
+    host.close() // kill MCP servers
     await stopDaemon?.().catch(() => undefined)
   }
 }
@@ -396,8 +405,10 @@ async function mainRun() {
       if (last) console.log(last.content)
       console.error(`— ${summary.turns} turns · ${summary.toolCalls} tool calls · ${summary.finished}`)
     }
+    host.close() // kill MCP servers before exit
     process.exit(summary.finished === 'error' ? 1 : 0)
   } catch (e) {
+    host.close()
     die((e as Error).message)
   }
 }
@@ -840,6 +851,26 @@ async function mainDoctor() {
   // github
   check(!!cfg.github?.token, `github: ${cfg.github?.login ? `connected as ${cfg.github.login}` : 'not connected (tagent auth)'}`)
 
+  // mcp servers
+  const mcpServers = Object.entries(cfg.mcp?.servers ?? {})
+  if (mcpServers.length > 0) {
+    const { McpManager } = await import('@tagent/core')
+    const mgr = new McpManager(cfg.mcp)
+    try {
+      await mgr.ensureStarted()
+      for (const st of mgr.status()) {
+        check(
+          st.state === 'ready',
+          `mcp ${st.name}: ${st.state}${st.state === 'ready' ? ` · ${st.tools} tools` : st.error ? ` — ${st.error.slice(0, 60)}` : ''}`,
+        )
+      }
+    } finally {
+      mgr.close()
+    }
+  } else {
+    results.push([true, 'mcp: none configured — tagent start, then /mcp to add servers'])
+  }
+
   // update
   const upd = await checkUpdate(true).catch(() => undefined)
   if (upd) check(!upd.outdated, `version: v${upd.current}${upd.outdated ? ` → v${upd.latest} available` : ' (up to date)'}`)
@@ -853,6 +884,39 @@ async function mainDoctor() {
   }
   console.log(bad === 0 ? `\n  ${green('all good')}\n` : `\n  ${red(`${bad} issue(s) found`)}\n`)
   process.exit(bad === 0 ? 0 : 1)
+}
+
+/* ------------------------------------------------------------------ */
+/* tagent update — self-update                                          */
+/* ------------------------------------------------------------------ */
+
+async function mainUpdate() {
+  console.log(`\n  ${bold('tagent update')} · install: ${detectInstallKind()} · v${CURRENT_VERSION}\n`)
+  const info = await checkUpdate(true)
+  if (!info) {
+    console.log('  could not reach the update endpoint (offline?) — try again later')
+    process.exit(1)
+  }
+  if (!info.outdated) {
+    console.log(green(`  ✔ up to date — v${info.current}`))
+    process.exit(0)
+  }
+  console.log(`  update available: v${info.current} → ${bold('v' + info.latest)}`)
+  if (info.notes) console.log(dim(`  ${info.notes}`))
+  if (info.url) console.log(dim(`  ${info.url}`))
+  const yes = await new Promise<boolean>((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+    rl.question('\n  update now? [y/N] ', (a: string) => {
+      rl.close()
+      resolve(a.trim().toLowerCase().startsWith('y'))
+    })
+  })
+  if (!yes) {
+    console.log(dim('  later — the TUI also offers this on startup when a release is out'))
+    process.exit(0)
+  }
+  const ok = await selfUpdate(info)
+  process.exit(ok ? 0 : 1)
 }
 
 /* ------------------------------------------------------------------ */

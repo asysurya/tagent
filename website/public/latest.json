@@ -1,6 +1,6 @@
 {
-  "version": "0.7.0",
+  "version": "0.8.0",
   "date": "2026-09-19",
-  "notes": "Tagent now ships as one self-contained executable per platform — Windows x64/ARM64, Linux x64/ARM64, macOS Intel/Apple silicon. The web GUI is embedded inside the binary. Download it, run it, that is the whole install.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.7.0"
+  "notes": "Tagent speaks the Model Context Protocol — connect any stdio MCP server and its tools become native. Plugins now contribute agent tools and slash commands. The TUI got opencode-style arrow-key menus everywhere, and Tagent offers to update itself on startup.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.8.0"
 }

@@ -33,6 +33,8 @@ export function defaultConfig(): TagentConfig {
         memory: 'allow',
         load_skill: 'allow',
         browser: 'ask',
+        mcp: 'ask',
+        plugin: 'ask',
       },
     },
     tools: { bash: true, browser: false },
@@ -44,6 +46,7 @@ export function defaultConfig(): TagentConfig {
     worklog: { enabled: true },
     caveman: false,
     webGui: false,
+    mcp: { servers: {} },
   }
 }
 

@@ -49,8 +49,13 @@ export {
   type StorageAdapter,
 } from './storage'
 export {
-  loadPlugins, emitPluginEvent, listPluginFiles, scaffoldPlugin,
-  PLUGIN_API_VERSION, type TagentPlugin, type PluginHooks,
+  loadPlugins, emitPluginEvent, listPluginFiles, scaffoldPlugin, pluginMeta,
+  pluginToolDefinitions, PLUGIN_API_VERSION,
+  type TagentPlugin, type PluginHooks, type PluginTool, type PluginCommand,
 } from './plugins'
+export {
+  McpManager, normalizeMcpServer, MCP_TEMPLATES,
+  type McpServerStatus, mcpServersFromConfig,
+} from './mcp'
 export * from './util'
 export { CURRENT_VERSION, checkUpdate, isNewer, type UpdateInfo } from './version'

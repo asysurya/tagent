@@ -40,12 +40,15 @@ process when you want a browser. Same engine, same sessions, same permissions.
 |---|---|
 | 🔁 **Agentic loop** | Prompt → model → tool actions → results → repeat, with max-turns, interrupt & steer |
 | 🤖 **Subagents** | `task` tool spawns isolated agents (read-only `explore` or `general`) with their own budget |
+| 🧩 **MCP servers** | Any stdio [Model Context Protocol](https://modelcontextprotocol.io) server — Context7, filesystem, memory, sequential-thinking or your own. Tools appear as `mcp_<server>_<tool>`, same permission gates (`/mcp` in the TUI, Settings → MCP in the GUI) |
+| 🔌 **Multi-provider** | 40-provider catalog (OpenAI, Anthropic, Google, Groq, DeepSeek, xAI, Mistral, Qwen, Kimi, Zhipu, OpenRouter, …) + custom endpoints — BYOK or env vars |
+| 🧩 **Plugins v2** | Hook into the loop AND contribute custom agent tools (`plugin_<name>_<tool>`) and slash commands — hot-reloading `.mjs` files |
+| 🎛️ **Interactive TUI** | Arrow-key menus everywhere — model picker with type-to-filter, session browser, permission prompts, y/N confirms — like opencode |
+| ⬆️ **Self-update** | Checks for releases on startup and offers an arrow-key y/N update — binary installs swap in place (`tagent update` too) |
 | 🔐 **Permissions** | Per-tool ask/allow/deny, remember once/session/always — every write asks first |
 | 💾 **Checkpoints** | Auto-snapshot before writes; one-click `/undo` |
 | 🧠 **Memory** | `AGENTS.md` (global + workspace) + durable facts, injected into every system prompt |
 | 📚 **Skills** | `SKILL.md` playbooks with progressive disclosure (name+description in prompt, full body on demand) |
-| 🔌 **Multi-provider** | 40-provider catalog (OpenAI, Anthropic, Google, Groq, DeepSeek, xAI, Mistral, Qwen, Kimi, Zhipu, OpenRouter, …) + custom endpoints — BYOK or env vars |
-| 🧩 **Plugins** | Hook into session start, tool calls, results, agent done |
 | 🌐 **Web tools** | `web_fetch`, `ddg_search` (no API key), `browser` (Playwright-based e2e signal — optional) |
 | 🗄️ **Storage adapters** | Local today, MEGA.nz (E2E-encrypted snapshots & memory) implemented as an experimental adapter |
 | 🐙 **GitHub** | PAT or device-flow auth (`tagent auth`) → auto private repo + one-click workspace push |
@@ -60,24 +63,24 @@ process when you want a browser. Same engine, same sessions, same permissions.
 ## Install — single-file binary (any OS)
 
 Grab the file for your platform from [releases](https://github.com/asysurya/tagent/releases/latest)
-(or the website's [download page](https://tagent-web-sable.vercel.app/download), which auto-detects it)
+(or the website's [download page](https://tagent-website.vercel.app/download), which auto-detects it)
 and run it. No runtime, no clone, no setup — the web GUI is embedded in the file
 and self-extracts on first launch:
 
 ```bash
 # linux / macOS
-chmod +x tagent-v0.7.0-linux-x64
-./tagent-v0.7.0-linux-x64 start ~/my-project
+chmod +x tagent-v0.8.0-linux-x64
+./tagent-v0.8.0-linux-x64 start ~/my-project
 ```
 
 | File | Platform |
 | --- | --- |
-| `tagent-v0.7.0-windows-x64.exe` | Windows 10+ · 64-bit |
-| `tagent-v0.7.0-windows-arm64.exe` | Windows 10+ · ARM64 |
-| `tagent-v0.7.0-linux-x64` | Linux x86-64 (glibc) |
-| `tagent-v0.7.0-linux-arm64` | Linux ARM64 (Pi 5, ARM servers) |
-| `tagent-v0.7.0-macos-x64` | macOS Intel |
-| `tagent-v0.7.0-macos-arm64` | macOS Apple silicon |
+| `tagent-v0.8.0-windows-x64.exe` | Windows 10+ · 64-bit |
+| `tagent-v0.8.0-windows-arm64.exe` | Windows 10+ · ARM64 |
+| `tagent-v0.8.0-linux-x64` | Linux x86-64 (glibc) |
+| `tagent-v0.8.0-linux-arm64` | Linux ARM64 (Pi 5, ARM servers) |
+| `tagent-v0.8.0-macos-x64` | macOS Intel |
+| `tagent-v0.8.0-macos-arm64` | macOS Apple silicon |
 
 Verify downloads against `SHA256SUMS.txt` (`sha256sum --check` ·
 `certutil -hashfile <file> SHA256` on Windows). Windows needs
@@ -225,7 +228,8 @@ action blocks ends the run. See `packages/core/src/system-prompt.ts`.
 ## Tools
 
 `read_file` · `list_files` · `grep` · `write_file` · `edit_file` · `bash` (blocklist-guarded) ·
-`web_fetch` · `ddg_search` · `task` (subagents) · `todowrite` · `memory` · `load_skill` · `browser` (optional Playwright)
+`web_fetch` · `ddg_search` · `task` (subagents) · `todowrite` · `memory` · `load_skill` · `browser` (optional Playwright) ·
+`mcp_<server>_<tool>` (every connected MCP server) · `plugin_<name>_<tool>` (every loaded plugin)
 
 All file tools are **jailed to the workspace root** — traversal outside is rejected.
 
@@ -288,6 +292,61 @@ Live model discovery (`GET /models`) fills every pickable list — GUI button, T
 `/model refresh`, CLI `tagent models --refresh`, plus a background warm-up when the
 daemon starts. Results are cached in `~/.tagent/models.json`.
 
+## MCP servers — Model Context Protocol
+
+Tagent speaks MCP over stdio — connect any server and its tools become agent-callable
+natives (named `mcp_<server>_<tool>`), going through the same permission gates as
+the built-ins.
+
+```sh
+# interactive manager (status, templates, custom, toggle, remove)
+#   in the TUI: /mcp        · in the GUI: Settings → MCP
+
+# or edit .tagent/config.json directly:
+```
+
+```jsonc
+"mcp": { "servers": {
+  "context7":   { "command": "npx", "args": ["-y", "@upstash/context7-mcp"] },
+  "memory":     { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-memory"] },
+  "my-server":  { "command": "node", "args": ["./my-mcp.js"], "env": { "API_KEY": "…" }, "enabled": true }
+}}
+```
+
+Permissions: `/allow mcp_<server>` (per server), `mcp` (catch-all), or the default ask.
+`tagent doctor` starts every configured server and reports per-server health.
+
+## Plugins — tools, commands, hooks
+
+Drop a `.mjs` file into `.tagent/plugins/` (workspace) or `~/.tagent/plugins/` (global) —
+it hot-reloads every turn. Scaffold one with `/plugins` in the TUI or Settings → Plugins:
+
+```js
+export const name = 'my-plugin'
+export const version = '1.0.0'
+
+// custom agent tool — callable as plugin_my-plugin_weather
+export const tools = [{
+  name: 'weather',
+  description: 'get the weather for a city',
+  risk: 'low',
+  params: { city: 'string — city name' },
+  async run({ city }) { return `sunny in ${city}` },
+}]
+
+// custom slash command — /hello-world <args>
+export const commands = [{
+  name: 'hello-world',
+  async run({ args }) { return 'hi ' + args },
+}]
+
+// lifecycle hooks (optional)
+export const hooks = {
+  onToolCall({ tool, input }) { /* audit log, … */ },
+  onAgentDone({ summary }) { /* notify, … */ },
+}
+```
+
 ## Roadmap
 
 - [x] Streaming tokens — SSE for OpenAI-compatible, Anthropic, Gemini, Z.ai (v0.3.0)
@@ -302,6 +361,11 @@ daemon starts. Results are cached in `~/.tagent/models.json`.
 - [x] Multi-agent timelines (v0.4.0)
 - [x] Relay mode — share a session with another person over the network (v0.5.0)
 - [x] Provider catalog — 40 providers, env-var keys, custom endpoints, live model discovery (v0.6.0)
+- [x] Single-file binaries — download, run, done; embedded web GUI (v0.7.0)
+- [x] MCP servers — Model Context Protocol over stdio, same permission gates (v0.8.0)
+- [x] Plugins v2 — custom tools + slash commands, hot-reload (v0.8.0)
+- [x] Interactive TUI — arrow-key menus, type-to-filter model picker (v0.8.0)
+- [x] Self-update — y/N prompt on startup, in-place binary swap (v0.8.0)
 
 Ideas for the next versions (unordered, unpromised):
 
@@ -317,6 +381,7 @@ changelog lives in [`website/src/data/releases.ts`](website/src/data/releases.ts
 
 ```bash
 tagent version            # running version
+tagent update             # check + self-update (y/N) — binary, npm, bun or source
 tagent --check-update     # force an update check (exit 2 when outdated)
 # endpoint override for self-hosted mirrors:
 export TAGENT_UPDATE_URL=https://your-host/latest.json

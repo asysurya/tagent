@@ -57,6 +57,8 @@ export interface AgentLoopOptions {
   onSessionUpdate?: (session: SessionData) => void
   /** timeline support — the host persists subagent sessions through this */
   onSubagentSession?: (sub: SessionData, phase: 'start' | 'end') => void
+  /** extra tools injected by the host (MCP servers, plugins, …) */
+  extraTools?: ToolDefinition[]
 }
 
 interface ParsedAction {
@@ -77,7 +79,10 @@ export class AgentLoop {
   readonly ctx: ToolContext
 
   constructor(private opts: AgentLoopOptions) {
-    this.tools = buildToolset({ readOnly: opts.readOnly, depth: opts.depth ?? 0, config: opts.config })
+    this.tools = [
+      ...buildToolset({ readOnly: opts.readOnly, depth: opts.depth ?? 0, config: opts.config }),
+      ...(opts.readOnly ? [] : (opts.extraTools ?? [])),
+    ]
     this.ctx = {
       workspaceRoot: opts.session.workspaceId,
       sessionId: opts.session.id,

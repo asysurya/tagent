@@ -107,12 +107,37 @@ tagent web ~/my-project --no-open`}</Code>
         <H2 id="usage">Using the agent</H2>
         <ul className="mt-4 space-y-2 text-zinc-300">
           <li><b>Chat</b> — describe the task; the loop plans, calls tools, and reports back. Interrupt any time; steer mid-run.</li>
-          <li><b>Permissions</b> — every risky action (bash, write, edit) asks first. Choose once / session / always.</li>
+          <li><b>Permissions</b> — every risky action (bash, write, edit, MCP tools) asks first — an arrow-key menu in the TUI, a dialog in the GUI. Choose once / session / always.</li>
           <li><b>Checkpoints</b> — auto-snapshots before writes; <span className="font-mono text-orange-300">/undo</span> restores.</li>
           <li><b>Plan mode</b> — read-only exploration before committing to changes.</li>
           <li><b>Subagents</b> — &quot;spawn a subagent to review X&quot; runs research in an isolated context.</li>
-          <li><b>Slash commands</b> — <span className="font-mono text-orange-300">/new /plan /build /undo /skills</span> and plugin-defined ones.</li>
+          <li><b>Slash commands</b> — <span className="font-mono text-orange-300">/model /mcp /plugins /sessions /undo /update</span> and plugin-defined ones. Menus are interactive: arrow keys + Enter, type to filter.</li>
         </ul>
+
+        <H2 id="mcp">MCP servers</H2>
+        <p className="mt-4 text-zinc-300">
+          Tagent speaks the <a className="text-orange-400 hover:text-orange-300" href="https://modelcontextprotocol.io" target="_blank" rel="noreferrer">Model Context Protocol</a> over
+          stdio. Connect any server — Context7 for up-to-date library docs, filesystem,
+          memory, sequential-thinking or your own — and its tools become agent-callable
+          natives named <code className="rounded bg-zinc-800 px-1 text-xs">mcp_&lt;server&gt;_&lt;tool&gt;</code> behind the same permission gates.
+        </p>
+        <div className="mt-4">
+          <Code>{`# interactive manager — status, one-click templates, custom servers
+#   TUI: /mcp                     GUI: Settings → MCP
+
+# or .tagent/config.json:
+"mcp": { "servers": {
+  "context7": { "command": "npx", "args": ["-y", "@upstash/context7-mcp"] }
+}}`}</Code>
+        </div>
+
+        <H2 id="plugins">Plugins</H2>
+        <p className="mt-4 text-zinc-300">
+          A plugin is a hot-reloading <code className="rounded bg-zinc-800 px-1 text-xs">.mjs</code> file in
+          <code className="rounded bg-zinc-800 px-1 text-xs">.tagent/plugins/</code> exporting any mix of: lifecycle hooks, custom agent
+          tools (<code className="rounded bg-zinc-800 px-1 text-xs">plugin_&lt;name&gt;_&lt;tool&gt;</code>) and custom slash commands. Scaffold one from
+          <span className="font-mono text-orange-300">/plugins</span> in the TUI or Settings → Plugins in the GUI.
+        </p>
 
         <H2 id="config">Configuration</H2>
         <p className="mt-4 text-zinc-300">
@@ -133,12 +158,16 @@ tagent web ~/my-project --no-open`}</Code>
 
         <H2 id="update">Updates &amp; version check</H2>
         <p className="mt-4 text-zinc-300">
-          On startup the daemon checks for a newer release (at most once a day, result cached
-          locally). An outdated Tagent <b>prints a warning but keeps working</b> — nothing breaks,
-          nothing locks. Checks are silent when offline.
+          On startup the TUI checks for a newer release (at most once a day, result cached
+          locally) and, when one exists, offers an <b>arrow-key y/N update prompt</b>. Answer
+          yes and Tagent updates itself in place — binaries download the matching release
+          asset and swap it, npm/bun installs run the global upgrade, source checkouts
+          <code className="rounded bg-zinc-800 px-1 text-xs">git pull</code>. An outdated Tagent that declines the update <b>keeps working
+          fully</b> — nothing breaks, nothing locks. Checks are silent when offline.
         </p>
         <div className="mt-4">
-          <Code>{`tagent --version         # print the running version
+          <Code>{`tagent update            # check + self-update (y/N) from the shell
+tagent --version         # print the running version
 tagent --check-update   # force a check right now
 # override the endpoint (e.g. self-hosted mirror):
 export TAGENT_UPDATE_URL=https://your-host/latest.json`}</Code>

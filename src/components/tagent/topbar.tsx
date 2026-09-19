@@ -57,9 +57,8 @@ export function TopBar() {
   return (
     <header className="h-12 shrink-0 flex items-center gap-2 px-3 border-b border-zinc-800/60 bg-zinc-950/80 backdrop-blur">
       <div className="flex items-center gap-2 font-semibold tracking-tight">
-        <span className="grid place-items-center size-6 rounded-md bg-orange-500 text-zinc-950">
-          <TerminalSquare className="size-4" />
-        </span>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/logo.svg" alt="Tagent" className="h-6 w-6 rounded-[6px]" width={24} height={24} />
         <span className="text-zinc-100">tagent</span>
       </div>
 

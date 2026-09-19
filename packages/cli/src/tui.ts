@@ -19,6 +19,8 @@ import {
 
 import { AgentHost } from './host'
 import type { DaemonHandle } from './daemon'
+import { select, confirm, type SelectItem } from './select'
+import { startupUpdatePrompt, selfUpdate } from './updater'
 
 /**
  * The TUI — Tagent's primary interface.
@@ -26,7 +28,8 @@ import type { DaemonHandle } from './daemon'
  * Pure stdin/stdout with a sprinkle of ANSI: it runs identically on a desktop
  * terminal, over SSH, and on a phone (Termux / UserLAnd). Every feature the
  * web GUI has is reachable here through slash commands; permissions prompt
- * inline; tokens stream live.
+ * inline; tokens stream live; menus are interactive — arrow keys + Enter,
+ * like opencode.
  *
  * Rendering model (keeps readline happy):
  *  - completed lines are APPENDED and never redrawn
@@ -34,6 +37,7 @@ import type { DaemonHandle } from './daemon'
  *    streamed partial line, or nothing
  *  - println() clears the ticker row, appends the line, re-renders the prompt
  *  - while a permission question is pending, agent output is buffered
+ *  - select() menus pause readline, take raw stdin, restore cleanly
  */
 
 /* ------------------------------------------------------------------ */
@@ -134,6 +138,9 @@ export class Tui {
     this.wireHost()
     this.wireInput()
 
+    // update check — arrow-key y/N, right after the banner
+    await startupUpdatePrompt()
+
     // the most recent session is one /open away — keep its todos loaded
     const sessions = this.host.listSessions()
     if (sessions.length > 0) this.host.loadSession(sessions[0].id)
@@ -148,11 +155,16 @@ export class Tui {
 
   private banner() {
     const cfg = this.host.sanitizeConfig()
+    const mcpStatus = cfg.mcpStatus as { state: string; tools: number }[] | undefined
+    const mcpReady = (mcpStatus ?? []).filter((s) => s.state === 'ready')
     const lines = [
       '',
       bold(cyan(`  Tagent v${CURRENT_VERSION}`)) + dim('  ·  terminal-native coding agent'),
       dim(`  workspace  ${this.host.root}`),
       dim(`  model      ${cfg.defaultModel} (${cfg.defaultProvider}) · mode: build · caveman: ${cfg.caveman ? 'on 🦴' : 'off'}`),
+      mcpReady.length
+        ? dim(`  mcp        ${mcpReady.length} server(s) connected · ${mcpReady.reduce((n, s) => n + s.tools, 0)} tools (/mcp)`)
+        : dim('  mcp        none — /mcp adds Model Context Protocol servers'),
       this.webUrl
         ? dim(`  web gui    ${this.webUrl} (sharing this session)`)
         : dim('  web gui    off — /webgui on or start with --web-gui'),
@@ -263,12 +275,20 @@ export class Tui {
     this.println('')
     this.println(`  ${bold('┌ permission needed')} ${dim(`· risk: ${risk}`)}`)
     this.println(`  │ ${bold(req.tool)} ${dim(summarizeInput(req))}`)
-    this.println(`  ${dim('└')} [y] allow · [n] deny · [a] always · [s] this session`)
 
-    const answer = await this.ask('  ❯ ')
-    const a = answer.trim().toLowerCase()
-    const approved = a === '' || a === 'y' || a === 'a' || a === 's'
-    const remember = a === 'a' ? 'always' : a === 's' ? 'session' : 'once'
+    const choice = await this.pick(
+      [
+        { label: 'allow once', hint: 'this call only', value: 'once' },
+        { label: 'always allow', hint: `remember \`${req.tool}\``, value: 'always' },
+        { label: 'allow this session', hint: 'until Tagent exits', value: 'session' },
+        { label: 'deny', hint: 'stop this call', value: 'deny' },
+      ],
+      '└ allow?',
+      { footer: 'a=always · s=session · y=once · n=deny' },
+    )
+    const a = choice ?? 'deny'
+    const approved = a === 'once' || a === 'always' || a === 'session'
+    const remember = a === 'always' ? 'always' : a === 'session' ? 'session' : 'once'
     this.host.permissionRespond(req.id, approved, remember)
     this.permissionFrozen = false
     this.flushFrozen()
@@ -405,7 +425,9 @@ export class Tui {
     })
     this.rl.on('close', () => {
       this.writeRaw('\n')
-      process.exit(0)
+      // give stdout a beat to flush — process.exit() can drop pending pty/pipe
+      // writes and swallow the output of the command right before /exit
+      setTimeout(() => process.exit(0), 100)
     })
   }
 
@@ -442,6 +464,51 @@ export class Tui {
     return new Promise((resolve) => {
       this.rl.question(prompt, (answer) => resolve(answer ?? ''))
     })
+  }
+
+  /* ---------------- interactive menus (arrow keys) ---------------- */
+
+  /** drop to a fresh row so a menu can draw under the prompt */
+  private freshRow() {
+    this.clearTickerRow()
+    this.writeRaw('\n')
+  }
+
+  /**
+   * The interactive picker — pauses readline, takes raw stdin, restores.
+   * Returns undefined when the user hits Esc / Ctrl+C (never exits the app).
+   */
+  private async pick<T>(
+    items: SelectItem<T>[],
+    title: string,
+    opts: { selected?: number; filterable?: boolean; footer?: string; maxVisible?: number } = {},
+  ): Promise<T | undefined> {
+    if (items.length === 0) return undefined
+    this.freshRow()
+    this.rl.pause()
+    try {
+      return await select<T>({
+        title,
+        items,
+        selected: opts.selected,
+        filterable: opts.filterable,
+        footer: opts.footer,
+        maxVisible: opts.maxVisible,
+      })
+    } finally {
+      this.rl.resume()
+    }
+  }
+
+  /** arrow-key y/n — used for quick confirmations */
+  private async askYesNo(question: string, def = false): Promise<boolean | undefined> {
+    this.freshRow()
+    this.rl.pause()
+    try {
+      return await confirm(question, { default: def, cancelable: true })
+    } finally {
+      this.rl.resume()
+    }
   }
 
   /** hidden input for secrets (PAT / API keys) */
@@ -503,14 +570,15 @@ export class Tui {
         const rows: [string, string][] = [
           ['sessions · new [plan] · open <id> · delete <id>', 'session management'],
           ['share [id] · relay [id|list|stop <code>] · timeline', 'HTML export · live share · subagent runs'],
-          ['mode [plan|build] · model [p[:m]]', 'planning vs build · pick llm'],
+          ['mode [plan|build] · model [p[:m]]', 'planning vs build · pick llm (arrow keys)'],
+          ['mcp · plugins', 'Model Context Protocol servers · plugin manager'],
           ['caveman [on|off] · worklog [on|off] · maxturns <n>', 'agent behavior'],
           ['todos · log [n]', 'live plan · journal tail'],
           ['apikey <provider> · permissions · allow/deny/ask <tool>', 'access'],
           ['files [path] · read <f> · grep <pat> · sh <cmd>', 'workspace'],
           ['auth · push [msg]', 'GitHub'],
           ['checkpoints · undo · memory · skills · skill <n>', 'memory & history'],
-          ['stats · settings · webgui [on|off]', 'info'],
+          ['stats · settings · update · webgui [on|off]', 'info · self-update'],
           ['stop · clear · exit', 'run control'],
         ]
         for (const [k, v] of rows) this.println(`    ${bold('/' + k.padEnd(46))} ${dim(v)}`)
@@ -519,7 +587,18 @@ export class Tui {
       }
 
       case 'new': {
-        const mode = arg === 'plan' ? 'plan' : 'build'
+        let mode = arg === 'plan' ? 'plan' : arg === 'build' ? 'build' : undefined
+        if (!mode) {
+          const pick = await this.pick(
+            [
+              { label: 'build', hint: 'the agent can write files & run commands', value: 'build' },
+              { label: 'plan', hint: 'read-only — investigate, then propose', value: 'plan' },
+            ],
+            'new session — mode',
+          )
+          if (!pick) return this.println(dim('  cancelled'))
+          mode = pick
+        }
         const s = host.newSession(mode)
         this.println(green(`  ✔ new ${mode} session · ${s.id}`))
         return
@@ -537,7 +616,25 @@ export class Tui {
       }
 
       case 'open': {
-        if (!arg) return this.println(dim('  usage: /open <session-id-prefix>'))
+        if (!arg) {
+          const list = host.listSessions()
+          if (list.length === 0) return this.println(dim('  no sessions yet — just start typing'))
+          const id = await this.pick(
+            list.slice(0, 50).map((s) => ({
+              label: s.title,
+              hint: `${s.mode} · ${s.messageCount} msgs · ${fmtWhen(s.updatedAt)}`,
+              detail: `id ${s.id.slice(0, 8)}${host.session?.id === s.id ? ' · active' : ''}`,
+              value: s.id,
+            })),
+            'open session',
+            { filterable: true },
+          )
+          if (!id) return this.println(dim('  cancelled'))
+          const s = host.listSessions().find((x) => x.id === id)
+          const loaded = host.loadSession(id)
+          this.println(green(`  ✔ ${loaded?.title} · ${loaded?.messageCount} messages`))
+          return
+        }
         const s = host.listSessions().find((x) => x.id.startsWith(arg))
         if (!s) return this.println(red(`  no session starts with "${arg}"`))
         const loaded = host.loadSession(s.id)
@@ -617,15 +714,32 @@ export class Tui {
         if (arg === 'plan' || arg === 'build') {
           host.setSessionMode(arg)
           this.println(green(`  ✔ mode: ${arg}`))
-        } else {
-          const cur = host.session?.mode ?? 'build'
-          this.println(`  mode: ${bold(cur)} ${dim('— /mode plan or /mode build')}`)
+          return
         }
+        const pick = await this.pick(
+          [
+            { label: 'build', hint: 'write files, run commands, finish the job', value: 'build' },
+            { label: 'plan', hint: 'read-only — investigate & propose', value: 'plan' },
+          ],
+          'mode',
+          { selected: (host.session?.mode ?? 'build') === 'build' ? 0 : 1 },
+        )
+        if (!pick) return this.println(dim('  cancelled'))
+        host.setSessionMode(pick)
+        this.println(green(`  ✔ mode: ${pick}`))
         return
       }
 
       case 'model': {
-        if (!arg) {
+        if (arg === 'refresh' || arg === 'discover') {
+          this.println(dim('  discovering models (GET /models on every provider with a key)…'))
+          const r = await host.providersRefresh()
+          this.println(green(`  ✔ ${r.updated.length} provider(s) refreshed${r.failed.length ? red(` · ${r.failed.length} unreachable`) : ''}`))
+          if (r.updated.length) this.println(dim(`    ${r.updated.join(', ')}`))
+          return
+        }
+        // /model list — the flat catalog view
+        if (arg === 'list' || arg === 'catalog') {
           const infos = listProviderInfos(host.cfg)
           const ready = infos.filter((p) => !p.needsKey || p.hasKey)
           const locked = infos.filter((p) => p.needsKey && !p.hasKey)
@@ -637,14 +751,61 @@ export class Tui {
             this.println(`  ${mark} ${bold(p.id.padEnd(16))} ${key} ${dim(p.models.map((m) => m.id).slice(0, 4).join(', '))}${p.models.length > 4 ? dim(` +${p.models.length - 4}`) : ''}`)
           }
           if (locked.length) this.println(dim(`  ${locked.length} more in the catalog (add a key): ${locked.slice(0, 8).map((p) => p.id).join(', ')}${locked.length > 8 ? '…' : ''}`))
-          this.println(dim('  set: /model <provider>/<model> · search: /model <text> · /model refresh'))
+          this.println(dim('  interactive: /model · set: /model <provider>/<model> · search: /model <text>'))
           return
         }
-        if (arg === 'refresh' || arg === 'discover') {
-          this.println(dim('  discovering models (GET /models on every provider with a key)…'))
-          const r = await host.providersRefresh()
-          this.println(green(`  ✔ ${r.updated.length} provider(s) refreshed${r.failed.length ? red(` · ${r.failed.length} unreachable`) : ''}`))
-          if (r.updated.length) this.println(dim(`    ${r.updated.join(', ')}`))
+        // no arg → the interactive picker (providers, then models)
+        if (!arg) {
+          const infos = listProviderInfos(host.cfg)
+          if (infos.length === 0) return this.println(red('  no providers configured'))
+          const ready = infos.filter((p) => !p.needsKey || p.hasKey)
+          const locked = infos.filter((p) => p.needsKey && !p.hasKey)
+          const provItems: SelectItem<string>[] = [
+            ...ready.map((p) => ({
+              label: p.label,
+              hint: `${!p.needsKey ? 'free' : 'key ✓'} · ${p.models.length} models`,
+              detail: `${p.id}${p.id === host.cfg.defaultProvider ? ' · current' : ''}`,
+              value: p.id,
+            })),
+            ...locked.map((p) => ({
+              label: p.label,
+              hint: 'needs key',
+              detail: `${p.id} — add a key to unlock`,
+              value: p.id,
+              disabled: false,
+            })),
+          ]
+          const cur = provItems.findIndex((i) => i.value === host.cfg.defaultProvider)
+          const provId = await this.pick(provItems, 'provider', { filterable: true, selected: cur >= 0 ? cur : 0 })
+          if (!provId) return this.println(dim('  cancelled'))
+          const info = infos.find((p) => p.id === provId)
+          if (!info) return this.println(red(`  unknown provider "${provId}"`))
+          if (info.needsKey && !info.hasKey) {
+            const setKey = await this.askYesNo(`  ${bold(provId)} needs an API key — add it now?`, true)
+            if (!setKey) return this.println(dim(`  cancelled — /apikey ${provId} any time`))
+            const key = (await this.askHidden('  key ❯ ')).trim()
+            if (!key) return this.println(dim('  cancelled — empty key'))
+            host.settingsSave({ apiKey: { provider: provId, key } })
+            this.println(green(`  ✔ key saved for ${provId}`))
+          }
+          if (info.models.length === 0) {
+            const wantRefresh = await this.askYesNo(`  no cached models for ${provId} — discover now?`, true)
+            if (!wantRefresh) return this.println(dim('  cancelled — try /model refresh later'))
+            this.println(dim('  discovering models…'))
+            await host.providersRefresh()
+            const again = listProviderInfos(host.cfg).find((p) => p.id === provId)
+            if (!again || again.models.length === 0) return this.println(red(`  discovery found nothing for ${provId}`))
+            info.models = again.models
+          }
+          const mcur = info.models.findIndex((m) => m.id === host.cfg.defaultModel && provId === host.cfg.defaultProvider)
+          const modelId = await this.pick(
+            info.models.map((m) => ({ label: m.id, hint: m.label, value: m.id })),
+            `${provId} — model`,
+            { filterable: true, selected: mcur >= 0 ? mcur : 0 },
+          )
+          if (!modelId) return this.println(dim('  cancelled'))
+          host.settingsSave({ defaultProvider: provId, defaultModel: modelId })
+          this.println(green(`  ✔ ${provId} · ${modelId}`))
           return
         }
         // "provider/model" (opencode style) or legacy "provider:model"
@@ -740,10 +901,50 @@ export class Tui {
       }
 
       case 'apikey': {
-        if (!arg) return this.println(dim('  usage: /apikey <provider> — see /model for ids'))
+        let prov = arg
+        if (!prov) {
+          const infos = listProviderInfos(host.cfg)
+          const provs = infos.filter((p) => p.needsKey)
+          if (provs.length === 0) return this.println(dim('  every configured provider is keyless'))
+          prov = await this.pick(
+            provs.map((p) => ({
+              label: p.label,
+              hint: p.hasKey ? 'key ✓' : 'no key',
+              detail: p.id,
+              value: p.id,
+            })),
+            'provider — api key',
+            { filterable: true },
+          )
+          if (!prov) return this.println(dim('  cancelled'))
+        }
         const key = await this.askHidden('  key ❯ ')
-        host.settingsSave({ apiKey: { provider: arg, key } })
-        this.println(green(`  ✔ key saved for ${arg}`))
+        host.settingsSave({ apiKey: { provider: prov, key } })
+        this.println(green(`  ✔ key saved for ${prov}`))
+        return
+      }
+
+      case 'mcp': {
+        await this.mcpManager(arg)
+        return
+      }
+
+      case 'plugins': case 'plugin': {
+        await this.pluginManager(arg)
+        return
+      }
+
+      case 'update': {
+        this.println(dim('  checking for updates…'))
+        const { checkUpdate } = await import('@tagent/core')
+        const info = await checkUpdate(true)
+        if (!info) return this.println(red('  could not reach the update endpoint (offline?)'))
+        if (!info.outdated) return this.println(green(`  ✔ up to date — v${info.current}`))
+        this.println(`  update available: v${info.current} → ${bold('v' + info.latest)}`)
+        if (info.notes) this.println(dim(`  ${info.notes}`))
+        const yes = await this.askYesNo('  update now?', true)
+        if (yes) await selfUpdate(info)
+        else this.println(dim(`  later — ${info.url ?? 'https://github.com/asysurya/tagent/releases'}`))
         return
       }
 
@@ -916,8 +1117,213 @@ export class Tui {
         return
       }
 
-      default:
+      default: {
+        // plugin commands? (custom /commands exported by .tagent/plugins/*.mjs)
+        const r = await host.pluginCommandRun(cmd, arg)
+        if (r.ok) {
+          if (r.output) this.println(`  ${r.output}`)
+          return
+        }
+        if (!/no plugin command named/.test(r.error ?? '')) {
+          this.println(red(`  ✗ ${r.error}`))
+          return
+        }
         this.println(dim(`  unknown command /${cmd} — /help`))
+      }
+    }
+  }
+
+  /* ---------------- MCP manager (/mcp) ---------------- */
+
+  private async mcpManager(arg: string) {
+    const host = this.host
+    const sub = arg.split(/\s+/)[0]
+
+    // /mcp list — status table (non-interactive)
+    if (sub === 'list') return this.mcpPrintStatus()
+
+    // interactive dashboard
+    for (;;) {
+      const status = host.mcpStatus()
+      const actions: SelectItem<string>[] = []
+      for (const s of status) {
+        const state =
+          s.state === 'ready' ? green(`${s.tools} tools ✓`)
+          : s.state === 'error' ? red('error')
+          : s.state === 'disabled' ? dim('off')
+          : yellow('connecting')
+        actions.push({
+          label: s.name,
+          hint: String(state),
+          detail: s.error ? red(s.error.slice(0, 70)) : s.command.slice(0, 70),
+          value: `server:${s.name}`,
+        })
+      }
+      actions.push({ label: '+ add from template', hint: 'context7 · memory · filesystem…', value: 'template', detail: 'one-click known servers' })
+      actions.push({ label: '+ add custom', hint: 'command + args', value: 'custom', detail: 'any stdio MCP server' })
+      if (status.length > 0) actions.push({ label: 'reload', hint: 'restart every server', value: 'reload' })
+      actions.push({ label: 'done', hint: 'esc', value: 'done' })
+
+      const pick = await this.pick(actions, 'MCP servers', {
+        footer: status.some((s) => s.state === 'ready')
+          ? `${status.filter((s) => s.state === 'ready').reduce((n, s) => n + s.tools, 0)} live tools`
+          : 'tools appear as mcp_<server>_<tool>',
+      })
+      if (!pick || pick === 'done') return
+
+      if (pick === 'template') {
+        const templates = host.mcpTemplates()
+        const t = await this.pick(
+          templates.map((tpl) => ({ label: tpl.label, hint: tpl.name, detail: `${tpl.command} ${tpl.args.join(' ')} — ${tpl.note}`, value: tpl.name })),
+          'add server — templates',
+          { filterable: true },
+        )
+        if (!t) continue
+        const tpl = templates.find((x) => x.name === t)!
+        this.println(dim(`  starting ${tpl.name} (${tpl.command} ${tpl.args.join(' ')})…`))
+        const r = await host.mcpSave({ name: tpl.name, command: tpl.command, args: tpl.args })
+        if (r.error) this.println(red(`  ✗ ${r.error}`))
+        else this.println(green(`  ✔ ${tpl.name} added — see status`))
+        continue
+      }
+
+      if (pick === 'custom') {
+        const name = (await this.ask('  name ❯ ')).trim()
+        if (!name) { this.println(dim('  cancelled')); continue }
+        const command = (await this.ask('  command (e.g. npx / uvx / node) ❯ ')).trim()
+        if (!command) { this.println(dim('  cancelled')); continue }
+        const rawArgs = (await this.ask('  args (space separated) ❯ ')).trim()
+        const envLine = (await this.ask('  env KEY=VAL (comma separated, enter = none) ❯ ')).trim()
+        const env: Record<string, string> = {}
+        for (const part of envLine.split(',').map((s) => s.trim()).filter(Boolean)) {
+          const [k, ...v] = part.split('=')
+          if (k?.trim()) env[k.trim()] = v.join('=').trim()
+        }
+        this.println(dim(`  starting ${name}…`))
+        const r = await host.mcpSave({
+          name, command, args: rawArgs ? rawArgs.split(/\s+/) : [], env: Object.keys(env).length ? env : undefined,
+        })
+        if (r.error) this.println(red(`  ✗ ${r.error}`))
+        else this.println(green(`  ✔ ${name} added`))
+        continue
+      }
+
+      if (pick === 'reload') {
+        this.println(dim('  restarting MCP servers…'))
+        await host.mcpEnsure()
+        this.mcpPrintStatus()
+        continue
+      }
+
+      if (pick.startsWith('server:')) {
+        const name = pick.slice(7)
+        const act = await this.pick(
+          [
+            { label: 'toggle enabled', hint: 'temporarily off', value: 'toggle' },
+            { label: 'remove', hint: 'delete from config', value: 'remove' },
+            { label: 'back', value: 'back' },
+          ],
+          name,
+        )
+        if (!act || act === 'back') continue
+        if (act === 'toggle') {
+          const r = await host.mcpToggle(name)
+          if (r.error) this.println(red(`  ✗ ${r.error}`))
+          else this.println(green(`  ✔ ${name} ${r.enabled ? 'enabled' : 'disabled'}`))
+        } else {
+          const sure = await this.askYesNo(`  remove ${bold(name)}?`, true)
+          if (!sure) continue
+          const r = await host.mcpRemove(name)
+          if (r.error) this.println(red(`  ✗ ${r.error}`))
+          else this.println(green(`  ✔ ${name} removed`))
+        }
+        continue
+      }
+    }
+  }
+
+  private mcpPrintStatus() {
+    const status = this.host.mcpStatus()
+    if (status.length === 0) {
+      this.println(dim('  no MCP servers — /mcp to add one'))
+      return
+    }
+    this.println(bold(`  MCP servers (${status.length})`))
+    for (const s of status) {
+      const icon = s.state === 'ready' ? green('◉') : s.state === 'error' ? red('✗') : s.state === 'disabled' ? dim('○') : yellow('◌')
+      this.println(`   ${icon} ${bold(s.name.padEnd(16))} ${dim(s.state)} · ${s.tools} tools${s.enabled === false ? dim(' (disabled)') : ''}`)
+      if (s.error) this.println(`      ${red(s.error.slice(0, 90))}`)
+    }
+    this.println(dim('    tools: mcp_<server>_<tool> · permissions: /allow mcp_<server> · manage: /mcp'))
+  }
+
+  /* ---------------- plugin manager (/plugins) ---------------- */
+
+  private async pluginManager(arg: string) {
+    const host = this.host
+    const sub = arg.split(/\s+/)[0]
+
+    if (sub === 'new' || sub === 'create' || sub === 'scaffold') {
+      const name = arg.split(/\s+/).slice(1).join(' ').trim() || (await this.ask('  plugin name ❯ ')).trim()
+      if (!name) return this.println(dim('  cancelled'))
+      const r = host.pluginScaffold(name)
+      this.println(green(`  ✔ scaffold created`))
+      this.println(`    ${dim(r.file)}`)
+      this.println(dim('    edit it, then just run — plugins hot-reload each turn'))
+      return
+    }
+
+    for (;;) {
+      const plugins = host.pluginsList()
+      const cmds = await host.pluginCommandList()
+      const items: SelectItem<string>[] = plugins.map((p) => ({
+        label: p.name,
+        hint: p.scope,
+        detail: p.file,
+        value: `info:${p.name}`,
+      }))
+      items.push({ label: '+ new plugin', hint: 'scaffold in .tagent/plugins/', value: 'new', detail: 'tools + hooks + commands template' })
+      if (plugins.length > 0) items.push({ label: 'reload', hint: 'plugins reload each turn', value: 'reload' })
+      items.push({ label: 'done', hint: 'esc', value: 'done' })
+
+      const pick = await this.pick(items, 'plugins', {
+        footer: cmds.length ? `${cmds.length} custom command(s)` : 'export commands → /<name>',
+      })
+      if (!pick || pick === 'done') return
+
+      if (pick === 'new') {
+        const name = (await this.ask('  plugin name ❯ ')).trim()
+        if (!name) continue
+        const r = host.pluginScaffold(name)
+        this.println(green(`  ✔ scaffold created`))
+        this.println(`    ${dim(r.file)}`)
+        continue
+      }
+      if (pick === 'reload') {
+        this.println(dim('  plugins reload on the next message — no action needed'))
+        continue
+      }
+      if (pick.startsWith('info:')) {
+        const name = pick.slice(5)
+        const p = plugins.find((x) => x.name === name)
+        if (!p) continue
+        this.println(bold(`  ${p.name}`) + dim(` · ${p.scope} · ${path.basename(p.file)}`))
+        this.println(`    ${dim(p.file)}`)
+        const pc = cmds.filter((c) => c.plugin === name)
+        if (pc.length) this.println(`    commands: ${pc.map((c) => '/' + c.name).join(' · ')}`)
+        this.println(dim('    tools & hooks reload each turn'))
+        const open = await this.askYesNo('  open the file in $EDITOR-less view? (/read)', false)
+        if (open) {
+          try {
+            const rel = path.relative(host.root, p.file)
+            const r = host.fileRead(rel) as { content?: string }
+            for (const [i, l] of (r.content ?? '').split('\n').slice(0, 40).entries()) {
+              this.println(`  ${dim(String(i + 1).padStart(3))} ${l}`)
+            }
+          } catch { this.println(red('  could not read the file')) }
+        }
+        continue
+      }
     }
   }
 
@@ -936,18 +1342,22 @@ export class Tui {
       return
     }
     this.println(bold('  GitHub login'))
-    this.println(dim('  1) device flow — no secrets pasted (needs TAGENT_GH_CLIENT_ID)'))
-    this.println(dim('  2) personal access token — works everywhere'))
-    const a = (await this.ask(`  ${bold('choose')} [1/2] `)).trim()
+    const choice = await this.pick(
+      [
+        { label: 'device flow', hint: 'no secrets pasted', detail: 'needs TAGENT_GH_CLIENT_ID', value: 'device' },
+        { label: 'personal access token', hint: 'works everywhere', value: 'pat' },
+      ],
+      'login method',
+    )
     try {
-      if (a === '1') {
+      if (choice === 'device') {
         const start = await host.githubDeviceStart()
         this.println(`\n  ${bold('open')}  ${start.verification_uri}`)
         this.println(`  ${bold('code')}   ${bold(cyan(start.user_code))}\n`)
         this.println(dim('  waiting for authorization…'))
         const r = await host.githubDevicePoll()
         this.println(green(`  ✔ logged in as ${r.login}`))
-      } else if (a === '2') {
+      } else if (choice === 'pat') {
         const token = (await this.askHidden('  token ❯ ')).trim()
         if (!token) return this.println(dim('  cancelled'))
         const r = await host.githubPat(token)

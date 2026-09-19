@@ -28,7 +28,15 @@ import {
   pushWorkspace,
   loadPlugins,
   emitPluginEvent,
+  pluginMeta,
+  pluginToolDefinitions,
+  scaffoldPlugin,
   buildToolset,
+  McpManager,
+  normalizeMcpServer,
+  MCP_TEMPLATES,
+  type McpServerStatus,
+  type McpServerConfig,
   listRecentWorkspaces,
   rememberWorkspace,
   syncMemoryToMega,
@@ -89,11 +97,14 @@ export class AgentHost {
   private pending = new Map<string, PendingPermission>()
   /** last device-flow start (github:device:poll consumes it) */
   private deviceStart: Awaited<ReturnType<typeof startDeviceLogin>> | undefined
+  /** MCP connections — one manager per workspace config */
+  private mcp = new McpManager()
 
   constructor(opts: HostOptions) {
     this.root = path.resolve(opts.workspaceRoot)
     this.workspaceId = this.root
     this.cfg = loadConfig(this.root, opts.configOverride)
+    this.mcp = new McpManager(this.cfg.mcp)
     this.sessions = new SessionStore(this.root, this.workspaceId)
     rememberWorkspace(this.root)
     this.bus.setMaxListeners(50)
@@ -128,6 +139,8 @@ export class AgentHost {
       })),
       checkpoints: listCheckpoints(this.root).slice(0, 10),
       recentWorkspaces: listRecentWorkspaces(this.root),
+      mcp: this.mcpStatus(),
+      plugins: pluginMeta(this.root),
     }
   }
 
@@ -147,6 +160,8 @@ export class AgentHost {
       webGui: this.cfg.webGui === true,
       bashEnabled: this.cfg.tools.bash,
       browserEnabled: this.cfg.tools.browser,
+      mcp: this.cfg.mcp ?? { servers: {} },
+      mcpStatus: this.mcpStatus(),
     }
   }
 
@@ -166,9 +181,12 @@ export class AgentHost {
       }
       if (dir === this.root) return { ok: true, workspace: this.hello() }
       if (this.loop) this.loop.stop()
+      this.mcp.close()
+      this.mcp = new McpManager()
       this.root = dir
       this.workspaceId = dir
       this.cfg = loadConfig(this.root)
+      this.mcp = new McpManager(this.cfg.mcp)
       this.sessions = new SessionStore(this.root, this.workspaceId)
       this.session = undefined
       rememberWorkspace(this.root)
@@ -267,8 +285,14 @@ export class AgentHost {
     }
 
     const events = this.makeEvents()
-    const plugins = await loadPlugins(this.root)
+    const plugins = await loadPlugins(this.root, this.cfg)
     await emitPluginEvent(plugins, 'onSessionStart', { session: s, config: this.cfg })
+    // MCP servers: lazy-connect on the first run of the workspace
+    await this.mcp.ensureStarted()
+    if (this.mcp.status().some((st) => st.state === 'error')) {
+      this.bus.emit('notify', { level: 'warn', message: 'Some MCP servers failed to start — /mcp shows details.' })
+    }
+    const extraTools = [...this.mcp.toolDefinitions(), ...pluginToolDefinitions(plugins)]
     const permissions = new PermissionManager(this.cfg, () => this.persist())
     this.loop = new AgentLoop({
       session: s,
@@ -278,6 +302,7 @@ export class AgentHost {
       permissions,
       config: this.cfg,
       mode: s.mode,
+      extraTools,
       onSessionUpdate: (sess) => this.sessions.save(sess),
       // subagent runs persist → timeline survives restarts
       onSubagentSession: (sub) => this.sessions.save(sub),
@@ -416,6 +441,108 @@ export class AgentHost {
     const dir = workspaceDir(this.root) + '/sessions'
     const sessions = fs.existsSync(dir) ? fs.readdirSync(dir).length : 0
     return { sessions, snapshots: listCheckpoints(this.root).length }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* MCP servers + plugins                                               */
+  /* ------------------------------------------------------------------ */
+
+  mcpStatus(): McpServerStatus[] {
+    return this.mcp.status()
+  }
+
+  /** connect now (first run) and return per-server state */
+  async mcpEnsure(): Promise<McpServerStatus[]> {
+    await this.mcp.ensureStarted()
+    return this.mcp.status()
+  }
+
+  /** live tool list of every ready server — for /mcp and the GUI */
+  mcpTools() {
+    return this.mcp.toolDefinitions().map((t) => ({ name: t.name, description: t.description }))
+  }
+
+  mcpTemplates() {
+    return MCP_TEMPLATES
+  }
+
+  /** upsert one server from user input; restarts it when enabled */
+  async mcpSave(p: {
+    name?: string
+    command?: string
+    args?: unknown
+    env?: unknown
+    enabled?: boolean
+    description?: string
+  }): Promise<{ ok?: boolean; error?: string; status?: McpServerStatus[] }> {
+    const r = normalizeMcpServer(p)
+    if (r.error || !r.server || !r.name) return { error: r.error ?? 'invalid server' }
+    this.cfg.mcp = { ...(this.cfg.mcp ?? {}), servers: { ...(this.cfg.mcp?.servers ?? {}), [r.name]: r.server } }
+    this.persist()
+    if (r.server.enabled !== false) await this.mcpRestart(r.name)
+    return { ok: true, status: this.mcp.status() }
+  }
+
+  async mcpRemove(name: string): Promise<{ ok?: boolean; error?: string }> {
+    const servers = { ...(this.cfg.mcp?.servers ?? {}) }
+    if (!servers[name]) return { error: `no server named "${name}"` }
+    delete servers[name]
+    this.cfg.mcp = { ...(this.cfg.mcp ?? {}), servers }
+    this.persist()
+    this.mcp.close()
+    this.mcp = new McpManager(this.cfg.mcp)
+    return { ok: true }
+  }
+
+  async mcpToggle(name: string): Promise<{ ok?: boolean; error?: string; enabled?: boolean }> {
+    const s = this.cfg.mcp?.servers?.[name]
+    if (!s) return { error: `no server named "${name}"` }
+    s.enabled = s.enabled === false
+    this.persist()
+    if (s.enabled === false) {
+      this.mcp.close()
+      this.mcp = new McpManager(this.cfg.mcp)
+    } else {
+      await this.mcpRestart(name)
+    }
+    return { ok: true, enabled: s.enabled !== false }
+  }
+
+  private async mcpRestart(_name: string) {
+    this.mcp.close()
+    this.mcp = new McpManager(this.cfg.mcp)
+    await this.mcp.ensureStarted()
+  }
+
+  pluginsList() {
+    return pluginMeta(this.root)
+  }
+
+  pluginScaffold(name: string) {
+    const file = scaffoldPlugin(this.root, String(name ?? '').trim() || 'my-plugin')
+    return { ok: true, file }
+  }
+
+  /** every plugin command of this workspace — for /help and autocomplete */
+  async pluginCommandList(): Promise<{ name: string; description?: string; plugin: string }[]> {
+    const plugins = await loadPlugins(this.root, this.cfg)
+    return plugins.flatMap((p) => p.commands.map((c) => ({ name: c.name, description: c.description, plugin: p.name })))
+  }
+
+  /** run a plugin slash command (loads plugins fresh, isolated) */
+  async pluginCommandRun(name: string, args: string): Promise<{ ok: boolean; output?: string; error?: string }> {
+    const plugins = await loadPlugins(this.root, this.cfg)
+    for (const p of plugins) {
+      const cmd = p.commands.find((c) => c.name === name)
+      if (!cmd) continue
+      try {
+        const out = await cmd.run({ args, workspaceRoot: this.root, config: this.cfg })
+        return { ok: true, output: typeof out === 'string' ? out : undefined }
+      } catch (e) {
+        return { ok: false, error: (e as Error).message }
+      }
+    }
+    return { ok: false, error: `no plugin command named "${name}"` }
   }
 
   /* ------------------------------------------------------------------ */
@@ -630,5 +757,10 @@ export class AgentHost {
 
   relayRevoke(code: string): { ok: boolean } {
     return { ok: revokeRelayEntry(this.root, String(code ?? '')) }
+  }
+
+  /** teardown — kill MCP server processes so nothing outlives the host */
+  close() {
+    this.mcp.close()
   }
 }

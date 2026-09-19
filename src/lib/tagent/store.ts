@@ -7,6 +7,13 @@ import {
   call,
   connectDaemon,
   hello as helloDaemon,
+  mcpList,
+  mcpSave as mcpSaveRpc,
+  mcpRemove as mcpRemoveRpc,
+  mcpToggle as mcpToggleRpc,
+  mcpTemplates as mcpTemplatesRpc,
+  pluginsList as pluginsListRpc,
+  pluginScaffold as pluginScaffoldRpc,
 } from './client'
 import type {
   AgentMode,
@@ -17,9 +24,12 @@ import type {
   FileNode,
   HelloPayload,
   LoopSummary,
+  McpServerStatus,
+  McpTemplate,
   MemoryFact,
   MemoryState,
   PermissionRequest,
+  PluginMeta,
   RelayEntry,
   SanitizedConfig,
   SessionData,
@@ -55,6 +65,9 @@ interface TagentState {
   worklogExists: boolean
   timeline: SessionMeta[]
   relays: RelayEntry[]
+  mcpStatus: McpServerStatus[]
+  mcpTemplates: McpTemplate[]
+  plugins: PluginMeta[]
 
   /* active session */
   session: SessionData | null
@@ -106,6 +119,12 @@ interface TagentState {
   megaSync: () => Promise<void>
   megaPull: () => Promise<void>
   undo: () => Promise<void>
+  mcpRefresh: () => Promise<void>
+  mcpAddServer: (server: { name: string; command: string; args?: string[]; env?: Record<string, string> }) => Promise<{ ok?: boolean; error?: string }>
+  mcpRemoveServer: (name: string) => Promise<void>
+  mcpToggleServer: (name: string) => Promise<void>
+  pluginsRefresh: () => Promise<void>
+  pluginNew: (name: string) => Promise<{ ok?: boolean; file?: string; error?: string }>
   openFile: (path: string) => Promise<void>
   closeFile: () => void
   saveFile: () => Promise<void>
@@ -149,6 +168,9 @@ const initial = {
   worklogExists: false,
   timeline: [],
   relays: [],
+  mcpStatus: [],
+  mcpTemplates: [],
+  plugins: [],
   session: null,
   stream: '',
   status: null,
@@ -334,6 +356,8 @@ export const useTagent = create<TagentState>((set, get) => ({
       sessions: payload.sessions,
       checkpoints: payload.checkpoints,
       availableTools: payload.tools,
+      mcpStatus: payload.mcp ?? [],
+      plugins: payload.plugins ?? [],
       // world changed — reset per-session/per-file UI state
       session: null,
       stream: '',
@@ -671,6 +695,57 @@ export const useTagent = create<TagentState>((set, get) => ({
     if (r.ok) toast(`Restored checkpoint: ${r.checkpoint?.label ?? 'latest'}`)
     else toast.warning('No checkpoint to restore')
     await get().refreshTree()
+  },
+
+  async mcpRefresh() {
+    const { socket, connection } = get()
+    if (!socket || connection !== 'ready') return
+    try {
+      const [list, tpl] = await Promise.all([mcpList(socket), mcpTemplatesRpc(socket)])
+      set({ mcpStatus: list.status ?? [], mcpTemplates: tpl.templates ?? [] })
+    } catch { /* daemon gone — keep stale */ }
+  },
+
+  async mcpAddServer(server) {
+    const { socket } = get()
+    if (!socket) return { error: 'not connected' }
+    const r = await mcpSaveRpc(socket, server)
+    if (r.error) return r
+    if (r.status) set({ mcpStatus: r.status })
+    else await get().mcpRefresh()
+    return r
+  },
+
+  async mcpRemoveServer(name) {
+    const { socket } = get()
+    if (!socket) return
+    await mcpRemoveRpc(socket, name)
+    await get().mcpRefresh()
+  },
+
+  async mcpToggleServer(name) {
+    const { socket } = get()
+    if (!socket) return
+    const r = await mcpToggleRpc(socket, name)
+    if (r.error) toast.error(r.error)
+    await get().mcpRefresh()
+  },
+
+  async pluginsRefresh() {
+    const { socket, connection } = get()
+    if (!socket || connection !== 'ready') return
+    try {
+      const r = await pluginsListRpc(socket)
+      set({ plugins: r.plugins ?? [] })
+    } catch { /* daemon gone */ }
+  },
+
+  async pluginNew(name) {
+    const { socket } = get()
+    if (!socket) return { error: 'not connected' }
+    const r = await pluginScaffoldRpc(socket, name)
+    if (r.ok) await get().pluginsRefresh()
+    return r
   },
 
   async openFile(path) {

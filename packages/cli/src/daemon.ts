@@ -431,6 +431,50 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       cb?.(host.stats())
     })
 
+    /* ------------------------------- mcp -------------------------------- */
+    socket.on('mcp:list', (_p: unknown, cb?: (r: unknown) => void) => {
+      try { cb?.({ status: host.mcpStatus() }) } catch (e) { cb?.({ error: (e as Error).message }) }
+    })
+
+    socket.on('mcp:ensure', async (_p: unknown, cb?: (r: unknown) => void) => {
+      try { cb?.({ status: await host.mcpEnsure() }) } catch (e) { cb?.({ error: (e as Error).message }) }
+    })
+
+    socket.on('mcp:tools', (_p: unknown, cb?: (r: unknown) => void) => {
+      try { cb?.({ tools: host.mcpTools() }) } catch (e) { cb?.({ error: (e as Error).message }) }
+    })
+
+    socket.on('mcp:templates', (_p: unknown, cb?: (r: unknown) => void) => {
+      try { cb?.({ templates: host.mcpTemplates() }) } catch (e) { cb?.({ error: (e as Error).message }) }
+    })
+
+    socket.on('mcp:save', async (p: {
+      name?: string; command?: string; args?: unknown; env?: unknown; enabled?: boolean; description?: string
+    }, cb?: (r: unknown) => void) => {
+      try { cb?.(await host.mcpSave(p ?? {})) } catch (e) { cb?.({ error: (e as Error).message }) }
+    })
+
+    socket.on('mcp:remove', async (p: { name?: string }, cb?: (r: unknown) => void) => {
+      try { cb?.(await host.mcpRemove(String(p?.name ?? ''))) } catch (e) { cb?.({ error: (e as Error).message }) }
+    })
+
+    socket.on('mcp:toggle', async (p: { name?: string }, cb?: (r: unknown) => void) => {
+      try { cb?.(await host.mcpToggle(String(p?.name ?? ''))) } catch (e) { cb?.({ error: (e as Error).message }) }
+    })
+
+    /* ----------------------------- plugins ------------------------------ */
+    socket.on('plugins:list', (_p: unknown, cb?: (r: unknown) => void) => {
+      try { cb?.({ plugins: host.pluginsList() }) } catch (e) { cb?.({ error: (e as Error).message }) }
+    })
+
+    socket.on('plugins:scaffold', (p: { name?: string }, cb?: (r: unknown) => void) => {
+      try { cb?.(host.pluginScaffold(String(p?.name ?? 'my-plugin'))) } catch (e) { cb?.({ error: (e as Error).message }) }
+    })
+
+    socket.on('plugins:commands', async (_p: unknown, cb?: (r: unknown) => void) => {
+      try { cb?.({ commands: await host.pluginCommandList() }) } catch (e) { cb?.({ error: (e as Error).message }) }
+    })
+
     socket.on('disconnect', () => {
       log('gui disconnected:', socket.id)
     })
@@ -457,6 +501,7 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         host,
         close: async () => {
           io.close()
+          host.close() // kill MCP server processes — no orphans
           await new Promise<void>((r) => server.close(() => r()))
         },
       })

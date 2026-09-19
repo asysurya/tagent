@@ -17,9 +17,68 @@ export interface Release {
   stable?: boolean
 }
 
-export const LATEST = '0.7.0'
+export const LATEST = '0.8.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.8.0',
+    date: '2026-09-19',
+    title: 'MCP, plugins with tools & commands, interactive TUI, self-update',
+    summary:
+      'Tagent speaks the Model Context Protocol — connect any stdio MCP server and its tools become native. Plugins now contribute agent tools and slash commands. The TUI got opencode-style arrow-key menus everywhere, and Tagent offers to update itself on startup.',
+    stable: true,
+    sections: [
+      {
+        name: 'MCP — Model Context Protocol',
+        items: [
+          'Connect any stdio MCP server (npx/uvx/binary): Context7, filesystem, memory, sequential-thinking or your own — tools appear to the agent as mcp_<server>_<tool>',
+          'Full JSON-RPC handshake over stdio with per-server isolation — one broken server never blocks the rest',
+          'Every MCP tool goes through the same permission gates: /allow mcp_<server>, mcp catch-all, or per-tool rules',
+          'TUI: /mcp opens an interactive manager — status, one-click templates, custom servers, enable/disable, remove',
+          'GUI: Settings → MCP — the same templates plus a custom-server form, live connection state and tool counts',
+          'tagent doctor now starts every configured MCP server and reports per-server health',
+        ],
+      },
+      {
+        name: 'Plugins v2 — tools, commands, hooks',
+        items: [
+          'Plugins export tools: agent-callable functions named plugin_<plugin>_<tool> with full schemas, risk levels and permission rules',
+          'Plugins export commands: custom slash commands (/hello-world …) that run with workspace context',
+          'Hooks keep working (onSessionStart, onUserMessage, onToolCall, onToolResult, onAgentDone) — all optional, all isolated',
+          'Plugins hot-reload every turn — edit the .mjs file and just keep working',
+          'TUI: /plugins manager + scaffold; GUI: Settings → Plugins with one-click scaffolding into .tagent/plugins/',
+        ],
+      },
+      {
+        name: 'Interactive TUI — arrow keys everywhere',
+        items: [
+          '/model with no argument opens the picker: provider list (key status, type-to-filter) → model list — locked providers offer to add a key on the spot',
+          'Permissions are now an arrow-key menu: allow once · always · this session · deny',
+          '/new and /mode pick build/plan interactively; /open without an id browses sessions with fuzzy filter',
+          '/apikey browses key-needing providers; the GitHub login wizard is a menu too',
+          'Ctrl+C inside a menu cancels it — never exits the app',
+        ],
+      },
+      {
+        name: 'Self-update',
+        items: [
+          'On startup the TUI checks for a newer release (cached daily) and offers an arrow-key y/N update prompt',
+          'tagent update does the same from the shell',
+          'Binary installs download the matching release asset and swap it in place (POSIX) or park the new exe next to the old one (Windows)',
+          'npm -g / bun -g installs run the global upgrade; source checkouts git pull + bun install',
+        ],
+      },
+      {
+        name: 'Website & GUI',
+        items: [
+          'New logo — the terminal prompt (chevron + blinking cursor) on an orange tile; favicon included',
+          'Real vector icons across the website (no unicode-emoji roulette), MCP and plugins feature cards, new TUI/GUI comparison section',
+          'Web GUI Settings gained MCP and Plugins tabs; hello payload now reports MCP status and installed plugins',
+          'Update notes for the banner highlight: /mcp · /plugins · /update are new',
+        ],
+      },
+    ],
+  },
   {
     version: '0.7.0',
     date: '2026-09-19',

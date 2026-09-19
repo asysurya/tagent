@@ -16,7 +16,26 @@ export class PermissionManager {
   ) {}
 
   private rule(tool: string): 'ask' | 'allow' | 'deny' | undefined {
-    return this.cfg.permissions?.tools?.[tool]
+    const tools = this.cfg.permissions?.tools
+    if (!tools) return undefined
+    // exact tool name → server prefix (mcp_<server>) → 'mcp' catch-all
+    if (tools[tool] !== undefined) return tools[tool]
+    if (tool.startsWith('mcp_')) {
+      const parts = tool.split('_')
+      if (parts.length >= 3 && tools[parts.slice(0, 2).join('_')] !== undefined) {
+        return tools[parts.slice(0, 2).join('_')]
+      }
+      if (tools.mcp !== undefined) return tools.mcp
+    }
+    // plugin tools: plugin_<name>_<tool> → plugin_<name> → 'plugin' catch-all
+    if (tool.startsWith('plugin_')) {
+      const parts = tool.split('_')
+      if (parts.length >= 3 && tools[parts.slice(0, 2).join('_')] !== undefined) {
+        return tools[parts.slice(0, 2).join('_')]
+      }
+      if (tools.plugin !== undefined) return tools.plugin
+    }
+    return undefined
   }
 
   async gate(tool: string, input: unknown, ctx: ToolContext, risk: Risk = 'medium'): Promise<PermissionDecision> {

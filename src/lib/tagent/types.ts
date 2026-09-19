@@ -94,6 +94,40 @@ export interface SanitizedConfig {
   worklog: { enabled: boolean }
   caveman: boolean
   webGui: boolean
+  mcp?: { servers?: Record<string, McpServerConfig> }
+  mcpStatus?: McpServerStatus[]
+}
+
+/** MCP (Model Context Protocol) server — client-side mirror */
+export interface McpServerConfig {
+  command: string
+  args?: string[]
+  env?: Record<string, string>
+  enabled?: boolean
+  description?: string
+}
+
+export interface McpServerStatus {
+  name: string
+  command: string
+  enabled: boolean
+  state: 'connecting' | 'ready' | 'error' | 'disabled'
+  tools: number
+  error?: string
+}
+
+export interface McpTemplate {
+  name: string
+  label: string
+  command: string
+  args: string[]
+  note: string
+}
+
+export interface PluginMeta {
+  name: string
+  file: string
+  scope: 'workspace' | 'global'
 }
 
 export interface PermissionRequest {
@@ -179,6 +213,8 @@ export interface HelloPayload {
   tools: { name: string; description: string; risk: string }[]
   checkpoints: CheckpointMeta[]
   recentWorkspaces?: WorkspaceInfo[]
+  mcp?: McpServerStatus[]
+  plugins?: PluginMeta[]
 }
 
 export type Connection = 'connecting' | 'ready' | 'demo'

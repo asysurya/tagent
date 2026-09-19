@@ -1,6 +1,6 @@
 {
   "name": "tagent",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Tagent — terminal-native coding agent with a web GUI. Loop, subagents, skills, memory, plugins, MEGA + GitHub sync.",
   "type": "module",
   "bin": { "tagent": "./src/index.ts" },

@@ -56,6 +56,21 @@ export interface SessionData extends SessionMeta {
 
 export type AgentMode = 'build' | 'plan'
 
+/** MCP server definition (stdio transport) — see core/src/mcp.ts */
+export interface McpServerConfig {
+  command: string
+  args?: string[]
+  env?: Record<string, string>
+  /** disabled servers are skipped entirely (default true) */
+  enabled?: boolean
+  /** short note shown to the agent + in pickers */
+  description?: string
+}
+
+export interface McpConfig {
+  servers?: Record<string, McpServerConfig>
+}
+
 export interface ModelInfo {
   id: string
   label: string
@@ -233,4 +248,6 @@ export interface TagentConfig {
   nativeTools?: boolean
   /** recent workspaces (tracked globally for the workspace switcher) */
   recentWorkspaces?: { path: string; at: number }[]
+  /** Model Context Protocol servers (stdio) — extra tools for the agent */
+  mcp?: McpConfig
 }
