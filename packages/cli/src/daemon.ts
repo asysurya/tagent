@@ -271,8 +271,13 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       cb?.(host.loadSession(p?.id) ?? null)
     })
 
-    socket.on('session:delete', (p: { id: string }) => {
+    socket.on('session:delete', (p: { id: string }, cb?: (r: unknown) => void) => {
       host.deleteSession(p?.id)
+      cb?.({ ok: true })
+    })
+
+    socket.on('session:rename', (p: { id: string; title: string }, cb?: (s: unknown) => void) => {
+      cb?.(host.renameSession(p?.id ?? '', p?.title ?? '') ?? null)
     })
 
     socket.on('session:mode', (p: { mode: 'build' | 'plan' }) => {

@@ -53,6 +53,14 @@ export class SessionStore {
     }
   }
 
+  rename(id: string, title: string): SessionData | undefined {
+    const s = this.load(id)
+    if (!s) return undefined
+    s.title = title.replace(/\s+/g, ' ').trim().slice(0, 80) || 'Untitled'
+    this.save(s)
+    return s
+  }
+
   list(): SessionMeta[] {
     return this.readAll()
       .filter((s) => !s.subagent)

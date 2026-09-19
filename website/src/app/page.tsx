@@ -61,6 +61,12 @@ const FEATURES = [
     title: "Runs on a phone",
     body: "Ubuntu via UserLAnd (no root) — the GUI has a dedicated mobile layout with bottom tabs. localhost:4020 in Chrome.",
   },
+  {
+    icon: IconPackage,
+    title: "Windows 7 & 32-bit",
+    body: "The native edition — the core agent as a pure-Go single file (~10–15 MB) for machines the main binary can't touch: Windows 7/8 and 32-bit systems. Download, run, done.",
+    tag: "new",
+  },
 ]
 
 function FeatureCard({ icon: Icon, title, body, tag }: (typeof FEATURES)[number]) {

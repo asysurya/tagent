@@ -261,6 +261,15 @@ export class AgentHost {
     this.bus.emit('session:list', this.sessions.list())
   }
 
+  renameSession(id: string, title: string): SessionData | null {
+    const s = this.sessions.rename(id, title)
+    if (!s) return null
+    if (this.session?.id === id) this.session = s
+    this.bus.emit('session:list', this.sessions.list())
+    if (this.session?.id === id) this.bus.emit('session:active', s)
+    return s
+  }
+
   setSessionMode(mode: 'build' | 'plan') {
     if (this.session) {
       this.session.mode = mode ?? 'build'

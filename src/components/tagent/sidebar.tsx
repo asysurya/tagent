@@ -1,10 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Badge } from '@/components/ui/badge'
-import { Plus, MessageSquare, Trash2, Clock, RotateCcw, Share2, RadioTower, Copy, X } from 'lucide-react'
+import { Plus, MessageSquare, Trash2, Clock, RotateCcw, Share2, RadioTower, Copy, X, Pencil, Check } from 'lucide-react'
 import { toast } from 'sonner'
 import { useTagent } from '@/lib/tagent/store'
 import { cn } from '@/lib/utils'
@@ -22,10 +23,59 @@ function SessionRow({ s }: { s: SessionMeta }) {
   const active = useTagent((st) => st.session?.id === s.id)
   const loadSession = useTagent((st) => st.loadSession)
   const deleteSession = useTagent((st) => st.deleteSession)
+  const renameSession = useTagent((st) => st.renameSession)
   const shareSession = useTagent((st) => st.shareSession)
   const relaySession = useTagent((st) => st.relaySession)
   const connection = useTagent((st) => st.connection)
   const running = useTagent((st) => st.running && active)
+
+  /* inline rename */
+  const [editing, setEditing] = useState(false)
+  const [title, setTitle] = useState(s.title)
+  // Escape unmounts the focused input — some browsers then fire blur, which
+  // must not be mistaken for a save
+  const cancelled = useRef(false)
+
+  /* two-click delete confirmation */
+  const [armed, setArmed] = useState(false)
+  const armTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (armTimer.current) clearTimeout(armTimer.current)
+    },
+    [],
+  )
+
+  const startEdit = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    cancelled.current = false
+    setTitle(s.title)
+    setEditing(true)
+  }
+
+  const saveEdit = () => {
+    if (cancelled.current) {
+      cancelled.current = false
+      return
+    }
+    setEditing(false)
+    const v = title.trim()
+    if (!v || v === s.title) return
+    void renameSession(s.id, v).then(() => toast.success('Session renamed'))
+  }
+
+  const onDelete = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!armed) {
+      setArmed(true)
+      if (armTimer.current) clearTimeout(armTimer.current)
+      armTimer.current = setTimeout(() => setArmed(false), 2500)
+      return
+    }
+    if (armTimer.current) clearTimeout(armTimer.current)
+    setArmed(false)
+    void deleteSession(s.id)
+  }
 
   const share = async (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -70,12 +120,32 @@ function SessionRow({ s }: { s: SessionMeta }) {
           ? 'bg-orange-500/10 border-orange-500/30'
           : 'bg-zinc-900/40 border-transparent hover:bg-zinc-900 hover:border-zinc-800',
       )}
-      onClick={() => void loadSession(s.id)}
+      onClick={() => { if (!editing) void loadSession(s.id) }}
     >
       <div className="flex items-start gap-2">
         <MessageSquare className={cn('size-3.5 mt-0.5 shrink-0', active ? 'text-orange-400' : 'text-zinc-500')} />
         <div className="min-w-0 flex-1">
-          <p className={cn('text-xs truncate', active ? 'text-orange-200' : 'text-zinc-300')}>{s.title}</p>
+          {editing ? (
+            <Input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                e.stopPropagation()
+                if (e.key === 'Enter') saveEdit()
+                else if (e.key === 'Escape') {
+                  cancelled.current = true
+                  setEditing(false)
+                }
+              }}
+              onBlur={saveEdit}
+              onFocus={(e) => e.target.select()}
+              autoFocus
+              className="text-xs h-6 bg-zinc-900 border-zinc-700"
+            />
+          ) : (
+            <p className={cn('text-xs truncate', active ? 'text-orange-200' : 'text-zinc-300')}>{s.title}</p>
+          )}
           <div className="flex items-center gap-2 mt-1 text-[10px] text-zinc-500">
             <span className="inline-flex items-center gap-0.5"><Clock className="size-2.5" />{timeAgo(s.updatedAt)}</span>
             <span>{s.messageCount} msg</span>
@@ -103,15 +173,21 @@ function SessionRow({ s }: { s: SessionMeta }) {
             <Share2 className="size-3.5" />
           </button>
         )}
+        {!editing && (
+          <button
+            className="text-zinc-500 hover:text-orange-400"
+            onClick={startEdit}
+            title="Rename session"
+          >
+            <Pencil className="size-3.5" />
+          </button>
+        )}
         <button
-          className="text-zinc-500 hover:text-red-400"
-          onClick={(e) => {
-            e.stopPropagation()
-            void deleteSession(s.id)
-          }}
-          title="Delete session"
+          className={armed ? 'text-red-400' : 'text-zinc-500 hover:text-red-400'}
+          onClick={onDelete}
+          title={armed ? 'Click again to confirm delete' : 'Delete session'}
         >
-          <Trash2 className="size-3.5" />
+          {armed ? <Check className="size-3.5" /> : <Trash2 className="size-3.5" />}
         </button>
       </div>
     </div>

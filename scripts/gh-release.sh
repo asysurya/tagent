@@ -34,40 +34,68 @@ else
   bash scripts/build-binaries.sh "$VERSION"
 fi
 
+# ------------------------------------------------ 1b. native (Go) edition --
+# tagent-native binaries (Win7/8/32-bit port) are built separately into
+# native/dist/ — merge them into the release dir + regenerate merged sums.
+if [ -d native/dist ]; then
+  for f in native/dist/tagent-native-*; do
+    [ -f "$f" ] && cp -f "$f" "$OUT/"
+  done
+fi
+if ls "$OUT"/tagent-native-* >/dev/null 2>&1; then
+  (cd "$OUT" && sha256sum tagent-v"$VERSION"-* tagent-native-* > SHA256SUMS.txt)
+  echo "[release] native edition merged — checksums regenerated for all binaries"
+fi
+
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v0.8.0 — the token economist + MCP + plugins + interactive TUI
+## v0.9.0 — plan-interview + PRD flow, multi-key fallback chains, custom subagents & the native edition for Windows 7 / 32-bit
 
-Tagent now spends turns and tokens like a miser, speaks the Model Context
-Protocol, runs plugins with tools & slash commands, has opencode-style
-arrow-key menus everywhere, and updates itself when a release drops.
+Plan mode becomes an interviewer, providers get an ordered failover chain,
+subagents become customizable, edits get auto-diagnosed — and a from-scratch
+Go port finally brings tagent to Windows 7/8 and 32-bit machines.
 
-### Smart cache — the token economist
-- **File-state cache**: re-reading an UNCHANGED file returns a tiny "already in your context" stub instead of resending the whole file. Stamps persist per workspace (`.tagent/file-state.json`); writes/edits invalidate instantly
-- **read_files**: batch up to 12 known paths in ONE call — the default way to read
-- **task fast-path**: a subagent asked to just `read src/a.ts` serves the file directly — the subagent budget is never spent
-- **@path mentions**: type `@src/app/page.tsx` in chat — the file rides along inline, zero tool turns
-- **Context diet**: old tool results auto-compact past 150k chars (newest 4 stay full)
-- **Web TTL cache** (10 min): repeated `web_fetch` / `ddg_search` skip the network
-- **Anthropic prompt caching** on by default — the static prefix bills at ~10%; OpenAI/Gemini cached-token accounting included
-- **Live token usage**: `12.3k in / 1.2k out (9.8k cache-hit)` on the TUI done-line
-- `tagent cache` inspects everything; `tagent cache clear --all` resets
+### Plan mode is now an interviewer
+- **PLAN** mode asks focused questions about your project until the details are there, then delivers a `## Plan` + `## Verification` and stops for approval
+- Approve → the plan is written to **PRD.md**, the session flips to build mode, implementation starts
+- **BUILD** mode checks for `PRD.md` first: if there is none, the agent asks — continue without it, or switch to plan mode?
+- The agent always knows which of the two jobs it is doing (system-prompt emphasis)
 
-### Credentials store
-- Secrets live in `~/.tagent/credentials.json` — chmod 600, separate from the shareable config
-- Resolution order everywhere: credentials → config → environment
+### Provider fallback — ordered multi-key chains
+- Entries like `1. openrouter / keyA / modelX → 2. openrouter / keyB / modelX → 3. groq / keyC / modelY` — same provider under many keys, any mix, priority-ordered
+- Automatic failover mid-run when a provider errors; the loop keeps going on the next entry
+- TUI `/fallback add|rm|clear|list` · GUI Settings → ordered chain editor (reorder, per-entry key + label)
 
-### MCP — Model Context Protocol
-- Connect any stdio MCP server (npx/uvx/binary): Context7, filesystem, memory, sequential-thinking or your own — tools appear as `mcp_<server>_<tool>` behind the same permission gates
-- TUI: `/mcp` manager with one-click templates · GUI: Settings → MCP · `tagent doctor` reports per-server health
+### Custom subagents
+- Define specialists in `.tagent/agents/*.md` (workspace) or `~/.tagent/agents/*.md` (global): front-matter `name / description / model / tools / mode / maxTurns` + a system-prompt persona
+- The `task` tool spawns them by name; per-agent model override; workspace overrides global
+- TUI `/agents` · the GUI timeline shows every subagent run
 
-### Plugins v2 — tools, commands, hooks
-- Plugins export agent tools (`plugin_<name>_<tool>`) and slash commands; hot-reloading `.mjs` files
-- Scaffold from `/plugins` in the TUI or Settings → Plugins in the GUI
+### Auto-diagnostics after edits
+- After each edit-turn, a configurable check command runs once (default `tsc --noEmit`, or `npm run lint`); failures are fed back with a fix-before-done instruction
+- TUI `/diag [cmd|off|test]`
 
-### Interactive TUI + self-update
-- Arrow-key menus everywhere: `/model` picker with type-to-filter, permission prompts, session browser, y/N confirms
-- Startup update check with an arrow-key y/N prompt — binary installs swap in place (`tagent update` too)
+### Tougher networking
+- DDG search "unknown certificate verification error" → automatic one-shot retry with relaxed TLS; `TAGENT_TLS_SKIP=1` forces relaxed mode (broken TLS interception / proxies)
+- Tool internals never render as user messages in the web GUI anymore
+
+### Web GUI — session management & polish
+- Rename sessions inline, delete with confirmation, auto-titles from the first message
+- Fixed: double-sent user messages, tool-result leak on session load, stream bleed when switching sessions mid-run
+
+---
+
+## tagent-native — Windows 7 / 8 / 32-bit at last
+
+A from-scratch Go port (pure stdlib, `CGO_ENABLED=0`): true static single-file
+executables around 10-15 MB. Same agent DNA — REPL + one-shot `run`,
+OpenAI-compatible providers (zai / openrouter / groq / openai built in, plus any
+custom endpoint), the multi-key fallback chain, five workspace-jailed tools
+(read / write / edit / list / bash) — no runtime, no installer.
+
+- `tagent-native-windows-386.exe` is a **PE32 i386** binary: runs on Windows 7, 8, 8.1, 10, 11 — **including 32-bit machines**
+- The full edition (below) needs Windows 10+ 64-bit — the native edition is the answer for old hardware
+- The native edition keeps the core agent loop; the web GUI, MCP, plugins and the 40-provider catalog stay full-edition features
 
 ---
 
@@ -80,30 +108,43 @@ embedded inside the binary and self-extracts on first run).
 
 | File | Platform |
 | --- | --- |
-| `tagent-v0.8.0-windows-x64.exe` | Windows 10+ (64-bit) |
-| `tagent-v0.8.0-windows-arm64.exe` | Windows 10+ on ARM |
-| `tagent-v0.8.0-linux-x64` | Linux (glibc, 64-bit) |
-| `tagent-v0.8.0-linux-arm64` | Linux ARM64 (incl. Raspberry Pi 5) |
-| `tagent-v0.8.0-macos-x64` | macOS Intel |
-| `tagent-v0.8.0-macos-arm64` | macOS Apple silicon |
+| `tagent-v0.9.0-windows-x64.exe` | Windows 10+ (64-bit) |
+| `tagent-v0.9.0-windows-arm64.exe` | Windows 10+ on ARM |
+| `tagent-v0.9.0-linux-x64` | Linux (glibc, 64-bit) |
+| `tagent-v0.9.0-linux-arm64` | Linux ARM64 (incl. Raspberry Pi 5) |
+| `tagent-v0.9.0-macos-x64` | macOS Intel |
+| `tagent-v0.9.0-macos-arm64` | macOS Apple silicon |
+
+Native edition (Go):
+
+| File | Platform |
+| --- | --- |
+| `tagent-native-windows-386.exe` | **Windows 7/8/8.1/10/11 — 32-bit & 64-bit** |
+| `tagent-native-windows-amd64.exe` | Windows 7+ (64-bit, lightweight) |
+| `tagent-native-linux-amd64` | Linux (static — any distro, any glibc) |
+| `tagent-native-linux-arm64` | Linux ARM64 (static) |
+
 | `SHA256SUMS.txt` | checksums for everything above |
 
 Also linked from the website's [download page](https://tagent-website.vercel.app/download),
-which auto-detects your platform.
+which auto-detects your platform — 32-bit Windows visitors get the native
+edition automatically.
 
 ### Native Windows — no WSL needed
-- The Windows builds run the full stack natively: TUI, daemon, web GUI, relay, the 40-provider catalog
+- The full builds run the full stack natively: TUI, daemon, web GUI, relay, the 40-provider catalog
 - The bash tool uses Git for Windows' bash.exe (auto-detected, override with `TAGENT_BASH`); `tagent doctor` tells you if it's missing
 - Home/config/sessions live in the real Windows user profile (`~/.tagent` via USERPROFILE)
-- Windows 10 or later, 64-bit or ARM64 — the bundled runtime does not support Windows 7/8 or 32-bit systems
+- Windows 7/8/32-bit: use the native edition above
 
 **Install / upgrade**
 
 ```bash
 # Linux / macOS
-chmod +x tagent-v0.8.0-linux-x64 && ./tagent-v0.8.0-linux-x64 doctor
+chmod +x tagent-v0.9.0-linux-x64 && ./tagent-v0.9.0-linux-x64 doctor
 # Windows (PowerShell) — the .exe runs as-is
-.\tagent-v0.8.0-windows-x64.exe doctor
+.\tagent-v0.9.0-windows-x64.exe doctor
+# Windows 7 / 32-bit — native edition
+.\tagent-native-windows-386.exe
 ```
 
 **Verify a download**
@@ -118,7 +159,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — single-file binaries: download & run" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — plan-interview + PRD flow, fallback chains & the Windows 7/32-bit native edition" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")
@@ -132,7 +173,7 @@ have_asset() {
   echo "$ASSETS_JSON" | python3 -c "import json,sys; print('\n'.join(a['name'] for a in json.load(sys.stdin)))" | grep -qx "$1"
 }
 shopt -s nullglob
-for f in "$OUT"/tagent-v* "$OUT"/SHA256SUMS.txt; do
+for f in "$OUT"/tagent-v* "$OUT"/tagent-native-* "$OUT"/SHA256SUMS.txt; do
   name=$(basename "$f")
   if have_asset "$name"; then
     echo "[release] $name already uploaded — skipping"

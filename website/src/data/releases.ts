@@ -25,7 +25,7 @@ export const RELEASES: Release[] = [
     date: '2026-09-19',
     title: 'Plan mode interviews + PRD flow, provider fallback chain, custom subagents, auto-diagnostics, Windows 7/32-bit native port',
     summary:
-      'Plan mode now interviews you until requirements are detailed, then approval writes PRD.md and auto-switches to build. Stack a multi-key provider fallback chain (same provider, different keys — ordered). Custom subagents as .tagent/agents/*.md. Auto-diagnostics feeds lint/tsc errors back to the agent. tagent-native: a Go port for Windows 7+ including 32-bit machines.',
+      'Plan mode now interviews you until requirements are detailed, then approval writes PRD.md and auto-switches to build. Stack a multi-key provider fallback chain (same provider, different keys — ordered). Custom subagents as .tagent/agents/*.md. Auto-diagnostics feeds lint/tsc errors back to the agent. tagent-native: a Go port for Windows 7+ including 32-bit machines — the download page now auto-offers it to 32-bit/Windows-7 visitors. The web GUI renames and organizes sessions.',
     stable: true,
     sections: [
       {
@@ -61,6 +61,14 @@ export const RELEASES: Release[] = [
           'Arm it with /diag "tsc --noEmit" (or npm run lint) — it runs once per turn where files were edited',
           'Failures are fed back to the model with a fix-before-finishing instruction — a self-correcting loop',
           '/diag test runs it on demand; runs in the background — tool output never renders as user chat',
+        ],
+      },
+      {
+        name: 'Web GUI — session management',
+        items: [
+          'Rename any session from the sidebar — the new title follows it everywhere: TUI /open, HTML exports, relay viewers',
+          'Organize your history without leaving the browser — name sessions by what they actually do instead of "new session" archaeology',
+          'One session store, many surfaces: the GUI, the TUI and the CLI all see renames immediately',
         ],
       },
       {

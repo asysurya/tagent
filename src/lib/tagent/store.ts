@@ -95,6 +95,7 @@ interface TagentState {
   newSession: () => Promise<void>
   loadSession: (id: string) => Promise<void>
   deleteSession: (id: string) => Promise<void>
+  renameSession: (id: string, title: string) => Promise<void>
   send: (text: string) => Promise<void>
   interrupt: () => void
   respondPermission: (approved: boolean, remember?: 'once' | 'session' | 'always') => void
@@ -491,6 +492,18 @@ export const useTagent = create<TagentState>((set, get) => ({
       if (next) await get().loadSession(next.id)
       else await get().newSession()
     }
+  },
+
+  async renameSession(id, title) {
+    const { socket, connection } = get()
+    if (connection === 'demo') return
+    if (!socket) return
+    const s = await call<SessionData | null>(socket, 'session:rename', { id, title })
+    if (!s) return
+    set((st) => ({
+      sessions: st.sessions.map((x) => (x.id === id ? { ...x, title: s.title } : x)),
+      session: st.session?.id === id ? { ...st.session, title: s.title } : st.session,
+    }))
   },
 
   async send(text) {
