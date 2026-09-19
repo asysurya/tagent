@@ -30,4 +30,14 @@ if ! command -v bun >/dev/null 2>&1; then
   fi
 fi
 
+# friendly guard: bun's cryptic "Cannot find package 'x'" when deps aren't
+# installed (or the install was broken, e.g. under proot/UserLAnd)
+if [ ! -d "$REPO_ROOT/node_modules" ]; then
+  echo "[tagent] dependencies not installed yet. Run:" >&2
+  echo "    bash $REPO_ROOT/scripts/setup-ubuntu.sh" >&2
+  echo "  …or use the zero-dependency single-file binary:" >&2
+  echo "    https://github.com/asysurya/tagent/releases/latest" >&2
+  exit 1
+fi
+
 exec bun "$REPO_ROOT/packages/cli/src/index.ts" "$@"
