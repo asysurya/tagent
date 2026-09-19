@@ -40,8 +40,10 @@ process when you want a browser. Same engine, same sessions, same permissions.
 |---|---|
 | 🔁 **Agentic loop** | Prompt → model → tool actions → results → repeat, with max-turns, interrupt & steer |
 | 🤖 **Subagents** | `task` tool spawns isolated agents (read-only `explore` or `general`) with their own budget |
+| ⚡ **Smart cache** | The token economist — unchanged-file re-reads return a tiny stub, `read_files` batches known paths into one turn, "read X" subagent prompts get fast-pathed, `@path` mentions attach files inline, old tool outputs auto-compact, and repeated fetches/searches hit a TTL cache (`tagent cache` to inspect) |
+| 🔐 **Credentials store** | Secrets live in `~/.tagent/credentials.json` (chmod 600), separate from the shareable config — resolution order: credentials → config → env |
 | 🧩 **MCP servers** | Any stdio [Model Context Protocol](https://modelcontextprotocol.io) server — Context7, filesystem, memory, sequential-thinking or your own. Tools appear as `mcp_<server>_<tool>`, same permission gates (`/mcp` in the TUI, Settings → MCP in the GUI) |
-| 🔌 **Multi-provider** | 40-provider catalog (OpenAI, Anthropic, Google, Groq, DeepSeek, xAI, Mistral, Qwen, Kimi, Zhipu, OpenRouter, …) + custom endpoints — BYOK or env vars |
+| 🔌 **Multi-provider** | 40-provider catalog (OpenAI, Anthropic, Google, Groq, DeepSeek, xAI, Mistral, Qwen, Kimi, Zhipu, OpenRouter, …) + custom endpoints — BYOK or env vars. Anthropic prompt caching on by default; live token usage in the TUI done-line |
 | 🧩 **Plugins v2** | Hook into the loop AND contribute custom agent tools (`plugin_<name>_<tool>`) and slash commands — hot-reloading `.mjs` files |
 | 🎛️ **Interactive TUI** | Arrow-key menus everywhere — model picker with type-to-filter, session browser, permission prompts, y/N confirms — like opencode |
 | ⬆️ **Self-update** | Checks for releases on startup and offers an arrow-key y/N update — binary installs swap in place (`tagent update` too) |

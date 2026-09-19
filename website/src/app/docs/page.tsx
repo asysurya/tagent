@@ -112,6 +112,7 @@ tagent web ~/my-project --no-open`}</Code>
           <li><b>Plan mode</b> — read-only exploration before committing to changes.</li>
           <li><b>Subagents</b> — &quot;spawn a subagent to review X&quot; runs research in an isolated context.</li>
           <li><b>Slash commands</b> — <span className="font-mono text-orange-300">/model /mcp /plugins /sessions /undo /update</span> and plugin-defined ones. Menus are interactive: arrow keys + Enter, type to filter.</li>
+          <li><b>Smart cache</b> — re-reading an unchanged file returns a tiny stub (the bytes are already in context); <span className="font-mono text-orange-300">read_files</span> batches up to 12 paths in one call; attach a file inline by mentioning <span className="font-mono text-orange-300">@src/file.ts</span> in chat. <span className="font-mono text-orange-300">tagent cache</span> inspects and clears it all.</li>
         </ul>
 
         <H2 id="mcp">MCP servers</H2>

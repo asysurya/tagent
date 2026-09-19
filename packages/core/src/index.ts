@@ -59,3 +59,12 @@ export {
 } from './mcp'
 export * from './util'
 export { CURRENT_VERSION, checkUpdate, isNewer, type UpdateInfo } from './version'
+export {
+  fileStateFor, clearCaches, cacheStats, resetCacheStats, bumpStat,
+  webCacheGet, webCacheSet, webTtlMs,
+  type CacheStats, type FileStamp, type Freshness,
+} from './cache'
+export {
+  getCredential, setCredential, deleteCredential, resolveSecret,
+  listCredentialNames, listCredentialsMasked, maskSecret, clearCredentialCache,
+} from './credentials'

@@ -9,6 +9,12 @@ import {
 
 const FEATURES = [
   {
+    icon: IconZap,
+    title: "Smart cache",
+    body: "The token economist — unchanged-file re-reads return a stub, read_files batches 12 paths in one turn, @path mentions attach files inline, and old tool outputs auto-compact. tagent cache shows the savings.",
+    tag: "new",
+  },
+  {
     icon: IconNetwork,
     title: "MCP servers",
     body: "Plug the Model Context Protocol straight in — Context7, filesystem, memory, sequential-thinking or any stdio server. One command in the TUI, tools become native.",

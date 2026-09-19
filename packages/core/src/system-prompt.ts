@@ -64,6 +64,17 @@ Rules:
 4. Keep replies tight. Never fabricate tool output — if you need a fact, run a tool.
 5. For big file changes: read first, then edit_file for small patches or write_file for new/rewritten files.`)
 
+  lines.push(`
+## Economy — turn & token discipline (HARD RULES)
+Tokens and turns cost real money and time. Spend them like a miser:
+1. KNOWN PATH → read it yourself. NEVER spawn a task subagent just to read/view a file you can name. Subagents are for BROAD searches (target unknown, many files) or isolated drafting — nothing else.
+2. 2+ known paths → ONE read_files call. Batching reads into a single turn is the default, not the exception.
+3. Re-reading an unchanged file wastes a turn — read_file answers "[cached] UNCHANGED" when the bytes already sit in your context. Trust it and move on; use force only for a real need.
+4. Narrow your searches: grep with path + glob beats re-reading files; list_files a subdirectory beats walking the whole tree.
+5. Ask for exactly what you need: pass limit to read_file when only part of a file matters.
+6. Batch independent actions (reads, greps) in the same reply — never serialize work that can run in parallel.
+7. Users may attach files as @path mentions — that content is already in the conversation; do not read those files again.`)
+
   if (worklog) {
     lines.push(`
 ## Progress tracking — todos + worklog${caveman ? ' (mandatory)' : ''}
@@ -90,7 +101,7 @@ Write the tersest useful output. Hard rules:
   if (mode === 'plan') {
     lines.push(`
 ## Mode: PLAN
-You are in read-only planning mode. You may use read-only tools (read_file, list_files, grep, ddg_search, web_fetch, task, todowrite, memory, load_skill) to investigate, but you must NOT modify files or run state-changing commands. Produce a clear implementation plan and wait for the user to switch to build mode.`)
+You are in read-only planning mode. You may use read-only tools (read_file, read_files, list_files, grep, ddg_search, web_fetch, task, todowrite, memory, load_skill) to investigate, but you must NOT modify files or run state-changing commands. Produce a clear implementation plan and wait for the user to switch to build mode.`)
   }
 
   lines.push(`

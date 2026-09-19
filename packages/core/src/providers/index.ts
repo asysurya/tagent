@@ -1,4 +1,4 @@
-import type { CustomProviderConfig, ModelInfo, ProviderInfo, Role, TagentConfig } from '../types'
+import type { CustomProviderConfig, ModelInfo, ProviderInfo, Role, TagentConfig, TokenUsage } from '../types'
 import {
   CATALOG,
   catalogById,
@@ -43,6 +43,8 @@ export interface CompletionResult {
   text: string
   /** actions requested through native tool-calling, if any */
   toolCalls?: NativeToolCall[]
+  /** token usage reported in the stream, when the provider sends it */
+  usage?: TokenUsage
 }
 
 export interface ProviderAdapter {
@@ -120,30 +122,44 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       accept: 'text/event-stream',
       ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}),
     }
-    const base = (tools?: NativeToolDef[]) => ({
+    const base = (tools?: NativeToolDef[], usage?: boolean) => ({
       model: req.model,
       messages: req.messages,
       max_tokens: req.maxTokens ?? 8192,
       temperature: req.temperature ?? 0.2,
       stream: true,
+      // usage arrives in a final SSE chunk (OpenAI, OpenRouter, Groq, …)
+      ...(usage ? { stream_options: { include_usage: true } } : {}),
       ...(tools?.length ? { tools, tool_choice: 'auto' } : {}),
     })
 
-    let res = await fetch(url, { method: 'POST', signal: req.signal, headers, body: JSON.stringify(base(req.tools)) })
-    // Some OpenAI-compatible endpoints reject `tools` (older models, proxies).
-    // A 4xx with tools sent → retry once without them (markdown protocol still works).
+    let res = await fetch(url, { method: 'POST', signal: req.signal, headers, body: JSON.stringify(base(req.tools, true)) })
+    // Compatibility ladder — some OpenAI-compatible endpoints reject newer
+    // fields: drop stream_options first, then tools (markdown protocol still
+    // works as a last resort).
+    if (!res.ok && res.status >= 400 && res.status < 500) {
+      res = await fetch(url, { method: 'POST', signal: req.signal, headers, body: JSON.stringify(base(req.tools, false)) })
+    }
     if (!res.ok && res.status >= 400 && res.status < 500 && req.tools?.length) {
-      res = await fetch(url, { method: 'POST', signal: req.signal, headers, body: JSON.stringify(base(undefined)) })
+      res = await fetch(url, { method: 'POST', signal: req.signal, headers, body: JSON.stringify(base(undefined, false)) })
     }
     if (!res.ok) throw new Error(`${this.label} HTTP ${res.status}: ${truncBody(await res.text())}`)
 
     let text = ''
+    let usage: TokenUsage | undefined
     // accumulate streamed tool-call fragments: index → { id, name, args }
     const toolAcc = new Map<number, { id?: string; name: string; args: string }>()
     for await (const data of sseData(res, req.signal)) {
       if (data === '[DONE]') break
       const json = safeJson(data)
       const choice = json?.choices?.[0]
+      if (json?.usage) {
+        usage = {
+          input: json.usage.prompt_tokens ?? 0,
+          output: json.usage.completion_tokens ?? 0,
+          cacheRead: json.usage.prompt_tokens_details?.cached_tokens ?? undefined,
+        }
+      }
       if (!choice) continue
       const delta = choice.delta ?? {}
       if (typeof delta.content === 'string' && delta.content) {
@@ -168,7 +184,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       const input = safeJson(acc.args || '{}') ?? {}
       toolCalls.push({ id: acc.id, tool: acc.name, input })
     }
-    return { text, toolCalls: toolCalls.length ? toolCalls : undefined }
+    return { text, toolCalls: toolCalls.length ? toolCalls : undefined, usage }
   }
 }
 
@@ -197,14 +213,20 @@ export class AnthropicAdapter implements ProviderAdapter {
     return r.text
   }
 
-  private buildBody(req: CompletionRequest, withTools: boolean) {
+  private buildBody(req: CompletionRequest, withTools: boolean, cacheControl: boolean) {
     const system = req.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n')
     const rest = req.messages
       .filter((m) => m.role !== 'system')
       .map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }))
     return {
       model: req.model,
-      system: system || undefined,
+      // prompt caching: mark the system block ephemeral-cacheable → the big
+      // static prefix (personality + tool docs) bills at ~10% on every turn
+      system: system
+        ? cacheControl
+          ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }]
+          : system
+        : undefined,
       messages: rest,
       max_tokens: req.maxTokens ?? 8192,
       temperature: req.temperature ?? 0.2,
@@ -223,7 +245,7 @@ export class AnthropicAdapter implements ProviderAdapter {
 
   async completeStream(req: CompletionRequest): Promise<CompletionResult> {
     const url = `${this.baseUrl.replace(/\/$/, '')}/v1/messages`
-    const call = async (withTools: boolean) =>
+    const call = async (withTools: boolean, cacheControl: boolean) =>
       fetch(url, {
         method: 'POST',
         signal: req.signal,
@@ -232,21 +254,38 @@ export class AnthropicAdapter implements ProviderAdapter {
           'x-api-key': this.apiKey,
           'anthropic-version': '2023-06-01',
         },
-        body: JSON.stringify(this.buildBody(req, withTools)),
+        body: JSON.stringify(this.buildBody(req, withTools, cacheControl)),
       })
-    let res = await call(true)
+    let res = await call(true, true)
+    if (!res.ok && res.status >= 400 && res.status < 500) {
+      // old proxies may not know cache_control — drop it first
+      res = await call(true, false)
+    }
     if (!res.ok && res.status >= 400 && res.status < 500 && req.tools?.length) {
-      res = await call(false) // fall back to the markdown action protocol
+      res = await call(false, false) // fall back to the markdown action protocol
     }
     if (!res.ok) throw new Error(`Anthropic HTTP ${res.status}: ${truncBody(await res.text())}`)
 
     let text = ''
+    let usage: TokenUsage | undefined
     const toolBlocks = new Map<number, { id?: string; name: string; json: string }>()
     let blockIndex = -1
     for await (const data of sseData(res, req.signal)) {
       const ev = safeJson(data)
       if (!ev?.type) continue
-      if (ev.type === 'content_block_start') {
+      if (ev.type === 'message_start') {
+        const u = ev.message?.usage
+        if (u) {
+          usage = {
+            input: u.input_tokens ?? 0,
+            output: u.output_tokens ?? 0,
+            cacheRead: u.cache_read_input_tokens ?? undefined,
+          }
+        }
+      } else if (ev.type === 'message_delta') {
+        // cumulative output count at the end of the stream
+        if (ev.usage?.output_tokens && usage) usage.output = ev.usage.output_tokens
+      } else if (ev.type === 'content_block_start') {
         blockIndex = typeof ev.index === 'number' ? ev.index : blockIndex + 1
         if (ev.content_block?.type === 'tool_use') {
           toolBlocks.set(blockIndex, { id: ev.content_block.id, name: ev.content_block.name, json: '' })
@@ -268,7 +307,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     const toolCalls: NativeToolCall[] = [...toolBlocks.values()]
       .filter((b) => b.name)
       .map((b) => ({ id: b.id, tool: b.name, input: safeJson(b.json || '{}') ?? {} }))
-    return { text, toolCalls: toolCalls.length ? toolCalls : undefined }
+    return { text, toolCalls: toolCalls.length ? toolCalls : undefined, usage }
   }
 }
 
@@ -330,9 +369,17 @@ export class GoogleAdapter implements ProviderAdapter {
     if (!res.ok) throw new Error(`Google HTTP ${res.status}: ${truncBody(await res.text())}`)
 
     let text = ''
+    let usage: TokenUsage | undefined
     const toolCalls: NativeToolCall[] = []
     for await (const data of sseData(res, req.signal)) {
       const json = safeJson(data)
+      if (json?.usageMetadata) {
+        usage = {
+          input: json.usageMetadata.promptTokenCount ?? 0,
+          output: json.usageMetadata.candidatesTokenCount ?? 0,
+          cacheRead: json.usageMetadata.cachedContentTokenCount ?? undefined,
+        }
+      }
       const parts = json?.candidates?.[0]?.content?.parts ?? []
       for (const p of parts) {
         if (typeof p?.text === 'string' && p.text) {
@@ -344,7 +391,7 @@ export class GoogleAdapter implements ProviderAdapter {
         }
       }
     }
-    return { text, toolCalls: toolCalls.length ? toolCalls : undefined }
+    return { text, toolCalls: toolCalls.length ? toolCalls : undefined, usage }
   }
 }
 

@@ -128,6 +128,14 @@ export interface SubagentInfo {
   report?: string
 }
 
+/** token accounting reported by providers that expose usage in the stream */
+export interface TokenUsage {
+  input: number
+  output: number
+  /** tokens served from a provider-side prompt cache (Anthropic cache_read, OpenAI cached_tokens) */
+  cacheRead?: number
+}
+
 export type AgentPhase =
   | 'idle'
   | 'thinking'
@@ -143,6 +151,8 @@ export interface LoopSummary {
   toolCalls: number
   finished: 'complete' | 'max-turns' | 'aborted' | 'error'
   error?: string
+  /** cumulative tokens across all turns of this run (when the provider reports usage) */
+  usage?: TokenUsage
 }
 
 export interface ToolContext {
@@ -186,6 +196,8 @@ export interface AgentEvents {
   onSubagent?(info: SubagentInfo): void
   onFilesChanged?(paths: string[]): void
   onNotify?(level: 'info' | 'warn' | 'error', message: string): void
+  /** per-turn token usage — the UI can display live cost */
+  onUsage?(usage: TokenUsage & { turn: number }): void
 }
 
 export interface MemoryFact {
@@ -250,4 +262,13 @@ export interface TagentConfig {
   recentWorkspaces?: { path: string; at: number }[]
   /** Model Context Protocol servers (stdio) — extra tools for the agent */
   mcp?: McpConfig
+  /** smart caching layer — the token economist */
+  cache?: {
+    /** file-state cache: unchanged-file re-reads return a stub (default true) */
+    fileState?: boolean
+    /** TTL cache for web_fetch / ddg_search (default true) */
+    web?: boolean
+    /** web cache window in minutes (default 10) */
+    webTtlMin?: number
+  }
 }

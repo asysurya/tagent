@@ -94,6 +94,7 @@ export interface SanitizedConfig {
   worklog: { enabled: boolean }
   caveman: boolean
   webGui: boolean
+  cache: { fileState: boolean; web: boolean; webTtlMin: number }
   mcp?: { servers?: Record<string, McpServerConfig> }
   mcpStatus?: McpServerStatus[]
 }

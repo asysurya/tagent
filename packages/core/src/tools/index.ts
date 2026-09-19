@@ -1,5 +1,5 @@
 import type { TagentConfig, ToolDefinition } from '../types'
-import { editFileTool, grepTool, listFilesTool, readFileTool, writeFileTool } from './fs'
+import { editFileTool, grepTool, listFilesTool, readFileTool, readFilesTool, writeFileTool } from './fs'
 import { bashTool, resolveShell } from './bash'
 import { ddgSearchTool, webFetchTool } from './web'
 import { todoWriteTool } from './todo'
@@ -11,6 +11,7 @@ import { loadSkillTool } from '../skills'
 
 const ALL_TOOLS: ToolDefinition[] = [
   readFileTool,
+  readFilesTool,
   listFilesTool,
   grepTool,
   writeFileTool,
@@ -46,7 +47,7 @@ export function buildToolset(opts: BuildToolsetOptions = {}): ToolDefinition[] {
   return ALL_TOOLS.filter((t) => {
     if (readOnly) {
       const RO = new Set([
-        'read_file', 'list_files', 'grep', 'web_fetch', 'ddg_search',
+        'read_file', 'read_files', 'list_files', 'grep', 'web_fetch', 'ddg_search',
         'todowrite', 'memory', 'load_skill',
       ])
       return RO.has(t.name)

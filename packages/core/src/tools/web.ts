@@ -1,5 +1,6 @@
-import type { ToolDefinition } from '../types'
+import type { ToolContext, ToolDefinition } from '../types'
 import { decodeEntities, htmlToText, trunc } from '../util'
+import { bumpStat, webCacheGet, webCacheSet, webTtlMs } from '../cache'
 
 const UA =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
@@ -20,9 +21,20 @@ export const webFetchTool: ToolDefinition = {
     },
     required: ['url'],
   },
-  async run(input) {
+  async run(input, ctx) {
     const url = String(input.url ?? '')
     if (!/^https?:\/\//.test(url)) return 'Error: url must start with http(s)://'
+    // TTL cache — same URL twice in a session = one network round-trip
+    const ttl = webTtlMs(ctx.config?.cache?.webTtlMin)
+    const key = `fetch:${input.raw === true ? 'raw' : 'text'}:${url}`
+    if (ctx.config?.cache?.web !== false) {
+      const hit = webCacheGet(key, ttl)
+      if (hit !== undefined) {
+        bumpStat('webHits')
+        return `[cached, fetched less than ${Math.round(ttl / 60000)} min ago — network saved]\n${hit}`
+      }
+    }
+    bumpStat('webMisses')
     const res = await fetch(url, {
       headers: { 'user-agent': UA, accept: 'text/html,application/json,text/plain,*/*' },
       redirect: 'follow',
@@ -31,15 +43,18 @@ export const webFetchTool: ToolDefinition = {
     if (!res.ok) return `HTTP ${res.status} ${res.statusText} — ${url}`
     const ct = res.headers.get('content-type') ?? ''
     const body = await res.text()
+    let out: string
     if (input.raw === true || ct.includes('json') || ct.includes('text/plain')) {
-      return trunc(body, MAX_TEXT)
-    }
-    if (ct.includes('html')) {
+      out = trunc(body, MAX_TEXT)
+    } else if (ct.includes('html')) {
       const title = body.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim()
       const text = htmlToText(body)
-      return trunc(`${title ? `# ${decodeEntities(title)}\n\n` : ''}${text}`, MAX_TEXT)
+      out = trunc(`${title ? `# ${decodeEntities(title)}\n\n` : ''}${text}`, MAX_TEXT)
+    } else {
+      return `Content-Type ${ct} — not text.`
     }
-    return `Content-Type ${ct} — not text.`
+    if (ctx.config?.cache?.web !== false && ttl > 0) webCacheSet(key, out)
+    return out
   },
 }
 
@@ -87,10 +102,21 @@ export const ddgSearchTool: ToolDefinition = {
     },
     required: ['query'],
   },
-  async run(input) {
+  async run(input, ctx) {
     const q = String(input.query ?? '')
     if (!q.trim()) return 'Error: query is required'
     const max = Math.min(Number(input.max ?? 5), 10)
+    // TTL cache — identical searches within the window don't re-hit DuckDuckGo
+    const ttl = webTtlMs(ctx.config?.cache?.webTtlMin)
+    const key = `ddg:${max}:${q}`
+    if (ctx.config?.cache?.web !== false) {
+      const hit = webCacheGet(key, ttl)
+      if (hit !== undefined) {
+        bumpStat('webHits')
+        return `[cached — results from the last ${Math.round(ttl / 60000)} min]\n${hit}`
+      }
+    }
+    bumpStat('webMisses')
     let html = ''
     try {
       const res = await fetch('https://html.duckduckgo.com/html/', {
@@ -119,9 +145,11 @@ export const ddgSearchTool: ToolDefinition = {
       } catch { /* ignore */ }
     }
     if (hits.length === 0) return `No results for "${q}" (DuckDuckGo may be rate-limiting — try again or use web_fetch on a specific URL).`
-    return hits
+    const out = hits
       .slice(0, max)
       .map((h, i) => `${i + 1}. ${h.title}\n   ${h.url}${h.snippet ? `\n   ${h.snippet}` : ''}`)
       .join('\n\n')
+    if (ctx.config?.cache?.web !== false && ttl > 0) webCacheSet(key, out)
+    return out
   },
 }

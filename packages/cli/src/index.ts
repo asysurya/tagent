@@ -42,6 +42,8 @@ import {
   refreshModelCache,
   binaryDir,
   resolveShell,
+  clearCaches,
+  listCredentialsMasked,
   type SessionData,
   type ToolCallRecord,
 } from '@tagent/core'
@@ -201,6 +203,9 @@ function printHelp() {
             --host 0.0.0.0 exposes it on your LAN (prints LAN urls)
     tagent doctor
             environment sanity check
+    tagent cache [path] · tagent cache clear [path] [--all]
+            smart-cache status / wipe (file states, discovered models,
+            update checks — run --all to reset everything)
     tagent update
             check for a newer release and self-update (y/N prompt)
             — binary installs download the matching release asset,
@@ -231,6 +236,7 @@ async function init(): Promise<void> {
     case 'share': await mainShare(); break
     case 'relay': await mainRelay(); break
     case 'doctor': await mainDoctor(); break
+    case 'cache': await mainCache(); break
     case 'update': await mainUpdate(); break
     default: {
       // `tagent <path>` — a bare directory arg means "start here"
@@ -876,6 +882,19 @@ async function mainDoctor() {
   if (upd) check(!upd.outdated, `version: v${upd.current}${upd.outdated ? ` → v${upd.latest} available` : ' (up to date)'}`)
   else results.push([true, 'version: update check skipped (offline)'])
 
+  // smart cache
+  {
+    const fsFile = path.join(workspaceDir(root), 'file-state.json')
+    let tracked = 0
+    try {
+      tracked = Object.keys((JSON.parse(fs.readFileSync(fsFile, 'utf8')) as { files?: object }).files ?? {}).length
+    } catch { /* none yet */ }
+    check(
+      true,
+      `smart cache: fileState ${cfg.cache?.fileState !== false ? 'on' : 'off'} · web ${cfg.cache?.web !== false ? 'on' : 'off'} (${cfg.cache?.webTtlMin ?? 10} min) · ${tracked} tracked file(s) — tagent cache to inspect`,
+    )
+  }
+
   console.log(`\n  ${bold('tagent doctor')} · v${CURRENT_VERSION} · ${root}\n`)
   let bad = 0
   for (const [ok, label] of results) {
@@ -884,6 +903,97 @@ async function mainDoctor() {
   }
   console.log(bad === 0 ? `\n  ${green('all good')}\n` : `\n  ${red(`${bad} issue(s) found`)}\n`)
   process.exit(bad === 0 ? 0 : 1)
+}
+
+/* ------------------------------------------------------------------ */
+/* tagent cache — smart-cache status & wipe                             */
+/* ------------------------------------------------------------------ */
+
+function fileAge(file: string): string {
+  try {
+    const ms = Date.now() - fs.statSync(file).mtimeMs
+    const min = Math.round(ms / 60_000)
+    if (min < 1) return 'just now'
+    if (min < 60) return `${min} min ago`
+    const h = Math.round(min / 60)
+    if (h < 24) return `${h} h ago`
+    return `${Math.round(h / 24)} d ago`
+  } catch {
+    return '—'
+  }
+}
+
+function fileKb(file: string): string {
+  try {
+    return `${(fs.statSync(file).size / 1024).toFixed(1)} KB`
+  } catch {
+    return '—'
+  }
+}
+
+async function mainCache() {
+  const sub = plain[1]
+  const isClear = sub === 'clear'
+  const root = resolveWorkspace(isClear ? (plain[2] && !plain[2].startsWith('-') ? plain[2] : undefined) : (sub && !sub.startsWith('-') ? sub : undefined))
+  const all = has('--all')
+
+  const fsFile = path.join(workspaceDir(root), 'file-state.json')
+  const modelsFile = path.join(GLOBAL_DIR, 'models.json')
+  const updFile = path.join(GLOBAL_DIR, 'update-check.json')
+  const credFile = path.join(GLOBAL_DIR, 'credentials.json')
+  const guiCache = path.join(GLOBAL_DIR, 'gui-cache')
+
+  if (isClear) {
+    const cleared = clearCaches(root)
+    const removed: string[] = [`${cleared.workspaces} workspace file-state(s)`]
+    if (all) {
+      for (const f of [modelsFile, updFile]) {
+        try { fs.rmSync(f, { force: true }); removed.push(path.basename(f)) } catch { /* ignore */ }
+      }
+      try { fs.rmSync(guiCache, { recursive: true, force: true }); removed.push('gui-cache/') } catch { /* ignore */ }
+    }
+    console.log(`\n  ${bold('tagent cache clear')} · ${root}`)
+    console.log(`  ${green('✔')} wiped: ${removed.join(', ')}`)
+    console.log(dim(`  credentials are kept — delete them per-provider in settings\n`))
+    process.exit(0)
+  }
+
+  console.log(`\n  ${bold('tagent cache')} · v${CURRENT_VERSION} · ${root}\n`)
+
+  // file-state (per workspace, survives restarts)
+  let tracked = 0
+  let reads = 0
+  try {
+    const raw = JSON.parse(fs.readFileSync(fsFile, 'utf8')) as { files?: Record<string, { reads?: number }> }
+    tracked = Object.keys(raw.files ?? {}).length
+    reads = Object.values(raw.files ?? {}).reduce((n, s) => n + (s.reads ?? 0), 0)
+  } catch { /* none yet */ }
+  console.log(`  file-state    ${tracked ? green('on') : dim('empty')} · ${tracked} file(s) tracked · ${reads} read(s) · ${fileKb(fsFile)} · ${fileAge(fsFile)}`)
+  console.log(dim(`                unchanged-file re-reads return a stub instead of resending content`))
+
+  // discovered models
+  let mProviders = 0
+  let mModels = 0
+  try {
+    const raw = JSON.parse(fs.readFileSync(modelsFile, 'utf8')) as { providers?: Record<string, string[]> }
+    mProviders = Object.keys(raw.providers ?? {}).length
+    mModels = Object.values(raw.providers ?? {}).reduce((n, v) => n + v.length, 0)
+  } catch { /* none */ }
+  console.log(`  model catalog ${mProviders ? green(`${mProviders} provider(s)`) : dim('empty')} · ${mModels} discovered model(s) · ${fileAge(modelsFile)}`)
+
+  // update check
+  console.log(`  update check  ${fs.existsSync(updFile) ? fileAge(updFile) : dim('never')} · ${fileKb(updFile)}`)
+
+  // credentials (names + masked values only)
+  const creds = listCredentialsMasked()
+  const credNames = Object.keys(creds)
+  console.log(`  credentials   ${credNames.length ? green(`${credNames.length} secret(s)`) : dim('none')} · 0600 · ${credFile}`)
+  for (const n of credNames) console.log(dim(`                ${n} = ${creds[n]}`))
+
+  // web cache is in-memory (per daemon run) — show config
+  const cfg = loadConfig(root)
+  console.log(`  web cache     ${cfg.cache?.web !== false ? green(`on · TTL ${cfg.cache?.webTtlMin ?? 10} min`) : red('off')} (in-memory, per session)\n`)
+  console.log(dim(`  tagent cache clear wipes file-state · --all also resets models + update checks\n`))
 }
 
 /* ------------------------------------------------------------------ */

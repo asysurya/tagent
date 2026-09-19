@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Check, ExternalLink, Eye, EyeOff, Github, Key, Loader2, Plus, RefreshCw, Search, ShieldAlert, Terminal, Globe, Bot, Bone, ScrollText, Coins, MonitorSmartphone, Trash2, Plug, Puzzle, Power, FileCode2 } from 'lucide-react'
+import { Check, ExternalLink, Eye, EyeOff, Github, Key, Loader2, Plus, RefreshCw, Search, ShieldAlert, Terminal, Globe, Bot, Bone, ScrollText, Coins, MonitorSmartphone, Trash2, Plug, Puzzle, Power, FileCode2, Zap } from 'lucide-react'
 import { useTagent } from '@/lib/tagent/store'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -590,6 +590,8 @@ function AgentTab() {
   const setCaveman = useTagent((s) => s.setCaveman)
   const setWorklog = useTagent((s) => s.setWorklog)
   const setWebGui = useTagent((s) => s.setWebGui)
+  const setCacheFileState = useTagent((s) => s.setCacheFileState)
+  const setCacheWeb = useTagent((s) => s.setCacheWeb)
   const setMaxTurns = useTagent((s) => s.setMaxTurns)
   const setRightTab = useTagent((s) => s.setRightTab)
   const [turns, setTurns] = useState('')
@@ -703,6 +705,43 @@ function AgentTab() {
           <span className="text-xs text-zinc-300">Start the web GUI together with the TUI</span>
           <Switch aria-label="Web GUI auto-start" checked={config.webGui} onCheckedChange={(v) => void setWebGui(v)} />
         </div>
+      </div>
+
+      {/* Smart cache — the token economist */}
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <Zap className="size-4 text-orange-400" />
+          <span className="text-sm font-medium text-zinc-200">Smart cache</span>
+          {config.cache.fileState || config.cache.web ? (
+            <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-800/50 hover:bg-emerald-500/15 text-[9px] h-4 px-1.5">saving tokens</Badge>
+          ) : (
+            <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-zinc-700 text-zinc-500">off</Badge>
+          )}
+        </div>
+        <p className="text-xs text-zinc-500 leading-relaxed">
+          <b className="text-zinc-300">The token economist.</b> Re-reading an <b className="text-zinc-300">unchanged file</b>
+          returns a tiny "already in your context" stub instead of resending the whole file. The agent batches
+          known paths into one <code className="text-zinc-400">read_files</code> call, never spawns a subagent just to
+          read a file, and old tool outputs are compacted automatically when the context grows.
+        </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <span className="text-xs text-zinc-300">File-state cache</span>
+            <p className="text-[10px] text-zinc-600">persists per workspace in .tagent/file-state.json</p>
+          </div>
+          <Switch aria-label="File-state cache" checked={config.cache.fileState} onCheckedChange={(v) => void setCacheFileState(v)} />
+        </div>
+        <div className="flex items-center justify-between">
+          <div>
+            <span className="text-xs text-zinc-300">Web cache (fetch + search)</span>
+            <p className="text-[10px] text-zinc-600">TTL {config.cache.webTtlMin} min · in-memory per session</p>
+          </div>
+          <Switch aria-label="Web cache" checked={config.cache.web} onCheckedChange={(v) => void setCacheWeb(v)} />
+        </div>
+        <p className="text-[10px] text-zinc-600 leading-relaxed">
+          Tip: <code className="text-zinc-500">tagent cache</code> in the terminal shows what is cached;
+          <code className="text-zinc-500"> tagent cache clear</code> wipes it.
+        </p>
       </div>
     </div>
   )

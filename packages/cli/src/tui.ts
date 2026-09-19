@@ -299,7 +299,12 @@ export class Tui {
     const secs = ((Date.now() - this.runStartedAt) / 1000).toFixed(1)
     this.hideTicker()
     const mark = summary.finished === 'complete' ? green('✔ done') : summary.finished === 'aborted' ? yellow('■ stopped') : red('✗ error')
-    this.println(`  ${mark} ${dim(`· ${summary.turns} turns · ${summary.toolCalls} tool calls · ${secs}s`)}`)
+    // token accounting — only when the provider reports usage in its stream
+    const u = summary.usage
+    const tok = u
+      ? ` · ${fmtTok(u.input)} in / ${fmtTok(u.output)} out${u.cacheRead ? ` (${fmtTok(u.cacheRead)} cache-hit)` : ''}`
+      : ''
+    this.println(`  ${mark} ${dim(`· ${summary.turns} turns · ${summary.toolCalls} tool calls · ${secs}s${tok}`)}`)
     if (summary.error) this.println(`  ${red(summary.error)}`)
     this.running = false
     const next = this.queued.shift()
@@ -1464,4 +1469,9 @@ export async function runPiped(host: AgentHost): Promise<void> {
   // give the last console.log a beat to flush
   await new Promise((r) => setTimeout(r, 50))
   process.exit(0)
+}
+
+/** 12345 → "12.3k" for the usage footer */
+function fmtTok(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
 }

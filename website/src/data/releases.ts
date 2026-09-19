@@ -23,11 +23,34 @@ export const RELEASES: Release[] = [
   {
     version: '0.8.0',
     date: '2026-09-19',
-    title: 'MCP, plugins with tools & commands, interactive TUI, self-update',
+    title: 'Smart cache + token economist, MCP, plugins, interactive TUI, self-update',
     summary:
-      'Tagent speaks the Model Context Protocol — connect any stdio MCP server and its tools become native. Plugins now contribute agent tools and slash commands. The TUI got opencode-style arrow-key menus everywhere, and Tagent offers to update itself on startup.',
+      'The token economist arrives: unchanged-file re-reads return a stub, read_files batches known paths into one turn, "read X" subagents are fast-pathed, and @path mentions attach files inline. Plus: MCP servers, plugins with tools & commands, opencode-style arrow-key menus, and self-update on startup.',
     stable: true,
     sections: [
+      {
+        name: 'Smart cache — the token economist',
+        items: [
+          'File-state cache: re-reading an UNCHANGED file returns a tiny "already in your context" stub instead of resending the whole file — writes/edits invalidate instantly, stamps persist per workspace in .tagent/file-state.json',
+          'read_files: batch up to 12 known paths in ONE call — the default way to read, not the exception',
+          'task fast-path: a subagent asked to just "read src/a.ts" serves the file directly — the whole subagent turn budget is never spent',
+          '@path mentions: type @src/app/page.tsx in chat and the file rides along inline — zero tool turns, and the agent is told not to re-read it',
+          'Context diet: old tool results auto-compact to stubs past 150k chars (newest 4 stay full), so long sessions stay cheap',
+          'Web TTL cache (10 min default): repeated web_fetch / ddg_search calls skip the network entirely',
+          'Anthropic prompt caching on by default (system block cache_control) — the big static prefix bills at ~10%; OpenAI/Gemini cached-token accounting included',
+          'Live token usage: in/out (+ cache-hit) tokens per turn on the TUI ticker and done-line, in every LoopSummary',
+          'tagent cache shows file-state, discovered models and credentials at a glance; tagent cache clear wipes them (--all resets everything)',
+          'GUI: Settings → Agent gained a Smart cache card with both toggles; system prompt got hard Economy rules so the model itself spends turns like a miser',
+        ],
+      },
+      {
+        name: 'Credentials store',
+        items: [
+          'Secrets now live in ~/.tagent/credentials.json — chmod 600, separate from the shareable config.json',
+          'Resolution order everywhere: credentials.json → config.json → environment variable',
+          'tagent cache lists stored secrets masked (ghp_AB••••YZ) — values never print',
+        ],
+      },
       {
         name: 'MCP — Model Context Protocol',
         items: [

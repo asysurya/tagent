@@ -20,6 +20,7 @@ export function defaultConfig(): TagentConfig {
       defaultMode: 'ask',
       tools: {
         read_file: 'allow',
+        read_files: 'allow',
         list_files: 'allow',
         grep: 'allow',
         write_file: 'ask',
@@ -47,6 +48,7 @@ export function defaultConfig(): TagentConfig {
     caveman: false,
     webGui: false,
     mcp: { servers: {} },
+    cache: { fileState: true, web: true, webTtlMin: 10 },
   }
 }
 

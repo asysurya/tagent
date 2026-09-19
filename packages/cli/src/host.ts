@@ -158,6 +158,11 @@ export class AgentHost {
       worklog: { enabled: this.cfg.worklog?.enabled !== false },
       caveman: this.cfg.caveman === true,
       webGui: this.cfg.webGui === true,
+      cache: {
+        fileState: this.cfg.cache?.fileState !== false,
+        web: this.cfg.cache?.web !== false,
+        webTtlMin: this.cfg.cache?.webTtlMin ?? 10,
+      },
       bashEnabled: this.cfg.tools.bash,
       browserEnabled: this.cfg.tools.browser,
       mcp: this.cfg.mcp ?? { servers: {} },
@@ -560,6 +565,9 @@ export class AgentHost {
     worklogEnabled: boolean
     caveman: boolean
     webGui: boolean
+    /** smart cache toggles — unchanged-file stubs + web TTL cache */
+    cacheFileState?: boolean
+    cacheWeb?: boolean
     /** upsert a custom provider by id (empty baseUrl + remove → delete) */
     customProvider?: CustomProviderConfig
     customProviderRemove?: string
@@ -608,6 +616,13 @@ export class AgentHost {
       // launcher behavior — global so every workspace gets it
       this.cfg.webGui = patch.webGui
       updateGlobalConfig({ webGui: patch.webGui })
+    }
+    // smart cache toggles
+    if (patch.cacheFileState !== undefined || patch.cacheWeb !== undefined) {
+      const cur = this.cfg.cache ?? {}
+      if (typeof patch.cacheFileState === 'boolean') cur.fileState = patch.cacheFileState
+      if (typeof patch.cacheWeb === 'boolean') cur.web = patch.cacheWeb
+      this.cfg.cache = cur
     }
     this.persist()
     return { ok: true, config: this.sanitizeConfig() }

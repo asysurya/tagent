@@ -18,6 +18,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { CustomProviderConfig, ModelInfo, TagentConfig } from '../types'
 import { GLOBAL_DIR } from '../config'
+import { getCredential } from '../credentials'
 
 export type AdapterKind = 'openai' | 'anthropic' | 'google'
 
@@ -440,11 +441,13 @@ export function catalogById(id: string): CatalogEntry | undefined {
 }
 
 /* ------------------------------------------------------------------ */
-/* API key resolution — config first, env second                        */
+/* API key resolution — credentials store → config → env               */
 /* ------------------------------------------------------------------ */
 
-/** Config-stored key wins; otherwise the first env var that is set. */
+/** credentials.json (0600) wins, then config, then the first env var set. */
 export function resolveApiKey(entry: CatalogEntry, cfg: TagentConfig): string {
+  const cred = getCredential(entry.id)
+  if (cred) return cred
   const stored = cfg?.apiKeys?.[entry.id]
   if (stored) return stored
   for (const v of entry.envVars) {
@@ -609,9 +612,9 @@ export async function refreshModelCache(cfg: TagentConfig): Promise<DiscoveryRes
   return { updated, failed, models: cache }
 }
 
-/** Custom providers can also read their key from cfg.apiKeys[cp.id]. */
+/** Custom providers can also read their key from credentials or cfg.apiKeys[cp.id]. */
 function resolveApiKeyForCustom(cp: CustomProviderConfig, cfg: TagentConfig): string {
-  return cp.apiKey || cfg?.apiKeys?.[cp.id] || ''
+  return cp.apiKey || getCredential(cp.id) || cfg?.apiKeys?.[cp.id] || ''
 }
 
 /** Seed models + cached discovery, deduped — seeds keep their labels first. */

@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import type {
   AgentEvents,
   AgentMode,
@@ -7,6 +8,7 @@ import type {
   ProviderAdapter,
   SessionData,
   SubagentInfo,
+  TokenUsage,
   ToolCallRecord,
   ToolContext,
   ToolDefinition,
@@ -14,7 +16,8 @@ import type {
 import type { NativeToolDef } from './providers'
 import { buildSystemPrompt } from './system-prompt'
 import { createCheckpoint, shouldCheckpoint } from './checkpoints'
-import { trunc, uid } from './util'
+import { jailPath, trunc, uid } from './util'
+import { fileStateFor } from './cache'
 import { buildToolset } from './tools'
 
 const ACTION_RE = /```tagent:action\s*\n([\s\S]*?)```/g
@@ -23,6 +26,10 @@ const MAX_TOOL_OUTPUT = 24_000
 const MAX_TOOL_OUTPUT_CAVEMAN = 8_000
 /** how often streamed text is pushed to the UI (ms) — keeps phones calm */
 const CHUNK_EMIT_MS = 60
+/** context diet: above this, OLD tool results get compacted to stubs */
+const COMPACT_THRESHOLD = 150_000
+/** how many of the newest tool-result turns stay uncompacted */
+const COMPACT_KEEP = 4
 
 function toNativeToolDef(t: ToolDefinition): NativeToolDef {
   return {
@@ -107,7 +114,9 @@ export class AgentLoop {
 
   async run(userText: string): Promise<LoopSummary> {
     const { session } = this.opts
-    const userMsg: ChatMessage = { id: uid(), role: 'user', content: userText, createdAt: Date.now() }
+    // @-mentions → inline file attachments: zero tool turns for known files
+    const expanded = this.expandFileMentions(userText)
+    const userMsg: ChatMessage = { id: uid(), role: 'user', content: expanded, createdAt: Date.now() }
     session.messages.push(userMsg)
     this.opts.events.onUserMessage?.(userMsg)
 
@@ -127,6 +136,7 @@ export class AgentLoop {
 
     let turns = 0
     let toolCalls = 0
+    let usageTotal: TokenUsage | undefined
     const maxTurns = Math.min(this.opts.config.maxTurns ?? 40, 80)
     // native function-calling when the provider supports it (config: nativeTools)
     const useNativeTools =
@@ -137,10 +147,13 @@ export class AgentLoop {
 
     try {
       while (turns < maxTurns) {
-        if (this.abort.signal.aborted) return { turns, toolCalls, finished: 'aborted' }
+        if (this.abort.signal.aborted) return { turns, toolCalls, finished: 'aborted', usage: usageTotal }
         turns++
 
-        this.opts.events.onStatus?.('thinking', `turn ${turns}`)
+        this.opts.events.onStatus?.(
+          'thinking',
+          `turn ${turns}${usageTotal ? ` · ${fmtTokens(usageTotal.input)} in` : ''}`,
+        )
         // streamed token display — throttled, idempotent (full text so far)
         let lastEmit = 0
         const emitStream = (full: string, force = false) => {
@@ -158,9 +171,20 @@ export class AgentLoop {
           onText: (full) => emitStream(full),
         })
 
-        if (this.abort.signal.aborted) return { turns, toolCalls, finished: 'aborted' }
+        if (this.abort.signal.aborted) return { turns, toolCalls, finished: 'aborted', usage: usageTotal }
 
         const raw = result.text
+        // token accounting (when the provider reports usage in its stream)
+        if (result.usage) {
+          usageTotal = usageTotal
+            ? {
+                input: usageTotal.input + (result.usage.input ?? 0),
+                output: usageTotal.output + (result.usage.output ?? 0),
+                cacheRead: (usageTotal.cacheRead ?? 0) + (result.usage.cacheRead ?? 0),
+              }
+            : { input: result.usage.input ?? 0, output: result.usage.output ?? 0, cacheRead: result.usage.cacheRead }
+          this.opts.events.onUsage?.({ input: result.usage.input ?? 0, output: result.usage.output ?? 0, cacheRead: result.usage.cacheRead, turn: turns })
+        }
         const { cleanText, actions } = this.parseActions(raw)
         // merge actions that came through native function calling
         const nativeActions: ParsedAction[] = (result.toolCalls ?? []).map((c) => ({
@@ -175,6 +199,7 @@ export class AgentLoop {
           role: 'assistant',
           content: cleanText.trim(),
           createdAt: Date.now(),
+          ...(result.usage ? { meta: { usage: { input: result.usage.input ?? 0, output: result.usage.output ?? 0, cacheRead: result.usage.cacheRead } } } : {}),
         }
         session.messages.push(assistantMsg)
 
@@ -182,8 +207,8 @@ export class AgentLoop {
           emitStream(assistantMsg.content, true)
           this.opts.events.onAssistantMessage?.(assistantMsg)
           this.opts.onSessionUpdate?.(session)
-          this.opts.events.onStatus?.('done', `turns: ${turns}`)
-          return { turns, toolCalls, finished: 'complete' }
+          this.opts.events.onStatus?.('done', usageDetail(turns, usageTotal))
+          return { turns, toolCalls, finished: 'complete', usage: usageTotal }
         }
 
         // brief text streams out before the actions execute
@@ -250,7 +275,7 @@ export class AgentLoop {
 
         this.opts.onSessionUpdate?.(session)
 
-        if (this.abort.signal.aborted) return { turns, toolCalls, finished: 'aborted' }
+        if (this.abort.signal.aborted) return { turns, toolCalls, finished: 'aborted', usage: usageTotal }
 
         // feed results back as the next user turn
         const resultMsg: ChatMessage = {
@@ -264,16 +289,51 @@ export class AgentLoop {
       }
 
       this.opts.events.onStatus?.('done', 'max turns reached')
-      return { turns, toolCalls, finished: 'max-turns' }
+      return { turns, toolCalls, finished: 'max-turns', usage: usageTotal }
     } catch (e) {
       const err = (e as Error).message
       this.opts.events.onStatus?.('error', err)
       this.opts.events.onNotify?.('error', `Agent error: ${err}`)
-      return { turns, toolCalls, finished: 'error', error: err }
+      return { turns, toolCalls, finished: 'error', error: err, usage: usageTotal }
     }
   }
 
   /* ---------------------------------------------------------------- */
+
+  /**
+   * @path mentions → inline attachments (max 5 files, ≤60KB each).
+   * The agent starts with the content already in context — no read turn spent.
+   * Attached files are recorded in the file-state cache, so a later
+   * read_file of the same path correctly answers "unchanged, in context".
+   */
+  private expandFileMentions(text: string): string {
+    if (!text.includes('@')) return text
+    const { session } = this.opts
+    const attachments: string[] = []
+    const expanded = text.replace(/(^|\s)@([\w./@-]+)/g, (whole, pre: string, p: string) => {
+      if (attachments.length >= 5) return whole
+      if (!/[./]/.test(p)) return whole // @mention without a path shape stays as-is
+      let abs: string
+      try {
+        abs = jailPath(session.workspaceId, p)
+      } catch {
+        return whole // escapes workspace — leave untouched
+      }
+      try {
+        const st = fs.statSync(abs)
+        if (!st.isFile() || st.size > 60_000) return whole
+        const raw = fs.readFileSync(abs, 'utf8')
+        if (raw.includes('\u0000')) return whole // binary
+        attachments.push(`===== @${p} (user-attached, ${st.size} bytes) =====\n${raw}`)
+        if (this.opts.config.cache?.fileState !== false) fileStateFor(session.workspaceId).record(abs)
+        return `${pre}@${p} (attached below)`
+      } catch {
+        return whole
+      }
+    })
+    if (attachments.length === 0) return text
+    return `${expanded}\n\n${attachments.join('\n\n')}`
+  }
 
   private async spawnSubagent(
     description: string,
@@ -336,9 +396,31 @@ export class AgentLoop {
         out.push({ role: 'user', content: m.content })
       }
     }
-    // keep context sane: drop oldest middle turns if huge
-    const MAX_CHARS = 400_000
+
+    // ---- context diet -------------------------------------------------
+    // 1) compact OLD tool results: keep the newest COMPACT_KEEP full, turn
+    //    older ones into one-line stubs. Saves the bulk of long sessions
+    //    while preserving the reasoning trail.
     let total = out.reduce((n, m) => n + m.content.length, 0)
+    if (total > COMPACT_THRESHOLD) {
+      const toolIdx: number[] = []
+      for (let i = 0; i < out.length; i++) {
+        if (out[i].role === 'user' && out[i].content.startsWith('TOOL RESULTS:')) toolIdx.push(i)
+      }
+      const keep = new Set(toolIdx.slice(-COMPACT_KEEP))
+      for (const i of toolIdx) {
+        if (keep.has(i)) continue
+        total -= out[i].content.length - 120
+        out[i] = {
+          role: 'user',
+          content:
+            '[older tool results compacted to save context — contents you read earlier remain in your conversation; re-run a tool if you need fresh output]',
+        }
+      }
+    }
+
+    // 2) hard backstop: drop oldest middle turns if still huge
+    const MAX_CHARS = 400_000
     while (total > MAX_CHARS && out.length > 4) {
       const removed = out.splice(1, 1) // keep system + latest
       total -= removed[0].content.length
@@ -373,11 +455,22 @@ export class AgentLoop {
 }
 
 const READ_ONLY_TOOLS = new Set([
-  'read_file', 'list_files', 'grep', 'web_fetch', 'ddg_search', 'task', 'todowrite', 'memory', 'load_skill',
+  'read_file', 'read_files', 'list_files', 'grep', 'web_fetch', 'ddg_search', 'task', 'todowrite', 'memory', 'load_skill',
 ])
 
 export function isReadOnlyTool(name: string): boolean {
   return READ_ONLY_TOOLS.has(name)
+}
+
+/** 12345 → "12.3k" */
+function fmtTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+}
+
+function usageDetail(turns: number, usage?: TokenUsage): string {
+  if (!usage) return `turns: ${turns}`
+  const cache = usage.cacheRead ? `, ${fmtTokens(usage.cacheRead)} cached` : ''
+  return `turns: ${turns} · tokens ${fmtTokens(usage.input)} in / ${fmtTokens(usage.output)} out${cache}`
 }
 
 /** Rename subagent events so the UI can nest them under the parent activity. */

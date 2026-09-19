@@ -3,6 +3,7 @@ import { promisify } from 'node:util'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { TagentConfig } from './types'
+import { getCredential } from './credentials'
 
 const exec = promisify(execFile)
 
@@ -116,7 +117,7 @@ export async function pushWorkspace(
   message: string,
   onLog?: (line: string) => void,
 ): Promise<PushResult> {
-  const token = cfg.github?.token
+  const token = getCredential('github') || cfg.github?.token
   if (!token) throw new Error('GitHub not connected — add a token in Settings → GitHub')
   const login = cfg.github?.login ?? (await validatePat(token))
   const repoName = cfg.github?.repo || `tagent-${path.basename(path.resolve(root)).replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase() || 'workspace'}`

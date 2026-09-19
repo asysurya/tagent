@@ -105,6 +105,8 @@ interface TagentState {
   setCaveman: (v: boolean) => Promise<void>
   setWorklog: (v: boolean) => Promise<void>
   setWebGui: (v: boolean) => Promise<void>
+  setCacheFileState: (v: boolean) => Promise<void>
+  setCacheWeb: (v: boolean) => Promise<void>
   setMaxTurns: (n: number) => Promise<void>
   refreshWorklog: () => Promise<void>
   shareSession: (id: string) => Promise<{ ok: boolean; url?: string; file?: string; error?: string }>
@@ -559,6 +561,22 @@ export const useTagent = create<TagentState>((set, get) => ({
     const r = await call<{ ok: boolean; config: SanitizedConfig }>(socket, 'settings:save', { webGui: v })
     if (r.config) set({ config: r.config })
     toast(v ? 'Web GUI will start with tagent start' : 'Web GUI will stay off (tagent start is TUI-only)')
+  },
+
+  async setCacheFileState(v) {
+    const { socket } = get()
+    if (!socket || get().connection !== 'ready') return
+    const r = await call<{ ok: boolean; config: SanitizedConfig }>(socket, 'settings:save', { cacheFileState: v })
+    if (r.config) set({ config: r.config })
+    toast(v ? 'File cache on — unchanged re-reads return a stub' : 'File cache off — every read serves full content')
+  },
+
+  async setCacheWeb(v) {
+    const { socket } = get()
+    if (!socket || get().connection !== 'ready') return
+    const r = await call<{ ok: boolean; config: SanitizedConfig }>(socket, 'settings:save', { cacheWeb: v })
+    if (r.config) set({ config: r.config })
+    toast(v ? 'Web cache on — repeated fetches/searches hit the cache' : 'Web cache off')
   },
 
   async setMaxTurns(n) {
