@@ -57,7 +57,35 @@ process when you want a browser. Same engine, same sessions, same permissions.
 | 🖥️ **Terminal in GUI** | Run shell commands in the workspace, see output |
 | 👤 **Guest-first** | Works fully offline & local; accounts are optional |
 
-## Quick start (Ubuntu / Debian / WSL2)
+## Install — single-file binary (any OS)
+
+Grab the file for your platform from [releases](https://github.com/asysurya/tagent/releases/latest)
+(or the website's [download page](https://tagent-web-sable.vercel.app/download), which auto-detects it)
+and run it. No runtime, no clone, no setup — the web GUI is embedded in the file
+and self-extracts on first launch:
+
+```bash
+# linux / macOS
+chmod +x tagent-v0.7.0-linux-x64
+./tagent-v0.7.0-linux-x64 start ~/my-project
+```
+
+| File | Platform |
+| --- | --- |
+| `tagent-v0.7.0-windows-x64.exe` | Windows 10+ · 64-bit |
+| `tagent-v0.7.0-windows-arm64.exe` | Windows 10+ · ARM64 |
+| `tagent-v0.7.0-linux-x64` | Linux x86-64 (glibc) |
+| `tagent-v0.7.0-linux-arm64` | Linux ARM64 (Pi 5, ARM servers) |
+| `tagent-v0.7.0-macos-x64` | macOS Intel |
+| `tagent-v0.7.0-macos-arm64` | macOS Apple silicon |
+
+Verify downloads against `SHA256SUMS.txt` (`sha256sum --check` ·
+`certutil -hashfile <file> SHA256` on Windows). Windows needs
+[Git for Windows](https://git-scm.com/download/win) for the bash tool
+(`tagent doctor` checks it). Binaries are rebuilt the same way as the releases:
+`bash scripts/build-binaries.sh`.
+
+## Quick start — from source (Ubuntu / Debian / WSL2)
 
 One process total; the setup script puts the real `tagent` command on your PATH.
 

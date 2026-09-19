@@ -33,30 +33,30 @@ export default function Home() {
           </h1>
           <p className="mx-auto mt-6 max-w-2xl text-lg text-zinc-400">
             Tagent runs the engine on your machine — loop, subagents, skills, memory,
-            permissions. The TUI is the interface (terminal or phone), the web GUI is
-            the companion. Open source, BYOK, guest-first. Works on laptops and
-            Android phones — zero feature difference between them.
+            permissions. One self-contained binary (web GUI included) for Windows,
+            macOS and Linux. The TUI is the interface (terminal or phone), the web
+            GUI is the companion. Open source, BYOK, guest-first.
           </p>
 
           <div className="mx-auto mt-8 max-w-xl text-left">
-            <Code>{`git clone https://github.com/asysurya/tagent.git
-cd tagent && bash scripts/setup-ubuntu.sh && bun link
-tagent start ~/my-project        # full TUI
-tagent start --web-gui           # TUI + browser GUI`}</Code>
+            <Code>{`# 1 — download one file for your platform (see Download)
+# 2 — run it. that's the whole install
+./tagent start ~/my-project        # full TUI
+./tagent start --web-gui           # TUI + browser GUI`}</Code>
           </div>
 
           <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
             <Link
-              href="/docs"
+              href="/download"
               className="rounded-lg bg-orange-500 px-5 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-orange-400"
             >
-              Get started
+              Download v{LATEST}
             </Link>
             <Link
-              href="/download"
+              href="/docs"
               className="rounded-lg border border-zinc-700 bg-zinc-900 px-5 py-2.5 text-sm font-semibold text-zinc-200 transition hover:border-zinc-500"
             >
-              Downloads
+              Get started
             </Link>
             <Link
               href="/releases"

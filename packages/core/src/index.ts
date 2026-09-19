@@ -35,7 +35,7 @@ export {
   modelsFor, modelsForCustom,
   type CatalogEntry, type AdapterKind, type ModelRef, type DiscoveryResult,
 } from './providers/registry'
-export { buildToolset, ALL_TOOLS, worklogTool, worklogPath } from './tools'
+export { buildToolset, ALL_TOOLS, worklogTool, worklogPath, resolveShell } from './tools'
 export { exportShare, readShareFile, shareDir, renderShareHtml, type ShareResult } from './share'
 export {
   loadRelays, saveRelays, createRelay, findRelayByCode, revokeRelay,

@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { ensureDir } from './util'
+import { ensureDir, homeDir } from './util'
 
 /**
  * Plugin system — lightweight, semver'd hooks.
@@ -38,7 +38,7 @@ export const PLUGIN_API_VERSION = '1.0.0'
 export function pluginDirs(root: string): string[] {
   return [
     path.join(root, '.tagent', 'plugins'),
-    path.join(process.env.HOME || process.cwd(), '.tagent', 'plugins'),
+    path.join(homeDir(), '.tagent', 'plugins'),
   ]
 }
 

@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process'
+import fs from 'node:fs'
+import path from 'node:path'
 import type { ToolDefinition } from '../types'
 import { trunc } from '../util'
 
@@ -15,6 +17,31 @@ const BLOCKLIST: { re: RegExp; why: string }[] = [
 
 const MAX_OUTPUT = 32_000
 const DEFAULT_TIMEOUT = 60_000
+
+/**
+ * Resolve the shell to run commands with. On Linux/macOS this is plain
+ * `bash`. On Windows we prefer Git for Windows' bash.exe (its `cmd` dir
+ * is on PATH but `bin` often is not), so probe the usual install spots.
+ */
+export function resolveShell(): string {
+  if (process.platform !== 'win32') return 'bash'
+  const candidates = [
+    process.env.TAGENT_BASH,
+    'C:\\Program Files\\Git\\bin\\bash.exe',
+    'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
+    process.env.LOCALAPPDATA
+      ? path.join(process.env.LOCALAPPDATA, 'Programs\\Git\\bin\\bash.exe')
+      : undefined,
+  ].filter((c): c is string => !!c)
+  for (const c of candidates) {
+    try { if (fs.existsSync(c)) return c } catch { /* ignore */ }
+  }
+  return 'bash' // last resort: hope something named bash is on PATH
+}
+
+const WINDOWS_BASH_HINT =
+  'bash was not found. On Windows install Git for Windows (https://git-scm.com/download/win) ' +
+  'and restart the terminal, or set TAGENT_BASH to the full path of bash.exe.'
 
 export const bashTool: ToolDefinition = {
   name: 'bash',
@@ -44,7 +71,7 @@ export const bashTool: ToolDefinition = {
     }
     const timeout = Math.min(Number(input.timeout ?? DEFAULT_TIMEOUT), 300_000)
     return await new Promise<string>((resolve) => {
-      const child = spawn('bash', ['-lc', command], {
+      const child = spawn(resolveShell(), ['-lc', command], {
         cwd: ctx.workspaceRoot,
         env: { ...process.env, TERM: 'dumb', NO_COLOR: '1', CI: '1' },
       })
@@ -71,7 +98,16 @@ export const bashTool: ToolDefinition = {
       })
       child.on('close', (code, signal) => done(code ?? 0, signal ?? ''))
       child.on('error', (err) => {
-        if (!finished) { finished = true; clearTimeout(timer); resolve(`Error: ${err.message}`) }
+        if (!finished) {
+          finished = true
+          clearTimeout(timer)
+          const enoent = (err as NodeJS.ErrnoException).code === 'ENOENT'
+          resolve(
+            enoent && process.platform === 'win32'
+              ? `Error: ${WINDOWS_BASH_HINT}`
+              : `Error: ${err.message}`,
+          )
+        }
       })
       ctx.signal?.addEventListener('abort', () => {
         try { child.kill('SIGKILL') } catch { /* noop */ }

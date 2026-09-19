@@ -1,6 +1,6 @@
 {
-  "version": "0.6.0",
-  "date": "2026-09-18",
-  "notes": "Every provider you can think of, one command away — OpenAI, Anthropic, Google, Groq, DeepSeek, xAI, Mistral, Qwen, Kimi, Zhipu, OpenRouter and ~28 more, plus custom endpoints for anything else. Keys from config or env vars, provider/model refs like groq/llama-3.3-70b-versatile, and live model discovery that fills every picker.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.6.0"
+  "version": "0.7.0",
+  "date": "2026-09-19",
+  "notes": "Tagent now ships as one self-contained executable per platform — Windows x64/ARM64, Linux x64/ARM64, macOS Intel/Apple silicon. The web GUI is embedded inside the binary. Download it, run it, that is the whole install.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.7.0"
 }

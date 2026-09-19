@@ -60,3 +60,7 @@ demo-workspace/.tagent/*
 mini-services/tagent-daemon/.tagent/
 website/.next/
 /tool-results/
+
+# cross-compiled release binaries (scripts/build-binaries.sh)
+/dist/
+/scripts/.tmp-probe/

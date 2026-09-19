@@ -24,6 +24,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
 import readline from 'node:readline'
+import { spawnSync } from 'node:child_process'
 
 import {
   CURRENT_VERSION,
@@ -39,9 +40,13 @@ import {
   getAdapter,
   parseModelRef,
   refreshModelCache,
+  binaryDir,
+  resolveShell,
   type SessionData,
   type ToolCallRecord,
 } from '@tagent/core'
+
+import { GUI_BUNDLE_FILES } from './generated/gui-bundle'
 
 import { AgentHost } from './host'
 import { createDaemon } from './daemon'
@@ -78,9 +83,53 @@ function findGuiDir(): string | undefined {
   if (typeof explicit === 'string') return path.resolve(explicit)
   const candidates = [
     path.resolve(import.meta.dir, '../../../gui-dist'), // repo root when running from source
+    path.join(binaryDir(), 'gui-dist'),                 // next to a compiled binary
     path.resolve(process.cwd(), 'gui-dist'),
   ]
   return candidates.find((d) => fs.existsSync(path.join(d, 'index.html')))
+}
+
+/**
+ * Single-file binaries embed the web GUI (gui-dist/) as base64 — extract it
+ * to ~/.tagent/gui-cache/<digest>/ on first use so the daemon can serve it.
+ */
+async function embeddedGuiDir(): Promise<string | undefined> {
+  const rels = Object.keys(GUI_BUNDLE_FILES)
+  if (!rels.length) return undefined
+  const digest = Bun.hash(JSON.stringify(GUI_BUNDLE_FILES)).toString(16)
+  const dir = path.join(GLOBAL_DIR, 'gui-cache', digest)
+  const marker = path.join(dir, '.complete')
+  if (fs.existsSync(marker)) return dir
+  try {
+    fs.rmSync(dir, { recursive: true, force: true })
+    fs.mkdirSync(dir, { recursive: true })
+    for (const rel of rels) {
+      if (path.isAbsolute(rel) || rel.split(/[\\/]/).includes('..')) continue // safety
+      const dest = path.join(dir, rel)
+      fs.mkdirSync(path.dirname(dest), { recursive: true })
+      fs.writeFileSync(dest, Buffer.from(GUI_BUNDLE_FILES[rel], 'base64'))
+    }
+    fs.writeFileSync(marker, String(Date.now()))
+    return dir
+  } catch {
+    return undefined // extraction failed — TUI still fully works
+  }
+}
+
+/** Where the daemon should serve the web GUI from (disk candidates, then embedded). */
+async function resolveGuiDir(): Promise<string | undefined> {
+  return findGuiDir() ?? (await embeddedGuiDir())
+}
+
+/** Open a URL in the default browser — Windows-safe (no `command -v`). */
+async function openUrlInBrowser(url: string): Promise<void> {
+  const { exec } = await import('node:child_process')
+  if (process.platform === 'win32') {
+    exec(`start "" "${url}"`, () => undefined) // `start` is a cmd builtin
+    return
+  }
+  const open = process.platform === 'darwin' ? 'open' : 'xdg-open'
+  exec(`command -v ${open} >/dev/null 2>&1 && ${open} ${url}`, () => undefined)
 }
 
 function resolveWorkspace(p?: string): string {
@@ -212,15 +261,13 @@ async function mainStart(dirArg?: string) {
     const port = Number(flag('port') ?? 4020)
     const hostName = typeof flag<string>('host') === 'string' ? flag<string>('host') : '127.0.0.1'
     const handle = await createDaemon({
-      port, host: hostName, workspaceRoot: root, guiDir: findGuiDir(), agentHost: host, quiet: true,
+      port, host: hostName, workspaceRoot: root, guiDir: await resolveGuiDir(), agentHost: host, quiet: true,
     })
     webUrl = `http://${hostName === '0.0.0.0' ? 'localhost' : hostName}:${port}`
     stopDaemon = handle.close
     console.log(dim(`  web gui live → ${webUrl}`))
     if (!has('--no-open') && !isAndroidish()) {
-      const { exec } = await import('node:child_process')
-      const open = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start ""' : 'xdg-open'
-      exec(`command -v ${open.split(' ')[0]} >/dev/null 2>&1 && ${open} ${webUrl}`, () => undefined)
+      await openUrlInBrowser(webUrl)
     }
   }
 
@@ -254,7 +301,7 @@ async function mainWeb() {
   const port = Number(flag('port') ?? 4020)
   const noOpen = has('--no-open')
   const hostName = typeof flag<string>('host') === 'string' ? flag<string>('host') : '127.0.0.1'
-  const guiDir = findGuiDir()
+  const guiDir = await resolveGuiDir()
 
   fs.mkdirSync(GLOBAL_DIR, { recursive: true })
   const handle = await createDaemon({ port, host: hostName, workspaceRoot: root, guiDir })
@@ -281,7 +328,7 @@ async function mainWeb() {
   📂 workspace: ${root}${
     guiDir
       ? `\n  🖥  GUI: ${guiDir} (websocket at /socket)`
-      : '\n  ⚠ GUI bundle not found — run `bun run build:gui` for the browser UI.'
+      : '\n  ⚠ GUI bundle not found — the TUI works fine; from a source checkout run `bun run build:gui`.'
   }
 
   Open ${url} in your browser — or use the TUI instead: tagent start${
@@ -293,9 +340,7 @@ async function mainWeb() {
 `)
 
   if (!noOpen && !mobile) {
-    const { exec } = await import('node:child_process')
-    const open = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start ""' : 'xdg-open'
-    exec(`command -v ${open.split(' ')[0]} >/dev/null 2>&1 && ${open} ${url}`, () => undefined)
+    await openUrlInBrowser(url)
   }
 
   const shutdown = async () => {
@@ -776,8 +821,20 @@ async function mainDoctor() {
   const nSessions = fs.existsSync(sessDir) ? fs.readdirSync(sessDir).filter((f) => f.endsWith('.json')).length : 0
   check(true, `sessions on disk: ${nSessions}`)
 
+  // shell for the bash tool (Windows: Git for Windows' bash.exe)
+  {
+    const shell = resolveShell()
+    const probe = spawnSync(shell, ['-c', 'echo ok'], { timeout: 5000 })
+    check(
+      probe.status === 0,
+      probe.status === 0
+        ? `bash shell: ${process.platform === 'win32' ? shell : 'ok'}`
+        : `bash shell not found${process.platform === 'win32' ? ' — install Git for Windows (https://git-scm.com/download/win), then restart the terminal' : ''}`,
+    )
+  }
+
   // gui bundle
-  const gui = findGuiDir()
+  const gui = await resolveGuiDir()
   check(!!gui, `gui bundle: ${gui ?? 'not found (bun run build:gui) — TUI works regardless'}`)
 
   // github

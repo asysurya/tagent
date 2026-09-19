@@ -1,6 +1,6 @@
 import type { TagentConfig, ToolDefinition } from '../types'
 import { editFileTool, grepTool, listFilesTool, readFileTool, writeFileTool } from './fs'
-import { bashTool } from './bash'
+import { bashTool, resolveShell } from './bash'
 import { ddgSearchTool, webFetchTool } from './web'
 import { todoWriteTool } from './todo'
 import { worklogTool } from './worklog'
@@ -60,5 +60,6 @@ export function buildToolset(opts: BuildToolsetOptions = {}): ToolDefinition[] {
 }
 
 export { worklogTool, worklogPath } from './worklog'
+export { resolveShell }
 
 export { ALL_TOOLS }

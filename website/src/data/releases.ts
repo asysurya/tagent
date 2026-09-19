@@ -17,9 +17,44 @@ export interface Release {
   stable?: boolean
 }
 
-export const LATEST = '0.6.0'
+export const LATEST = '0.7.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.7.0',
+    date: '2026-09-19',
+    title: 'Single-file binaries: download, run, done — like Node.js/Python',
+    summary:
+      'Tagent now ships as one self-contained executable per platform — Windows x64/ARM64, Linux x64/ARM64, macOS Intel/Apple silicon. The web GUI is embedded inside the binary. Download it, run it, that is the whole install.',
+    stable: true,
+    sections: [
+      {
+        name: 'Single-file binaries',
+        items: [
+          'Six cross-compiled targets on every release: windows-x64.exe, windows-arm64.exe, linux-x64, linux-arm64, macos-x64, macos-arm64 — plus SHA256SUMS',
+          'Like the Node.js/Python downloads: grab the file, run it — no Bun install, no clone, no setup script; the website download page auto-detects your platform',
+          'The full web GUI (gui-dist) is embedded in the executable and self-extracts to ~/.tagent/gui-cache/ on first launch — tagent web works out of the box',
+        ],
+      },
+      {
+        name: 'Native Windows — no WSL needed',
+        items: [
+          'The Windows builds run the whole stack natively: TUI, daemon, web GUI, relay, the 40-provider catalog',
+          'The bash tool auto-detects Git for Windows bash.exe (override with TAGENT_BASH); tagent doctor probes it and tells you exactly what is missing',
+          '~/.tagent now resolves to the real Windows profile via USERPROFILE — config, sessions and model caches land in the right place',
+          'Opening the browser uses the cmd start builtin — no more POSIX-only command -v guards on the Windows path',
+        ],
+      },
+      {
+        name: 'Under the hood',
+        items: [
+          'scripts/build-binaries.sh: gui-dist → base64 manifest → bun build --compile per target (playwright stays external — the browser tool degrades gracefully)',
+          'scripts/gh-release.sh now builds the binaries, creates the release and uploads every asset with checksums in one shot',
+          'A gui-dist folder next to the binary (or in the cwd) still takes precedence over the embedded bundle — power users can swap the GUI without rebuilding',
+        ],
+      },
+    ],
+  },
   {
     version: '0.6.0',
     date: '2026-09-18',

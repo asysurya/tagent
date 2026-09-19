@@ -1,9 +1,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import type { TagentConfig } from './types'
-import { deepMerge, ensureDir } from './util'
+import { deepMerge, ensureDir, homeDir } from './util'
 
-export const GLOBAL_DIR = path.join(process.env.HOME || process.cwd(), '.tagent')
+export const GLOBAL_DIR = path.join(homeDir(), '.tagent')
 
 export function workspaceDir(root: string): string {
   return path.join(root, '.tagent')

@@ -1,6 +1,16 @@
 import path from 'node:path'
 import fs from 'node:fs'
+import os from 'node:os'
 import { randomUUID } from 'node:crypto'
+
+/**
+ * Cross-platform home directory — the tagent global dir lives here.
+ * On Windows `process.env.HOME` is usually undefined, so fall back through
+ * USERPROFILE and os.homedir() before ever considering cwd.
+ */
+export function homeDir(): string {
+  return process.env.HOME || process.env.USERPROFILE || os.homedir() || process.cwd()
+}
 
 export function uid(): string {
   return randomUUID().slice(0, 8) + Date.now().toString(36).slice(-4)
@@ -34,6 +44,20 @@ export function relPath(root: string, abs: string): string {
 
 export function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true })
+}
+
+/** True when running as a `bun build --compile` single-file executable. */
+export function isCompiledBinary(): boolean {
+  return import.meta.dir.startsWith('/$bunfs')
+}
+
+/** Directory of the running executable (real path, also inside compiled binaries). */
+export function binaryDir(): string {
+  try {
+    return path.dirname(process.execPath)
+  } catch {
+    return process.cwd()
+  }
 }
 
 export function nowMs(): number {
