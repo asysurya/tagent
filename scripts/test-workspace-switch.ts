@@ -73,7 +73,15 @@ try {
 
   socket.disconnect()
   console.log(fails ? `\nFAILS: ${fails}` : '\nWORKSPACE SWITCH ALL OK')
-  process.exit(fails ? 1 : 0)
+  // NOT process.exit() — bun's process.exit() skips this try's finally block,
+  // which leaked the detached daemon on port 4078 and poisoned the NEXT run
+  // (a stale daemon answers hello with its own switched-away workspace).
+  // exitCode lets the finally below run, then the loop drains naturally.
+  process.exitCode = fails ? 1 : 0
 } finally {
-  try { process.kill(-daemon.pid!, 'SIGKILL') } catch { daemon.kill('SIGKILL') }
+  // belt and braces: a detached bun daemon occasionally survives the group
+  // kill (seen in the QA sandbox — it then poisons the next run's port 4078
+  // with a stale workspace), so always follow up with a direct kill
+  try { process.kill(-daemon.pid!, 'SIGKILL') } catch { /* group already gone */ }
+  try { daemon.kill('SIGKILL') } catch { /* process already gone */ }
 }

@@ -49,40 +49,57 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v0.11.0 — tagent-native gets the app TUI (the Windows 7 build grows up)
+## v0.13.0 — GitHub login & project sync, markdown in the terminal, TUI polish
 
-The native Go build for Windows 7/8/32-bit machines stopped being a plain
-line-by-line log. It now opens the same opencode-style full-screen app as
-the main CLI — and it does it through the classic Windows Console API, so
-it renders with real colors on a genuine Windows 7 conhost that has never
-heard of ANSI escape sequences.
+Your projects now follow you. Log in with GitHub and tagent offers — once per
+project — to sync the workspace to a private repo; `tagent clone` continues it
+on any device. Guests keep everything local: no account is ever required.
 
-### The native app TUI
-- **Full-screen takeover** via the Windows Console API (`SetConsoleTextAttribute` + `WriteConsoleW` + `ReadConsoleInputW`) — zero ANSI, conhost-safe, and the Win7-safe glyph set (square box corners, ASCII spinner) is selected automatically
-- **Same layout language as the main CLI**: header (workspace · NATIVE chip · model · fallback chain · spinner/token counter), scrollable transcript, live status row, boxed multi-line editor with reverse-video cursor, shortcut footer
-- **ctrl+x menu** — arrow keys over typing: switch model, view the fallback chain, diagnostics, clear transcript, help, exit
-- **Slash palette**: type `/` — commands with descriptions, filter as you type, tab completes, enter runs
-- **esc interrupts** the running task through Go context cancellation — in-flight HTTP calls and bash commands stop, the conversation stays usable
-- **Multi-turn conversations** (context kept between tasks), token usage in the header, ↑/↓ history recall, pgup/pgdn scrollback with a new-lines indicator
-- CJK-aware word wrapping, terminal resize handling, and automatic fallback to a plain line-mode REPL when stdin/stdout is not a terminal
-- `/model` saves your pick straight into `~/.tagent/config.json` (unknown fields preserved — the file stays compatible with the full CLI)
-- Still **zero dependencies**: pure Go stdlib, one static ~5 MB file per platform
+### GitHub login & project sync
+- **`tagent auth`** — PAT walkthrough by default (github.com/settings/tokens,
+  scope `repo`), `--device` for the OAuth device flow, or pipe the token when
+  non-interactive. It lands in `~/.tagent/credentials.json` (chmod 600) — never
+  in config.json, never in .git/config
+- **Guest-first**: every feature stays local without an account. After login,
+  tagent asks once per project — “sync this workspace to GitHub?” with
+  *Sync now / Later / Not this project* (answers are remembered)
+- **`tagent sync [message]`** snapshots the workspace (commit + push) into a
+  private repo — `tagent-<dirname>` by default; the token is used one-shot and
+  never written anywhere persistent
+- **`tagent projects`** lists linked projects (name · repo · last sync, ▸ marks
+  the current one); **`tagent clone <owner/name | name>`** restores any of them
+  on this machine and prints the next steps
+- **`tagent whoami`** / **`tagent logout`** — status and local-token removal;
+  the GitHub side is never touched
+- **Web GUI**: matching login + sync dialogs, wired to the new daemon RPC
+  events (`auth:*`, `sync:*`, `projects:*`) — any client can drive the same flow
+- The TUI `/push` command now goes through the same sync engine, and the stats
+  bar grows a dim `⎇ owner/repo` badge once a project is linked
 
-### Also in this release
-- `tagent-native diag` subcommand for terminal-free checks
-- The main CLI (Bun) is unchanged — it just carries version 0.11.0
+### Markdown in the TUI
+- Assistant replies render real markdown in the terminal — bold colored
+  headings, **bold**, *italic*, `inline code`
+- Fenced code blocks draw a dim left rail with a language label; nested lists
+  indent; `>` quotes and `---` rules render
+- Pipe tables render best-effort and links degrade to “text (url)” — all
+  width-aware, double-width CJK glyphs included
 
----
+### TUI polish
+- Persistent stats bar under the chat input: model · mode · tokens · time ·
+  workspace — always visible while you type
+- **ESC stops a running agent** — model calls and bash tools cancel mid-flight,
+  the conversation stays usable
+- Arrow keys scroll the transcript without touching input history (while
+  scrolled up, ↑/↓ move one line; pgup/pgdn a page as before)
 
-## tagent-native — Windows 7 / 8 / 32-bit
-
-A from-scratch Go port (pure stdlib, `CGO_ENABLED=0`): true static single-file
-executables around 5 MB. Same agent DNA — the full-screen app TUI + one-shot `run`,
-OpenAI-compatible providers (zai / openrouter / groq / openai built in, plus any
-custom endpoint), the multi-key fallback chain, five workspace-jailed tools
-(read / write / edit / list / bash) — no runtime, no installer.
-
-- `tagent-native-windows-386.exe` is a **PE32 i386** binary: runs on Windows 7, 8, 8.1, 10, 11 — **including 32-bit machines**
+### Under the hood
+- Core sync engine: project registry (`~/.tagent/projects.json`),
+  link/refuse state, guest→login flow, restore/clone — 57 offline hermetic tests
+- CLI update flow hardened: the source-install updater verifies the git remote
+  before ever running `git pull`
+- GUI state slice for auth & sync (guest · login · linkedRepo · lastSyncAt)
+- Website: responsive & tidy audit pass — mobile hamburger nav, scrollable
+  download tables, focus rings, refreshed docs
 
 ---
 
@@ -95,12 +112,12 @@ embedded inside the binary and self-extracts on first run).
 
 | File | Platform |
 | --- | --- |
-| `tagent-v0.11.0-windows-x64.exe` | Windows 10+ (64-bit) |
-| `tagent-v0.11.0-windows-arm64.exe` | Windows 10+ on ARM |
-| `tagent-v0.11.0-linux-x64` | Linux (glibc, 64-bit) |
-| `tagent-v0.11.0-linux-arm64` | Linux ARM64 (incl. Raspberry Pi 5) |
-| `tagent-v0.11.0-macos-x64` | macOS Intel |
-| `tagent-v0.11.0-macos-arm64` | macOS Apple silicon |
+| `tagent-v0.13.0-windows-x64.exe` | Windows 10+ (64-bit) |
+| `tagent-v0.13.0-windows-arm64.exe` | Windows 10+ on ARM |
+| `tagent-v0.13.0-linux-x64` | Linux (glibc, 64-bit) |
+| `tagent-v0.13.0-linux-arm64` | Linux ARM64 (incl. Raspberry Pi 5) |
+| `tagent-v0.13.0-macos-x64` | macOS Intel |
+| `tagent-v0.13.0-macos-arm64` | macOS Apple silicon |
 
 Native edition (Go):
 
@@ -121,15 +138,15 @@ edition automatically.
 - The full builds run the full stack natively: TUI, daemon, web GUI, relay, the 40-provider catalog
 - The bash tool uses Git for Windows' bash.exe (auto-detected, override with `TAGENT_BASH`); `tagent doctor` tells you if it's missing
 - Home/config/sessions live in the real Windows user profile (`~/.tagent` via USERPROFILE)
-- Windows 7/8/32-bit: use the native edition above — now with the same app TUI
+- Windows 7/8/32-bit: use the native edition above — it has the same app TUI
 
 **Install / upgrade**
 
 ```bash
 # Linux / macOS
-chmod +x tagent-v0.11.0-linux-x64 && ./tagent-v0.11.0-linux-x64 doctor
+chmod +x tagent-v0.13.0-linux-x64 && ./tagent-v0.13.0-linux-x64 doctor
 # Windows (PowerShell) — the .exe runs as-is
-.\tagent-v0.11.0-windows-x64.exe doctor
+.\tagent-v0.13.0-windows-x64.exe doctor
 # Windows 7 / 32-bit — native edition (just run it: the app TUI opens)
 .\tagent-native-windows-386.exe
 ```
@@ -146,7 +163,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — tagent-native gets the app TUI: full-screen on Windows 7" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — GitHub login & project sync, markdown in the terminal, TUI polish" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")

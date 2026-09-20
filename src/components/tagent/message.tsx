@@ -34,6 +34,14 @@ function toolSummary(c: ToolCallRecord): string {
   return s.length > 72 ? s.slice(0, 72) + '…' : s
 }
 
+function toolSummaryFull(c: ToolCallRecord): string {
+  const i = c.input as Record<string, unknown> | undefined
+  if (!i) return c.tool
+  return String(
+    i.path ?? i.pattern ?? i.query ?? i.url ?? i.name ?? i.command ?? i.action ?? i.description ?? '',
+  ) || c.tool
+}
+
 export const ToolCard = memo(function ToolCard({ call }: { call: ToolCallRecord }) {
   const [open, setOpen] = useState(false)
   const Icon = TOOL_ICONS[call.tool] ?? Wrench
@@ -42,6 +50,8 @@ export const ToolCard = memo(function ToolCard({ call }: { call: ToolCallRecord 
     <div className="rounded-lg border border-zinc-800/80 bg-zinc-900/40 overflow-hidden my-1.5">
       <button
         type="button"
+        aria-expanded={open}
+        title={toolSummaryFull(call)}
         className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-zinc-900/70 transition-colors"
         onClick={() => setOpen((v) => !v)}
       >
@@ -51,7 +61,7 @@ export const ToolCard = memo(function ToolCard({ call }: { call: ToolCallRecord 
           : status === 'denied' ? 'text-zinc-500'
           : 'text-zinc-400')} />
         <span className="text-[11px] font-mono text-zinc-300">{call.tool}</span>
-        <span className="text-[11px] text-zinc-600 truncate flex-1">{toolSummary(call)}</span>
+        <span className="text-[11px] text-zinc-500 truncate flex-1" title={toolSummaryFull(call)}>{toolSummary(call)}</span>
         {status === 'running' ? (
           <Loader2 className="size-3.5 text-orange-400 animate-spin shrink-0" />
         ) : status === 'error' ? (
@@ -92,7 +102,7 @@ export function UserMessage({ m }: { m: ChatMessage }) {
   return (
     <div className="px-4 py-3">
       <div className="flex gap-3">
-        <span className="text-[10px] font-mono text-zinc-500 pt-1 w-16 shrink-0 text-right select-none">you</span>
+        <span className="text-[10px] font-mono text-zinc-500 pt-1 w-12 sm:w-16 shrink-0 text-right select-none">you</span>
         <div className="min-w-0 flex-1 rounded-lg bg-zinc-900/60 border border-zinc-800/60 px-3 py-2 text-sm text-zinc-200 whitespace-pre-wrap break-words leading-relaxed">
           {m.content}
         </div>
@@ -106,7 +116,7 @@ export function AssistantMessage({ m }: { m: ChatMessage }) {
   return (
     <div className="px-4 py-3">
       <div className="flex gap-3">
-        <span className="text-[10px] font-mono text-orange-400/80 pt-1 w-16 shrink-0 text-right select-none">tagent</span>
+        <span className="text-[10px] font-mono text-orange-400/80 pt-1 w-12 sm:w-16 shrink-0 text-right select-none">tagent</span>
         <div className="min-w-0 flex-1 space-y-2">
           {m.content && (
             <div className="prose-chat text-sm text-zinc-300 leading-relaxed">

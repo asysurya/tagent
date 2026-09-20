@@ -59,7 +59,7 @@ export function TimelinePanel() {
       </div>
 
       {/* list */}
-      <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2">
+      <div className="flex-1 min-h-0 overflow-y-auto pretty-scroll p-3 space-y-2">
         {timeline.length === 0 && live.length === 0 && (
           <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
             <p className="text-xs text-zinc-400 leading-relaxed">

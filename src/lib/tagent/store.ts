@@ -14,10 +14,20 @@ import {
   mcpTemplates as mcpTemplatesRpc,
   pluginsList as pluginsListRpc,
   pluginScaffold as pluginScaffoldRpc,
+  authStatus as authStatusRpc,
+  login as loginRpc,
+  logout as logoutRpc,
+  syncStatus as syncStatusRpc,
+  syncPush as syncPushRpc,
+  syncLink as syncLinkRpc,
+  refuseSync as refuseSyncRpc,
+  unlinkSync as unlinkSyncRpc,
+  fetchProjects as fetchProjectsRpc,
 } from './client'
 import type {
   AgentMode,
   AgentStatus,
+  AuthLoginResponse,
   ChatMessage,
   CheckpointMeta,
   Connection,
@@ -31,12 +41,15 @@ import type {
   MemoryState,
   PermissionRequest,
   PluginMeta,
+  ProjectReg,
   RelayEntry,
   SanitizedConfig,
   SessionData,
   SessionMeta,
   SkillMeta,
   SubagentInfo,
+  SyncLinkResponse,
+  SyncPushResponse,
   ToolCallRecord,
   WorkspaceInfo,
 } from './types'
@@ -89,6 +102,21 @@ interface TagentState {
   terminalOutput: string[]
   githubBusy: boolean
 
+  /* github auth + project sync (v0.13 guest→login flow).
+   * NOTE: the login NAME lives in `loginName` because `login` is the action. */
+  guest: boolean
+  loginName?: string
+  linkedRepo?: string
+  lastSyncAt?: number
+  projects: ProjectReg[]
+  /** one-time "sync this project to GitHub?" dialog (set by a successful login) */
+  promptLink: boolean
+  authBusy: boolean
+  syncing: boolean
+  linking: boolean
+  authError?: string
+  syncError?: string
+
   /* actions */
   boot: () => Promise<void>
   setMode: (m: AgentMode) => Promise<void>
@@ -122,6 +150,19 @@ interface TagentState {
   refreshTimeline: () => Promise<void>
   saveGithubPat: (token: string) => Promise<{ ok: boolean; login?: string; error?: string }>
   githubPush: () => Promise<void>
+  authStatus: () => Promise<void>
+  login: (pat: string) => Promise<AuthLoginResponse>
+  logout: () => Promise<{ ok: boolean; error?: string }>
+  syncStatus: () => Promise<void>
+  syncPush: (message?: string) => Promise<SyncPushResponse>
+  syncLink: (repo?: string) => Promise<SyncLinkResponse>
+  /** "Jangan untuk proyek ini" — never show the sync prompt for this workspace again */
+  refuseSync: () => Promise<void>
+  /** remove the registry link for the active workspace */
+  unlinkSync: () => Promise<void>
+  /** "Nanti" — just close the one-time sync prompt */
+  dismissPromptLink: () => void
+  fetchProjects: () => Promise<void>
   switchWorkspace: (path: string) => Promise<void>
   saveMega: (enabled: boolean, email: string, sessionKey: string) => Promise<void>
   megaSync: () => Promise<void>
@@ -193,6 +234,15 @@ const initial = {
   fileBuffer: null,
   terminalOutput: [],
   githubBusy: false,
+  guest: true,
+  loginName: undefined,
+  linkedRepo: undefined,
+  lastSyncAt: undefined,
+  projects: [] as ProjectReg[],
+  promptLink: false,
+  authBusy: false,
+  syncing: false,
+  linking: false,
 }
 
 /**
@@ -234,6 +284,7 @@ export const useTagent = create<TagentState>((set, get) => ({
         console.info('[tagent] hello ok — live mode')
         await get()._applyHello(payload)
         void get().refreshRelays()
+        void get().authStatus() // guest↔login for the header / sync UI
       } catch (e) {
         console.warn('[tagent] hello failed — falling back to demo:', (e as Error).message)
         set({ connection: 'demo' })
@@ -438,6 +489,10 @@ export const useTagent = create<TagentState>((set, get) => ({
       worklogContent: '',
       worklogExists: false,
       timeline: [],
+      // workspace may have changed — its link state is refetched below
+      linkedRepo: undefined,
+      lastSyncAt: undefined,
+      promptLink: false,
     })
     if (payload.sessions.length > 0) {
       await get().loadSession(payload.sessions[0].id)
@@ -447,6 +502,7 @@ export const useTagent = create<TagentState>((set, get) => ({
     await get().refreshTree()
     await get().refreshWorklog()
     await get().refreshTimeline()
+    void get().syncStatus()
   },
 
   async setMode(m) {
@@ -747,19 +803,137 @@ export const useTagent = create<TagentState>((set, get) => ({
   },
 
   async saveGithubPat(token) {
-    const { socket } = get()
-    if (!socket || get().connection !== 'ready') return { ok: false, error: 'daemon not connected' }
-    return call<{ ok: boolean; login?: string; error?: string }>(socket, 'github:pat', { token })
+    // v0.13: delegates to the canonical auth:login (credential store + registry)
+    return get().login(token)
   },
 
   async githubPush() {
-    const { socket } = get()
-    if (!socket || get().connection !== 'ready') return
+    // v0.13: delegates to sync:push — same push, but the project registry
+    // (link + lastSyncAt) is updated so `tagent projects` and the GUI agree
     set({ githubBusy: true })
-    const r = await call<{ ok: boolean; error?: string }>(socket, 'github:push', { message: 'Update from Tagent' }, 180000).catch((e) => ({ ok: false, error: (e as Error).message }))
-    set({ githubBusy: false })
-    if (r.ok) toast('Pushed to GitHub ✓')
-    else toast.error(r.error ?? 'push failed')
+    try { await get().syncPush('Update from Tagent') } finally { set({ githubBusy: false }) }
+  },
+
+  async authStatus() {
+    const { socket, connection } = get()
+    if (connection !== 'ready' || !socket) return
+    const r = await authStatusRpc(socket).catch(() => null)
+    if (!r) return
+    set((st) => ({
+      guest: !!r.guest,
+      loginName: r.login,
+      // keep the legacy config view honest (topbar/settings read config.github)
+      config: st.config
+        ? { ...st.config, github: { ...st.config.github, connected: !r.guest, login: r.login ?? null } }
+        : st.config,
+    }))
+  },
+
+  async login(pat) {
+    const token = pat.trim()
+    if (!token) return { ok: false, error: 'no token provided' }
+    const { socket, connection } = get()
+    if (connection !== 'ready' || !socket) return { ok: false, error: 'daemon not connected' }
+    set({ authBusy: true, authError: undefined })
+    const r = await loginRpc(socket, token).catch((e: Error): AuthLoginResponse => ({ ok: false, error: e.message }))
+    set({ authBusy: false })
+    if (r.ok) {
+      set((st) => ({
+        guest: false,
+        loginName: r.login,
+        // the daemon asks us (once) to offer the initial sync for this project
+        promptLink: !!r.promptLink,
+        config: st.config
+          ? { ...st.config, github: { ...st.config.github, connected: true, login: r.login ?? null } }
+          : st.config,
+      }))
+      void get().syncStatus()
+    } else {
+      set({ authError: r.error })
+    }
+    return r
+  },
+
+  async logout() {
+    const { socket, connection } = get()
+    if (connection !== 'ready' || !socket) return { ok: false, error: 'daemon not connected' }
+    set({ authBusy: true })
+    const r = await logoutRpc(socket).catch((): { ok: boolean } => ({ ok: false }))
+    set({ authBusy: false, guest: true, loginName: undefined, promptLink: false })
+    set((st) => st.config
+      ? { config: { ...st.config, github: { ...st.config.github, connected: false, login: null } } }
+      : st)
+    if (r.ok) toast('Logged out of GitHub')
+    return r
+  },
+
+  async syncStatus() {
+    const { socket, connection } = get()
+    if (connection !== 'ready' || !socket) return
+    const r = await syncStatusRpc(socket).catch(() => null)
+    if (!r) return
+    set({ guest: !!r.guest, loginName: r.login, linkedRepo: r.repo, lastSyncAt: r.lastSyncAt })
+  },
+
+  async syncPush(message) {
+    const { socket, connection } = get()
+    if (connection !== 'ready' || !socket) return { ok: false, error: 'daemon not connected' }
+    if (get().syncing) return { ok: false, error: 'sync already in progress' }
+    set({ syncing: true, syncError: undefined })
+    const r = await syncPushRpc(socket, message).catch((e: Error): SyncPushResponse => ({ ok: false, error: e.message }))
+    set({ syncing: false })
+    if (r.ok) {
+      set({ linkedRepo: r.repo ?? get().linkedRepo, lastSyncAt: r.lastSyncAt ?? Date.now(), promptLink: false })
+      toast(`Synced to ${r.repo ?? 'GitHub'} ✓`)
+    } else {
+      set({ syncError: r.error })
+      // 'not logged in' is the auth-guard signal — the GUI opens the login dialog
+      toast.error(r.error === 'not logged in' ? 'Log in to GitHub first' : (r.error ?? 'sync failed'))
+    }
+    return r
+  },
+
+  async syncLink(repo) {
+    const { socket, connection } = get()
+    if (connection !== 'ready' || !socket) return { ok: false, error: 'daemon not connected' }
+    set({ linking: true, syncError: undefined })
+    const r = await syncLinkRpc(socket, repo).catch((e: Error): SyncLinkResponse => ({ ok: false, error: e.message }))
+    set({ linking: false })
+    if (r.ok) {
+      set({ linkedRepo: r.repo ?? get().linkedRepo, promptLink: false })
+      toast(`Linked to ${r.repo ?? 'repo'} ✓`)
+      void get().syncStatus()
+    } else {
+      set({ syncError: r.error })
+      toast.error(r.error ?? 'link failed')
+    }
+    return r
+  },
+
+  async refuseSync() {
+    const { socket, connection } = get()
+    if (connection !== 'ready' || !socket) return
+    await refuseSyncRpc(socket).catch(() => null)
+    set({ promptLink: false })
+  },
+
+  async unlinkSync() {
+    const { socket, connection } = get()
+    if (connection !== 'ready' || !socket) return
+    await unlinkSyncRpc(socket).catch(() => null)
+    set({ linkedRepo: undefined, lastSyncAt: undefined })
+    void get().fetchProjects()
+  },
+
+  dismissPromptLink() {
+    set({ promptLink: false })
+  },
+
+  async fetchProjects() {
+    const { socket, connection } = get()
+    if (connection !== 'ready' || !socket) return
+    const r = await fetchProjectsRpc(socket).catch(() => null)
+    if (r) set({ projects: r.projects ?? [] })
   },
 
   async switchWorkspace(path) {

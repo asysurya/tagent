@@ -10,7 +10,12 @@
  *   tagent [start] [path]   interactive TUI (add --web-gui for the browser UI)
  *   tagent web [path]       daemon + web GUI only — for phone / remote use
  *   tagent run [path] "msg" one-shot agent run, prints the result
- *   tagent auth             GitHub login wizard (device flow or PAT)
+ *   tagent auth [--device]   GitHub login — PAT by default, --device = device flow
+ *   tagent sync [message]   link + push this project to GitHub
+ *   tagent projects         list linked projects (name, repo, last sync)
+ *   tagent clone <repo>     restore a project from GitHub
+ *   tagent logout           remove the stored GitHub token
+ *   tagent whoami           print the current login (or guest)
  *   tagent config …         get / set / list settings
  *   tagent models [path]    providers + models catalog (--refresh to discover)
  *   tagent sessions [path]  list sessions of a workspace
@@ -45,6 +50,23 @@ import {
   resolveShell,
   clearCaches,
   listCredentialsMasked,
+  validatePat,
+  startDeviceLogin,
+  pollDeviceToken,
+  getCredential,
+  setCredential,
+  authStatus,
+  logout,
+  saveGithubLogin,
+  defaultRepoName,
+  listProjects,
+  getLinkedProject,
+  linkProject,
+  syncProject,
+  restoreProject,
+  workspaceHasWork,
+  refuseLink,
+  isLinkRefused,
   type SessionData,
   type ToolCallRecord,
 } from '@tagent/core'
@@ -59,6 +81,7 @@ import { lanIPv4s } from './net'
 import { loadRelays, revokeRelay } from '@tagent/core'
 import { selfUpdate, detectInstallKind } from './updater'
 import { uninstall } from './uninstall'
+import { select, confirm } from './select'
 
 const args = process.argv.slice(2)
 
@@ -186,8 +209,25 @@ function printHelp() {
             daemon + web GUI only (no TUI) — phone / remote use
     tagent run [path] "prompt" [--json]
             one-shot: run the agent on a prompt, print the result, exit
-    tagent auth
-            GitHub login wizard (device flow or personal access token)
+    tagent auth [--device]
+            GitHub login — paste a personal access token
+            (github.com/settings/tokens, scope: repo).
+            --device switches to the OAuth device flow (needs
+            TAGENT_GH_CLIENT_ID). after login, a workspace with files
+            gets a one-time "sync to GitHub?" offer.
+    tagent sync [message]
+            link this project to GitHub and push it — the first run
+            creates a private repo (tagent-<dirname>). needs auth.
+    tagent projects
+            list linked projects — name, repo, last sync
+    tagent clone <owner/name | name> [dir]
+            restore a project from GitHub into ./<name> (or <dir>/<name>);
+            a bare name matches your linked projects first
+    tagent logout [--yes]
+            remove the stored GitHub token — your GitHub repos
+            are never touched
+    tagent whoami
+            print the current GitHub login (guest when logged out)
     tagent config list [path] · get <key> [path] · set <key> <value> [path] [-g]
             settings from the shell (keys: webGui caveman worklog maxTurns
             provider model bash browser autoCheckpoint) — -g writes globally
@@ -209,8 +249,9 @@ function printHelp() {
     tagent cache [path] · tagent cache clear [path] [--all]
             smart-cache status / wipe (file states, discovered models,
             update checks — run --all to reset everything)
-    tagent update
-            check for a newer release and self-update (y/N prompt)
+    tagent update [--yes]
+            check for a newer release and self-update (y/N prompt,
+            --yes skips the question)
             — binary installs download the matching release asset,
               npm/bun installs run the global upgrade, source runs git pull
     tagent uninstall [--yes]
@@ -239,6 +280,11 @@ async function init(): Promise<void> {
     case 'web': await mainWeb(); break
     case 'run': await mainRun(); break
     case 'auth': await mainAuth(); break
+    case 'sync': await mainSync(); break
+    case 'projects': await mainProjects(); break
+    case 'clone': await mainClone(); break
+    case 'logout': await mainLogout(); break
+    case 'whoami': await mainWhoami(); break
     case 'config': await mainConfig(); break
     case 'models': await mainModels(); break
     case 'sessions': await mainSessions(); break
@@ -433,54 +479,301 @@ async function mainRun() {
 }
 
 /* ------------------------------------------------------------------ */
-/* tagent auth — GitHub wizard                                          */
+/* tagent auth — GitHub login (PAT primary; device flow behind a flag)  */
 /* ------------------------------------------------------------------ */
+
+/** surgical raw-JSON edit: drop cached github token/login from a config file */
+function clearGithubKeysFromConfig(file: string): boolean {
+  try {
+    if (!fs.existsSync(file)) return false
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as { github?: Record<string, unknown> }
+    if (!raw.github) return false
+    let changed = false
+    for (const k of ['token', 'login']) {
+      if (raw.github[k] !== undefined) {
+        delete raw.github[k]
+        changed = true
+      }
+    }
+    if (Object.keys(raw.github).length === 0) delete raw.github
+    if (changed) fs.writeFileSync(file, JSON.stringify(raw, null, 2))
+    return changed
+  } catch {
+    return false
+  }
+}
 
 async function mainAuth() {
   const root = resolveWorkspace(plain[1])
-  const host = new AgentHost({ workspaceRoot: root })
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-  const ask = (q: string) => new Promise<string>((r) => rl.question(q, (a) => r(a ?? '')))
 
-  const github = host.cfg.github ?? {}
+  // legacy alias from pre-0.13: `tagent auth --logout` — same flow as `tagent logout`
   if (has('--logout')) {
-    await host.githubLogout()
-    console.log('logged out.')
-    rl.close()
-    return
-  }
-  if (github.token) {
-    console.log(`✔ connected as ${github.login ?? '(unknown)'} — repo: ${github.repo ?? '(auto)'}`)
-    console.log('use --logout to disconnect.')
-    rl.close()
+    await mainLogout()
     return
   }
 
-  console.log(bold('\n  GitHub login\n'))
-  console.log('  1) device flow — cleanest (needs TAGENT_GH_CLIENT_ID or github.clientId)')
-  console.log('  2) personal access token — works everywhere')
-  const a = (await ask('  choose [1/2] ')).trim()
-  try {
-    if (a === '1') {
-      const start = await host.githubDeviceStart()
-      console.log(`\n  open  ${start.verification_uri}`)
-      console.log(`  code  ${start.user_code}\n`)
-      console.log('  waiting for authorization…')
-      const r = await host.githubDevicePoll()
-      console.log(`✔ logged in as ${r.login}`)
-    } else if (a === '2') {
-      const token = (await ask('  token: ')).trim()
-      if (!token) { console.log('cancelled.'); rl.close(); return }
-      const r = await host.githubPat(token)
-      console.log(`✔ logged in as ${r.login}`)
-    } else {
-      console.log('cancelled.')
+  // status — migrating a pre-0.13 token that lived in config.json, if any
+  let st = authStatus()
+  let migrated = false
+  if (!st.logged) {
+    const legacy = loadConfig(root).github
+    if (legacy?.token) {
+      // scrub the config files FIRST (this also clears the global login we are about to re-cache)
+      clearGithubKeysFromConfig(path.join(workspaceDir(root), 'config.json'))
+      clearGithubKeysFromConfig(path.join(GLOBAL_DIR, 'config.json'))
+      if (legacy.login) saveGithubLogin(legacy.token, legacy.login)
+      else setCredential('github', legacy.token)
+      console.log(dim('  migrated the stored GitHub token into ~/.tagent/credentials.json'))
+      st = authStatus()
+      migrated = true
     }
-    console.log('\n  next: `tagent push` or /push in the TUI to sync this workspace.')
-  } catch (e) {
-    die((e as Error).message)
   }
-  rl.close()
+  if (st.logged) {
+    const login = st.login ?? readGlobalConfig().github?.login ?? '(unknown)'
+    console.log(green(`✔ logged in as ${login}`))
+    console.log(dim('  tagent sync uploads a project · tagent logout disconnects'))
+    if (migrated) await maybePromptLinkWorkspace(root) // this run completed a login
+    return
+  }
+
+  // device flow — explicit opt-in; needs an OAuth client id we don't ship
+  if (has('--device')) {
+    const clientId = loadConfig(root).github?.clientId || process.env.TAGENT_GH_CLIENT_ID || ''
+    if (!clientId) die('device flow needs TAGENT_GH_CLIENT_ID (a GitHub OAuth app client id) — or use a PAT: tagent auth')
+    try {
+      const start = await startDeviceLogin(clientId)
+      console.log(bold('\n  GitHub login — device flow\n'))
+      console.log(`  open  ${start.verification_uri}`)
+      console.log(`  code  ${bold(start.user_code)}\n`)
+      console.log('  waiting for authorization…')
+      const token = await pollDeviceToken(clientId, start)
+      await finishLogin(root, token)
+    } catch (e) {
+      die(`login failed: ${(e as Error).message}`)
+    }
+    return
+  }
+
+  // primary path — personal access token
+  console.log(bold('\n  GitHub login\n'))
+  console.log('  a personal access token is the simplest way to connect:')
+  console.log('    1. open   https://github.com/settings/tokens')
+  console.log(`             ${dim('Settings → Developer settings → Personal access tokens (classic)')}`)
+  console.log(`    2. generate a token — check the ${bold('repo')} scope`)
+  console.log(`    3. paste it below${dim(' (stored in ~/.tagent/credentials.json, never in your repos)')}\n`)
+  let token = ''
+  if (process.stdin.isTTY) {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+    token = (await new Promise<string>((r) => rl.question('  token: ', (a) => r(a ?? '')))).trim()
+    rl.close()
+  } else {
+    // piped: echo "$GH_TOKEN" | tagent auth
+    token = (await Bun.stdin.text().catch(() => '')).trim()
+  }
+  if (!token) die('no token given — run `tagent auth` in a terminal, or pipe one: echo "$GH_TOKEN" | tagent auth')
+  try {
+    await finishLogin(root, token)
+  } catch (e) {
+    die(`login failed: ${(e as Error).message}`)
+  }
+}
+
+/** validate + store the token, cache the login, print it, offer the first sync */
+async function finishLogin(root: string, token: string): Promise<void> {
+  const login = await validatePat(token) // throws on an invalid token
+  saveGithubLogin(token, login) // credential store + login cached in the global config
+  console.log(green(`\n  ✔ logged in as ${login}`))
+  await maybePromptLinkWorkspace(root)
+}
+
+/* ------------------------------------------------------------------ */
+/* guest→login flow — the one-time "sync this project?" offer            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Run right after a successful login: when the workspace has files, is not
+ * linked to a repo yet and was not refused → ask ONCE whether to sync it
+ * to GitHub. Non-interactive sessions never block; they just get a hint.
+ *
+ * Reusable — but note this module is the CLI entry point (importing it
+ * boots the CLI), so daemon/GUI hosts should replicate the flow instead.
+ */
+export async function maybePromptLinkWorkspace(root: string): Promise<void> {
+  try {
+    if (!workspaceHasWork(root)) return // nothing to upload
+    if (getLinkedProject(root)) return // already linked
+    if (isLinkRefused(root)) return // user said never
+  } catch {
+    return // registry unreadable — never break a successful login
+  }
+  if (!process.stdout.isTTY || !process.stdin.isTTY) {
+    console.log(dim('  this project is not on GitHub yet — run `tagent sync` to upload it'))
+    return
+  }
+  const pick = await select<string>({
+    title: 'Proyek ini belum di-sync. Sync ke GitHub sekarang?',
+    items: [
+      { label: 'Sync sekarang', value: 'now', hint: 'repo privat + upload' },
+      { label: 'Nanti', value: 'later', hint: 'tanya lagi nanti' },
+      { label: 'Jangan untuk proyek ini', value: 'never', hint: 'jangan tanya lagi' },
+    ],
+    footer: 'sync = link + push ke GitHub',
+  })
+  if (pick === 'now') {
+    await doInitialSync(root)
+  } else if (pick === 'never') {
+    try {
+      refuseLink(root)
+    } catch { /* best-effort */ }
+    console.log(dim('  ok — this project will not be offered again'))
+  }
+  // 'later' (or Esc / Ctrl+C) → nothing; asked again on the next login only
+}
+
+async function doInitialSync(root: string): Promise<void> {
+  try {
+    const cfg = loadConfig(root)
+    linkProject(root, cfg.github?.repo || defaultRepoName(root))
+    console.log('')
+    const res = await syncProject(root, cfg, {
+      message: 'sync: initial upload from tagent',
+      onLog: (l) => console.log(`  ${dim(l)}`),
+    }) // a successful sync re-links the registry with the full owner/name
+    console.log(green(`\n  ✔ project synced → ${res.url}`))
+    console.log(dim(`  commit ${res.commit} · next time: tagent sync [message]`))
+  } catch (e) {
+    console.log(red(`  ✗ sync failed: ${(e as Error).message}`))
+    console.log(dim('    nothing was lost — try again any time: tagent sync'))
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* tagent sync / projects / clone / logout / whoami                     */
+/* ------------------------------------------------------------------ */
+
+async function mainSync() {
+  const message = plain.slice(1).join(' ').trim() || 'sync: update from tagent'
+  const root = path.resolve('.')
+  if (!authStatus().logged) die('not logged in — run `tagent auth` first (GitHub sync needs it)')
+  const cfg = loadConfig(root)
+  try {
+    if (!getLinkedProject(root)) {
+      const repoName = cfg.github?.repo || defaultRepoName(root)
+      linkProject(root, repoName)
+      console.log(dim(`  linked this project as ${repoName}`))
+    }
+    const res = await syncProject(root, cfg, { message, onLog: (l) => console.log(`  ${dim(l)}`) }) // re-links with the full owner/name
+    console.log(green(`\n  ✔ synced → ${res.url}`))
+    console.log(dim(`  commit ${res.commit} · branch ${res.branch}`))
+  } catch (e) {
+    console.error(`[tagent] sync failed: ${(e as Error).message}`)
+    process.exit(1)
+  }
+}
+
+async function mainProjects() {
+  const list = listProjects()
+  console.log(`\n  ${bold('tagent projects')} · ${list.length} linked\n`)
+  if (list.length === 0) {
+    console.log(dim('  nothing linked yet — open a project and run `tagent sync`,'))
+    console.log(dim('  or log in (`tagent auth`) and take the sync offer'))
+    console.log()
+    return
+  }
+  const cwd = path.resolve('.')
+  for (const p of list) {
+    const mark = path.resolve(p.root) === cwd ? green('▸') : ' '
+    const synced = p.lastSyncAt ? relTime(p.lastSyncAt) : 'never synced'
+    console.log(`  ${mark} ${bold(p.name)}  ${p.repo}  ${dim(synced)}`)
+    console.log(dim(`      ${p.root}`))
+  }
+  console.log(`\n  ${dim('▸ = this directory · restore anywhere: tagent clone <name>')}\n`)
+}
+
+async function mainClone() {
+  const arg = plain[1]
+  if (!arg) die('usage: tagent clone <owner/name | name> [dir]')
+  const st = authStatus()
+  if (!st.logged) die('not logged in — run `tagent auth` first')
+  const token = getCredential('github')
+  if (!token) die('no stored token — run `tagent auth` again')
+
+  // 'owner/name' is used as-is; a bare name matches a linked project, else the login owns it
+  let repo = arg.includes('/') ? arg.replace(/\.git$/, '') : undefined
+  if (!repo) {
+    const hit = listProjects().find((p) => p.name === arg || p.repo === arg || p.repo.endsWith(`/${arg}`))
+    if (hit) repo = hit.repo
+  }
+  if (!repo && st.login) repo = `${st.login}/${arg}`
+  if (!repo) die(`"${arg}" is not owner/name and matches no linked project — try: tagent clone <owner/name>`)
+
+  // restoreProject clones into <dir>/<name> — [dir] is the parent, default .
+  const name = repo.split('/').pop()?.replace(/\.git$/, '') || repo
+  const parent = path.resolve(plain[2] ?? '.')
+  const dest = path.join(parent, name)
+  if (fs.existsSync(dest)) {
+    try {
+      if (fs.readdirSync(dest).length > 0) die(`directory not empty: ${dest}`)
+    } catch {
+      die(`cannot use destination: ${dest}`)
+    }
+  }
+  console.log(`\n  ${bold('tagent clone')} · ${repo} → ${path.relative(process.cwd(), dest) || dest}\n`)
+  try {
+    const r = await restoreProject(token, repo, parent, { onLog: (l) => console.log(`  ${dim(l)}`) })
+    console.log(green(`\n  ✔ cloned into ${r.root}`))
+    console.log('\n  next steps:')
+    console.log(`    cd ${path.relative(process.cwd(), r.root) || '.'}`)
+    console.log(`    tagent${dim('   # start the TUI there')}\n`)
+  } catch (e) {
+    console.error(`[tagent] clone failed: ${(e as Error).message}`)
+    process.exit(1)
+  }
+}
+
+async function mainLogout() {
+  if (!authStatus().logged) {
+    console.log('not logged in.')
+    return
+  }
+  if (!has('--yes')) {
+    console.log(dim('  hanya menghapus token lokal, repo GitHub tidak tersentuh'))
+    const yes = await confirm('logout GitHub?', { default: false, yes: 'logout', no: 'keep', cancelable: true })
+    if (!yes) {
+      console.log(dim('  cancelled — still logged in'))
+      return
+    }
+  }
+  try {
+    logout() // drops the credential + scrubs the cached login from the global config
+  } catch (e) {
+    die(`logout failed: ${(e as Error).message}`)
+  }
+  // the workspace config may still hold a legacy pre-0.13 token — scrub it too
+  clearGithubKeysFromConfig(path.join(workspaceDir(path.resolve('.')), 'config.json'))
+  console.log(green('✔ logged out') + dim(' — hanya menghapus token lokal, repo GitHub tidak tersentuh'))
+}
+
+async function mainWhoami() {
+  const st = authStatus()
+  if (st.logged) {
+    const login = st.login ?? readGlobalConfig().github?.login
+    console.log(green(`✔ logged in as ${login ?? '(unknown)'}`))
+  } else {
+    console.log('guest — not logged in (tagent auth connects GitHub sync)')
+  }
+}
+
+function relTime(ts: number): string {
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000))
+  if (s < 60) return 'just now'
+  const m = Math.round(s / 60)
+  if (m < 60) return `${m} min ago`
+  const h = Math.round(m / 60)
+  if (h < 24) return `${h} h ago`
+  const d = Math.round(h / 24)
+  if (d < 31) return `${d} d ago`
+  return new Date(ts).toISOString().slice(0, 10)
 }
 
 /* ------------------------------------------------------------------ */
@@ -1036,15 +1329,9 @@ async function mainUpdate() {
   console.log(`  update available: v${info.current} → ${bold('v' + info.latest)}`)
   if (info.notes) console.log(dim(`  ${info.notes}`))
   if (info.url) console.log(dim(`  ${info.url}`))
-  const yes = await new Promise<boolean>((resolve) => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-    rl.question('\n  update now? [y/N] ', (a: string) => {
-      rl.close()
-      resolve(a.trim().toLowerCase().startsWith('y'))
-    })
-  })
-  if (!yes) {
-    console.log(dim('  later — the TUI also offers this on startup when a release is out'))
+  const yes = has('--yes') ? true : await confirm('update now?', { default: false, cancelable: true })
+  if (yes !== true) {
+    console.log(dim(`  staying on v${info.current} — manual: https://github.com/asysurya/tagent/releases/latest`))
     process.exit(0)
   }
   const ok = await selfUpdate(info)

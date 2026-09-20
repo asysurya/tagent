@@ -198,3 +198,22 @@ export const IconKeyboard = (p: SVGProps<SVGSVGElement>) => (
     <rect width="20" height="16" x="2" y="4" rx="2" />
   </I>
 )
+
+/** git branch — GitHub login & project sync */
+export const IconBranch = (p: SVGProps<SVGSVGElement>) => (
+  <I {...p}>
+    <line x1="6" x2="6" y1="3" y2="15" />
+    <circle cx="18" cy="6" r="3" />
+    <circle cx="6" cy="18" r="3" />
+    <path d="M18 9a9 9 0 0 1-9 9" />
+  </I>
+)
+
+/** the "T" glyph — markdown rendering in the terminal */
+export const IconType = (p: SVGProps<SVGSVGElement>) => (
+  <I {...p}>
+    <polyline points="4 7 4 4 20 4 20 7" />
+    <line x1="9" x2="15" y1="20" y2="20" />
+    <line x1="12" x2="12" y1="4" y2="20" />
+  </I>
+)

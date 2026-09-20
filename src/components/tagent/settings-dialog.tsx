@@ -9,17 +9,27 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Check, ChevronDown, ChevronUp, ExternalLink, Eye, EyeOff, Github, Key, Loader2, Plus, RefreshCw, Search, ShieldAlert, Terminal, Globe, Bot, Bone, ScrollText, Coins, MonitorSmartphone, Trash2, Plug, Puzzle, Power, FileCode2, Waypoints, Zap } from 'lucide-react'
+import { Check, ChevronDown, ChevronUp, CloudUpload, ExternalLink, Eye, EyeOff, Github, Key, Loader2, LogOut, Plus, RefreshCw, Search, ShieldAlert, Terminal, Globe, Bot, Bone, ScrollText, Coins, MonitorSmartphone, Trash2, Plug, Puzzle, Power, FileCode2, Waypoints, Zap } from 'lucide-react'
 import { useTagent } from '@/lib/tagent/store'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { Checkbox } from '@/components/ui/checkbox'
 import type { FallbackEntry } from '@/lib/tagent/types'
+import { ConfirmLogoutDialog, LoginDialog, relTime, repoUrl, useGithubAuth } from './login-dialog'
 
 type Tab = 'providers' | 'mcp' | 'permissions' | 'agent' | 'integrations' | 'plugins'
 
-export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
-  const [tab, setTab] = useState<Tab>('providers')
+export function SettingsDialog({
+  open,
+  onOpenChange,
+  defaultTab = 'providers',
+}: {
+  open: boolean
+  onOpenChange: (o: boolean) => void
+  /** opening tab — e.g. the account strip jumps straight to 'integrations' */
+  defaultTab?: Tab
+}) {
+  const [tab, setTab] = useState<Tab>(defaultTab)
   const config = useTagent((s) => s.config)
   const connection = useTagent((s) => s.connection)
 
@@ -869,14 +879,19 @@ function AgentTab() {
 
 function IntegrationsTab() {
   const config = useTagent((s) => s.config)
-  const saveGithubPat = useTagent((s) => s.saveGithubPat)
-  const githubPush = useTagent((s) => s.githubPush)
-  const githubBusy = useTagent((s) => s.githubBusy)
+  const { loggedIn, loginName } = useGithubAuth()
+  const linkedRepo = useTagent((s) => s.linkedRepo)
+  const lastSyncAt = useTagent((s) => s.lastSyncAt)
+  const syncing = useTagent((s) => s.syncing)
+  const linking = useTagent((s) => s.linking)
+  const syncPush = useTagent((s) => s.syncPush)
+  const syncLink = useTagent((s) => s.syncLink)
   const saveMega = useTagent((s) => s.saveMega)
   const megaSync = useTagent((s) => s.megaSync)
   const megaPull = useTagent((s) => s.megaPull)
-  const [pat, setPat] = useState('')
   const [busy, setBusy] = useState(false)
+  const [loginOpen, setLoginOpen] = useState(false)
+  const [confirmOut, setConfirmOut] = useState(false)
   const [megaEmail, setMegaEmail] = useState('')
   const [megaKey, setMegaKey] = useState('')
   const [megaBusy, setMegaBusy] = useState(false)
@@ -917,51 +932,43 @@ function IntegrationsTab() {
     }
   }
 
+  /** logged in but unlinked: ensure the default private repo, push, link the registry */
+  const linkAndSync = async () => {
+    const link = await syncLink()
+    if (!link.ok) return // the store already toasts the error
+    await syncPush('sync: initial upload from tagent')
+  }
+
   return (
     <div className="space-y-5">
-      {/* GitHub */}
+      {/* GitHub — login + project sync (guest-first) */}
       <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-4 space-y-3">
         <div className="flex items-center gap-2">
           <Github className="size-4 text-zinc-200" />
           <span className="text-sm font-medium text-zinc-200">GitHub</span>
-          {config.github.connected ? (
+          {loggedIn ? (
             <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-800/50 hover:bg-emerald-500/15 text-[9px] h-4 px-1.5">
-              @{config.github.login}
+              @{loginName ?? 'connected'}
             </Badge>
           ) : (
-            <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-zinc-700 text-zinc-500">not connected</Badge>
+            <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-zinc-700 text-zinc-500">guest</Badge>
           )}
         </div>
-        <p className="text-xs text-zinc-500 leading-relaxed">
-          Paste a Personal Access Token (<code className="text-zinc-400">repo</code> scope) — or use the device flow:
-          open the link, type the code, done. Also available in the CLI: <code className="text-zinc-400">tagent auth</code>.
-          The token stays in local config and is used to create a private repo and push your workspace.
-        </p>
-        {!config.github.connected && (
+
+        {!loggedIn ? (
           <>
-            <div className="flex gap-2">
-              <Input
-                type="password"
-                placeholder="ghp_…"
-                value={pat}
-                onChange={(e) => setPat(e.target.value)}
-                className="h-8 bg-zinc-900 border-zinc-800 font-mono text-xs"
-              />
-              <Button
-                size="sm" className="h-8 text-xs bg-orange-500 hover:bg-orange-400 text-zinc-950"
-                disabled={!pat.trim() || busy}
-                onClick={async () => {
-                  setBusy(true)
-                  const r = await saveGithubPat(pat.trim())
-                  setBusy(false)
-                  setPat('')
-                  if (r.ok) toast(`Connected as @${r.login}`)
-                  else toast.error(r.error ?? 'failed')
-                }}
-              >
-                {busy ? <Loader2 className="size-3.5 animate-spin" /> : 'Connect'}
-              </Button>
-            </div>
+            <p className="text-xs text-zinc-500 leading-relaxed">
+              Log in to sync this workspace to a private GitHub repo — then continue your projects on any
+              device (<code className="text-zinc-400">tagent clone</code>). The token stays on this machine;
+              the CLI equivalent is <code className="text-zinc-400">tagent auth</code>.
+            </p>
+            <Button
+              size="sm"
+              className="h-8 text-xs bg-orange-500 hover:bg-orange-400 text-zinc-950"
+              onClick={() => setLoginOpen(true)}
+            >
+              <Github className="size-3.5" /> Log in with GitHub…
+            </Button>
             <div className="rounded-lg border border-zinc-800/70 bg-zinc-900/30 p-3 space-y-2">
               <p className="text-[11px] text-zinc-500">No token at hand? Login in your browser instead:</p>
               {device ? (
@@ -1002,13 +1009,66 @@ function IntegrationsTab() {
                 </Button>
               )}
             </div>
+            <LoginDialog open={loginOpen} onOpenChange={setLoginOpen} />
           </>
-        )}
-        {config.github.connected && (
-          <Button size="sm" variant="outline" className="h-8 text-xs border-zinc-700 gap-1.5" disabled={githubBusy} onClick={() => void githubPush()}>
-            {githubBusy ? <Loader2 className="size-3.5 animate-spin" /> : null}
-            Push workspace → GitHub
-          </Button>
+        ) : (
+          <>
+            <div className="space-y-1 text-xs">
+              {linkedRepo ? (
+                <p className="text-zinc-400">
+                  Linked repo:{' '}
+                  <a
+                    href={repoUrl(linkedRepo)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-mono text-orange-300/90 hover:text-orange-300 underline underline-offset-2 break-all"
+                  >
+                    {linkedRepo}
+                  </a>
+                </p>
+              ) : (
+                <p className="text-zinc-500">This workspace isn&apos;t linked to a GitHub repo yet.</p>
+              )}
+              <p className="text-zinc-500">
+                Last sync: <span className="text-zinc-400">{relTime(lastSyncAt)}</span>
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {linkedRepo ? (
+                <Button
+                  size="sm" variant="outline"
+                  className="h-8 text-xs border-zinc-700 gap-1.5"
+                  disabled={syncing}
+                  onClick={() => void syncPush()}
+                >
+                  {syncing ? <Loader2 className="size-3.5 animate-spin" /> : <CloudUpload className="size-3.5" />}
+                  Sync now
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  className="h-8 text-xs bg-orange-500 hover:bg-orange-400 text-zinc-950 gap-1.5"
+                  disabled={linking || syncing}
+                  onClick={() => void linkAndSync()}
+                >
+                  {linking || syncing ? <Loader2 className="size-3.5 animate-spin" /> : <CloudUpload className="size-3.5" />}
+                  Link &amp; sync this project
+                </Button>
+              )}
+              <Button
+                size="sm" variant="outline"
+                className="h-8 text-xs border-zinc-700 text-zinc-400"
+                onClick={() => setConfirmOut(true)}
+              >
+                <LogOut className="size-3.5" /> Log out
+              </Button>
+            </div>
+            <p className="text-[10px] text-zinc-600 leading-relaxed">
+              Syncing pushes this workspace to your private repo so it can be continued on any device.
+              Logging out only removes the local token; your GitHub repos are untouched.
+            </p>
+            <ConfirmLogoutDialog open={confirmOut} onOpenChange={setConfirmOut} />
+          </>
         )}
       </div>
 

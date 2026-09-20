@@ -1565,7 +1565,7 @@ export class Tui {
       } else {
         return this.println(dim('  cancelled'))
       }
-      this.println(dim('  push this workspace any time with /push'))
+      this.println(dim('  sync this workspace any time with `tagent sync`'))
     } catch (e) {
       this.println(red(`  ✗ ${(e as Error).message}`))
     }

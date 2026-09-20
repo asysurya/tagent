@@ -86,8 +86,8 @@ export default function DownloadPage() {
         <p className="mt-2 text-zinc-400">
           Binaries for v{LATEST} — the file names carry the version, so upgrades live side by side.
         </p>
-        <div className="mt-5 overflow-hidden rounded-lg border border-zinc-800">
-          <table className="w-full text-sm">
+        <div className="mt-5 overflow-x-auto rounded-lg border border-zinc-800 pretty-scroll">
+          <table className="w-full min-w-[40rem] text-sm">
             <thead>
               <tr className="border-b border-zinc-800 bg-zinc-900/60 text-left text-xs uppercase tracking-wider text-zinc-500">
                 <th className="px-4 py-2.5 font-medium">File</th>
@@ -136,8 +136,8 @@ export default function DownloadPage() {
           files of ~10–15&nbsp;MB that run on machines the full binaries cannot:
           <span className="text-zinc-200"> Windows 7, 8, 8.1 — including 32-bit (x86) machines</span>.
         </p>
-        <div className="mt-5 overflow-hidden rounded-lg border border-zinc-800">
-          <table className="w-full text-sm">
+        <div className="mt-5 overflow-x-auto rounded-lg border border-zinc-800 pretty-scroll">
+          <table className="w-full min-w-[40rem] text-sm">
             <thead>
               <tr className="border-b border-zinc-800 bg-zinc-900/60 text-left text-xs uppercase tracking-wider text-zinc-500">
                 <th className="px-4 py-2.5 font-medium">File</th>
@@ -216,10 +216,12 @@ export default function DownloadPage() {
         </p>
       </section>
 
-      {/* per-platform quickstarts */}
+      {/* per-platform quickstarts — min-w-0 lets the cards shrink inside the
+          grid; without it the grid track sizes to the code block's longest
+          line and the page overflows on phones */}
       <section className="mt-14 grid gap-5">
         {PLATFORM_GUIDES.map((p) => (
-          <div key={p.name} className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-6">
+          <div key={p.name} className="min-w-0 rounded-xl border border-zinc-800 bg-zinc-900/30 p-6">
             <div className="flex items-center gap-3">
               <span className="text-3xl">{p.icon}</span>
               <div>
@@ -268,7 +270,7 @@ export default function DownloadPage() {
       <section className="mt-14">
         <h2 className="text-2xl font-bold tracking-tight">No binary for your machine?</h2>
         <div className="mt-5 grid gap-5 lg:grid-cols-2">
-          <div className="flex flex-col rounded-xl border border-zinc-800 bg-zinc-900/30 p-6">
+          <div className="flex min-w-0 flex-col rounded-xl border border-zinc-800 bg-zinc-900/30 p-6">
             <div className="flex items-center gap-3">
               <span className="text-3xl">📦</span>
               <div>
@@ -286,7 +288,7 @@ cd tagent && bash scripts/setup-ubuntu.sh
 bun link && tagent start ~/my-project`}</Code>
             </div>
           </div>
-          <div className="flex flex-col rounded-xl border border-zinc-800 bg-zinc-900/30 p-6">
+          <div className="flex min-w-0 flex-col rounded-xl border border-zinc-800 bg-zinc-900/30 p-6">
             <div className="flex items-center gap-3">
               <span className="text-3xl">📱</span>
               <div>
@@ -314,8 +316,8 @@ bun link && tagent start ~/my-project`}</Code>
         <p className="mt-2 text-zinc-400">
           Per-release snapshots straight from the git tags — useful for pinning or offline installs:
         </p>
-        <div className="mt-5 overflow-hidden rounded-lg border border-zinc-800">
-          <table className="w-full text-sm">
+        <div className="mt-5 overflow-x-auto rounded-lg border border-zinc-800 pretty-scroll">
+          <table className="w-full min-w-[36rem] text-sm">
             <thead>
               <tr className="border-b border-zinc-800 bg-zinc-900/60 text-left text-xs uppercase tracking-wider text-zinc-500">
                 <th className="px-4 py-2.5 font-medium">Version</th>
@@ -325,11 +327,11 @@ bun link && tagent start ~/my-project`}</Code>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/70">
-              {RELEASES.map((r, i) => (
+              {RELEASES.filter((r) => !r.unreleased).map((r) => (
                 <tr key={r.version} className="bg-zinc-900/30 hover:bg-zinc-900/60">
                   <td className="px-4 py-3">
                     <span className="font-mono font-semibold text-zinc-100">v{r.version}</span>
-                    {i === 0 && <span className="ml-2 rounded-full border border-orange-500/40 bg-orange-500/10 px-2 py-0.5 text-[10px] font-semibold text-orange-300">latest</span>}
+                    {r.version === LATEST && <span className="ml-2 rounded-full border border-orange-500/40 bg-orange-500/10 px-2 py-0.5 text-[10px] font-semibold text-orange-300">latest</span>}
                   </td>
                   <td className="px-4 py-3 text-zinc-500">{r.date}</td>
                   <td className="max-w-xs truncate px-4 py-3 text-zinc-400" title={r.title}>{r.title}</td>

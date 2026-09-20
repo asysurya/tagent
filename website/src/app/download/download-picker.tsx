@@ -78,23 +78,33 @@ function detect(): Promise<Pick> {
     const done = (p: Pick | undefined) => {
       if (!settled) { settled = true; resolve(p ?? { primary: FALLBACK }) }
     }
-    // Chromium on ARM (Windows/Mac/Linux) exposes the real architecture here;
-    // "bitness" is the browser's bitness — "32" means WOW64 or a true 32-bit OS.
-    nav.userAgentData
-      ?.getHighEntropyValues(["architecture", "bitness"])
-      .then((h) => {
-        const arch: "x64" | "arm64" = /arm/i.test(h.architecture ?? "") ? "arm64" : "x64"
-        if (h.bitness === "32") bits32 = true
-        else if (h.bitness === "64") bits32 = false
-        done(pickFor(os, arch, bits32, legacy))
-      })
-      .catch(() => done(pickFor(os, "x64", bits32, legacy)))
     // No client hints (Safari/Firefox): assume x64 everywhere except macOS,
     // where Apple silicon is the safe default (Intel macs still run via Rosetta… pickers below).
     const fallbackArch: Record<DownloadTarget["os"], "x64" | "arm64"> = {
       windows: "x64",
       linux: "x64",
       macos: "arm64",
+    }
+    // Chromium on ARM (Windows/Mac/Linux) exposes the real architecture here;
+    // "bitness" is the browser's bitness — "32" means WOW64 or a true 32-bit OS.
+    // (Guarded: some UA-Data implementations predate getHighEntropyValues.)
+    try {
+      const uaData = nav.userAgentData
+      if (uaData && typeof uaData.getHighEntropyValues === "function") {
+        uaData
+          .getHighEntropyValues(["architecture", "bitness"])
+          .then((h) => {
+            const arch: "x64" | "arm64" = /arm/i.test(h.architecture ?? "") ? "arm64" : "x64"
+            if (h.bitness === "32") bits32 = true
+            else if (h.bitness === "64") bits32 = false
+            done(pickFor(os, arch, bits32, legacy))
+          })
+          .catch(() => done(pickFor(os, "x64", bits32, legacy)))
+      } else {
+        done(pickFor(os, fallbackArch[os], bits32, legacy))
+      }
+    } catch {
+      done(pickFor(os, fallbackArch[os], bits32, legacy))
     }
     setTimeout(() => done(pickFor(os, fallbackArch[os], bits32, legacy)), 350)
   })
@@ -157,7 +167,7 @@ export function DownloadPicker() {
           Download
         </a>
       </div>
-      <p className="mt-4 font-mono text-xs text-zinc-500">
+      <p className="mt-4 break-all font-mono text-xs text-zinc-500">
         {target.file} ·{" "}
         {isNative ? "static Go binary · ~10–15 MB · download and run" : "self-contained · no runtime to install"}
         {target.note ? ` · ${target.note}` : ""}
@@ -181,7 +191,7 @@ export function DownloadPicker() {
             : " · needs 64-bit Windows 10 or later"}
         </p>
       )}
-      <p className="mt-1 text-xs text-zinc-600">
+      <p className="mt-1 text-xs text-zinc-500">
         Every platform is in the table below — or grab the{" "}
         <a className="text-zinc-400 underline decoration-zinc-700 hover:text-zinc-200" href={releaseAsset(LATEST, "SHA256SUMS.txt")}>checksums</a>.
       </p>

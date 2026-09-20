@@ -23,8 +23,8 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
-  Bone, Check, ChevronDown, Cpu, Files, FolderInput, FolderOpen, Github, History, ListTodo,
-  PanelRightClose, PanelRightOpen, Search, Settings, Terminal, TerminalSquare, Zap,
+  Bone, Check, ChevronDown, Cpu, FolderInput, FolderOpen, Github, History, ListTodo,
+  PanelRightClose, PanelRightOpen, Search, Settings, Zap,
 } from 'lucide-react'
 import { useTagent } from '@/lib/tagent/store'
 import { cn } from '@/lib/utils'
@@ -39,7 +39,6 @@ export function TopBar() {
   const setMode = useTagent((s) => s.setMode)
   const rightOpen = useTagent((s) => s.rightOpen)
   const toggleRight = useTagent((s) => s.toggleRight)
-  const setRightTab = useTagent((s) => s.setRightTab)
   const githubBusy = useTagent((s) => s.githubBusy)
   const githubPush = useTagent((s) => s.githubPush)
   const caveman = useTagent((s) => s.config?.caveman ?? false)
@@ -55,11 +54,10 @@ export function TopBar() {
   const mode = session?.mode ?? 'build'
 
   return (
-    <header className="h-12 shrink-0 flex items-center gap-2 px-3 border-b border-zinc-800/60 bg-zinc-950/80 backdrop-blur">
+    <header className="relative h-12 shrink-0 flex items-center gap-2 px-3 border-b border-zinc-800/60 bg-zinc-950/80 backdrop-blur">
       <div className="flex items-center gap-2 font-semibold tracking-tight">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/logo.svg" alt="Tagent" className="h-6 w-6 rounded-[6px]" width={24} height={24} />
-        <span className="text-zinc-100">tagent</span>
+        <span className="text-zinc-100 hidden sm:inline">tagent</span>
       </div>
 
       {/* workspace switcher */}
@@ -70,20 +68,24 @@ export function TopBar() {
       {/* agent mode */}
       <div className="flex items-center rounded-md border border-zinc-800 p-0.5 text-xs font-medium">
         <button
+          type="button"
+          aria-pressed={mode === 'build'}
           onClick={() => void setMode('build')}
           className={cn('px-2.5 py-1 rounded flex items-center gap-1 transition-colors',
             mode === 'build' ? 'bg-orange-500/15 text-orange-400' : 'text-zinc-500 hover:text-zinc-300')}
           title="Build mode — agent may edit files (permission-gated)"
         >
-          <Zap className="size-3.5" /> Build
+          <Zap className="size-3.5" /> <span className="hidden md:inline">Build</span>
         </button>
         <button
+          type="button"
+          aria-pressed={mode === 'plan'}
           onClick={() => void setMode('plan')}
           className={cn('px-2.5 py-1 rounded flex items-center gap-1 transition-colors',
             mode === 'plan' ? 'bg-sky-500/15 text-sky-400' : 'text-zinc-500 hover:text-zinc-300')}
           title="Plan mode — read-only investigation"
         >
-          <ListTodo className="size-3.5" /> Plan
+          <ListTodo className="size-3.5" /> <span className="hidden md:inline">Plan</span>
         </button>
       </div>
 
@@ -92,11 +94,11 @@ export function TopBar() {
         <DropdownMenuTrigger asChild>
           <Button variant="outline" size="sm" className="h-7 gap-1.5 border-zinc-800 bg-zinc-900/50 text-xs font-mono">
             <Cpu className="size-3.5 text-orange-400" />
-            <span className="max-w-36 truncate">{modelLabel}</span>
+            <span className="max-w-36 truncate hidden sm:inline">{modelLabel}</span>
             <ChevronDown className="size-3 opacity-50" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-72 bg-zinc-900 border-zinc-800">
+        <DropdownMenuContent align="end" className="w-[min(18rem,calc(100vw-1.5rem))] bg-zinc-900 border-zinc-800">
           <div className="p-2 sticky top-0 bg-zinc-900 z-10 border-b border-zinc-800/60">
             <div className="relative">
               <Search className="size-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-600" />
@@ -127,26 +129,21 @@ export function TopBar() {
         title={connection}
       />
 
-      <Button variant="ghost" size="icon" className="size-7 text-zinc-400" onClick={() => void setCaveman(!caveman)} title={caveman ? 'Caveman mode ON — terse replies, fewer tokens. Click to turn off.' : 'Caveman mode — terse replies, fewer tokens. Click to turn on.'}>
+      <Button variant="ghost" size="icon" className="size-8 md:size-7 text-zinc-400 hidden sm:inline-flex" onClick={() => void setCaveman(!caveman)} title={caveman ? 'Caveman mode ON — terse replies, fewer tokens. Click to turn off.' : 'Caveman mode — terse replies, fewer tokens. Click to turn on.'} aria-label="Toggle caveman mode">
         <Bone className={cn('size-4', caveman ? 'text-orange-400' : 'text-zinc-400 opacity-50')} />
       </Button>
-      <Button variant="ghost" size="icon" className="size-7 text-zinc-400" onClick={() => void githubPush()} disabled={githubBusy || !config?.github.connected} title="Push workspace to GitHub">
+      <Button variant="ghost" size="icon" className="size-8 md:size-7 text-zinc-400 hidden sm:inline-flex" onClick={() => void githubPush()} disabled={githubBusy || !config?.github.connected} title="Push workspace to GitHub" aria-label="Push workspace to GitHub">
         <Github className={cn('size-4', config?.github.connected ? 'text-zinc-200' : 'opacity-40')} />
       </Button>
-      <Button variant="ghost" size="icon" className="size-7 text-zinc-400" onClick={() => setPaletteOpen(true)} title="Command palette (⌘K)">
+      <Button variant="ghost" size="icon" className="size-8 md:size-7 text-zinc-400 hidden md:inline-flex" onClick={() => setPaletteOpen(true)} title="Command palette (⌘K)" aria-label="Open command palette">
         <History className="size-4" />
       </Button>
-      <Button variant="ghost" size="icon" className="size-7 text-zinc-400" onClick={() => setSettingsOpen(true)} title="Settings">
+      <Button variant="ghost" size="icon" className="size-8 md:size-7 text-zinc-400" onClick={() => setSettingsOpen(true)} title="Settings" aria-label="Open settings">
         <Settings className="size-4" />
       </Button>
-      <Button variant="ghost" size="icon" className="size-7 text-zinc-400 hidden md:inline-flex" onClick={toggleRight} title="Toggle side panel">
+      <Button variant="ghost" size="icon" className="size-8 md:size-7 text-zinc-400 hidden md:inline-flex" onClick={toggleRight} title="Toggle side panel" aria-label="Toggle side panel">
         {rightOpen ? <PanelRightClose className="size-4" /> : <PanelRightOpen className="size-4" />}
       </Button>
-      {/* mobile quick tabs */}
-      <div className="md:hidden flex items-center gap-0.5">
-        <Button variant="ghost" size="icon" className="size-7 text-zinc-400" onClick={() => setRightTab('files')}><Files className="size-4" /></Button>
-        <Button variant="ghost" size="icon" className="size-7 text-zinc-400" onClick={() => setRightTab('terminal')}><Terminal className="size-4" /></Button>
-      </div>
 
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
@@ -240,9 +237,10 @@ function WorkspaceSwitcher({ openDialog, setOpenDialog }: { openDialog: boolean;
         <button
           className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-zinc-200 border-l border-zinc-800 pl-2 ml-1 transition-colors"
           title={workspace?.path ?? 'workspace'}
+          aria-label="Switch workspace"
         >
           <FolderOpen className="size-3.5" />
-          <span className="font-mono max-w-40 truncate">{workspace?.name ?? '…'}</span>
+          <span className="font-mono max-w-40 truncate hidden sm:inline">{workspace?.name ?? '…'}</span>
           <ChevronDown className="size-3 opacity-50" />
         </button>
       </DropdownMenuTrigger>
@@ -285,7 +283,7 @@ function OpenFolderDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   const [path, setPath] = useState('')
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-zinc-900 border-zinc-800 max-w-md">
+      <DialogContent className="bg-zinc-900 border-zinc-800 max-w-md max-h-[calc(100dvh-2rem)] overflow-y-auto pretty-scroll">
         <DialogHeader>
           <DialogTitle className="text-zinc-100">Open workspace</DialogTitle>
           <DialogDescription className="text-zinc-500">

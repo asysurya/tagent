@@ -8,7 +8,12 @@ import { Bone, Bot, Brain, Files, ListChecks, RotateCcw, ScrollText, Settings, S
 import { useTagent } from '@/lib/tagent/store'
 
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
-  const st = useTagent()
+  // actions are stable references — grab them once without subscribing;
+  // only the two labels below need reactive updates. A whole-store
+  // subscription here would re-render the palette on every streamed token.
+  const st = useTagent.getState()
+  const caveman = useTagent((s) => !!s.config?.caveman)
+  const worklogOn = useTagent((s) => !!s.config?.worklog.enabled)
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -65,11 +70,11 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
         </CommandGroup>
         <CommandSeparator />
         <CommandGroup heading="Agent behavior">
-          <CommandItem className="text-zinc-300" onSelect={() => run(() => void st.setCaveman(!st.config?.caveman))}>
-            <Bone className="size-4" /> Toggle caveman mode {st.config?.caveman ? '(currently ON)' : '(currently off)'}
+          <CommandItem className="text-zinc-300" onSelect={() => run(() => void st.setCaveman(!caveman))}>
+            <Bone className="size-4" /> Toggle caveman mode {caveman ? '(currently ON)' : '(currently off)'}
           </CommandItem>
-          <CommandItem className="text-zinc-300" onSelect={() => run(() => void st.setWorklog(!st.config?.worklog.enabled))}>
-            <ScrollText className="size-4" /> Toggle worklog + todos {st.config?.worklog.enabled ? '(currently ON)' : '(currently off)'}
+          <CommandItem className="text-zinc-300" onSelect={() => run(() => void st.setWorklog(!worklogOn))}>
+            <ScrollText className="size-4" /> Toggle worklog + todos {worklogOn ? '(currently ON)' : '(currently off)'}
           </CommandItem>
         </CommandGroup>
         <CommandSeparator />

@@ -1,7 +1,18 @@
 'use client'
 
 import { io, type Socket } from 'socket.io-client'
-import type { HelloPayload, McpServerStatus, McpTemplate, PluginMeta } from './types'
+import type {
+  AuthLoginResponse,
+  AuthStatusResponse,
+  HelloPayload,
+  McpServerStatus,
+  McpTemplate,
+  PluginMeta,
+  ProjectListResponse,
+  SyncLinkResponse,
+  SyncPushResponse,
+  SyncStatusResponse,
+} from './types'
 
 /**
  * Tagent daemon client.
@@ -74,6 +85,51 @@ export function mcpRemove(socket: Socket, name: string): Promise<{ ok?: boolean;
 
 export function mcpToggle(socket: Socket, name: string): Promise<{ ok?: boolean; error?: string; enabled?: boolean }> {
   return call(socket, 'mcp:toggle', { name }, 60000)
+}
+
+/* ------------------------- auth + project sync --------------------- */
+
+/** Guest check — no network, reads the credential store / cached login. */
+export function authStatus(socket: Socket): Promise<AuthStatusResponse> {
+  return call(socket, 'auth:status', {}, 10000)
+}
+
+/** Validate a PAT against GitHub, then save it (credential store + login cache). */
+export function login(socket: Socket, pat: string): Promise<AuthLoginResponse> {
+  return call(socket, 'auth:login', { pat }, 30000)
+}
+
+export function logout(socket: Socket): Promise<{ ok: boolean }> {
+  return call(socket, 'auth:logout', {}, 15000)
+}
+
+/** Registry link + auth state for the active workspace. */
+export function syncStatus(socket: Socket): Promise<SyncStatusResponse> {
+  return call(socket, 'sync:status', {}, 10000)
+}
+
+/** Commit + push the workspace via core syncProject (updates the registry). */
+export function syncPush(socket: Socket, message?: string): Promise<SyncPushResponse> {
+  return call(socket, 'sync:push', { message }, 300000)
+}
+
+/** Link the workspace to a repo; without `repo` the default one is ensured on GitHub. */
+export function syncLink(socket: Socket, repo?: string): Promise<SyncLinkResponse> {
+  return call(socket, 'sync:link', { repo }, 120000)
+}
+
+/** "Don't ask again for this project" — refuse the sync prompt for this root. */
+export function refuseSync(socket: Socket): Promise<{ ok: boolean }> {
+  return call(socket, 'sync:refuse', {}, 10000)
+}
+
+/** Remove the registry link for the active workspace. */
+export function unlinkSync(socket: Socket): Promise<{ ok: boolean }> {
+  return call(socket, 'sync:unlink', {}, 10000)
+}
+
+export function fetchProjects(socket: Socket): Promise<ProjectListResponse> {
+  return call(socket, 'projects:list', {}, 10000)
 }
 
 /* ----------------------------- plugins ------------------------------ */

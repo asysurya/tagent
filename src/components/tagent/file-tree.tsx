@@ -17,7 +17,8 @@ function Node({ node, depth }: { node: FileNode; depth: number }) {
     return (
       <div>
         <button
-          className="w-full flex items-center gap-1 py-0.5 text-left hover:bg-zinc-900 rounded px-1"
+          type="button"
+          className="w-full flex items-center gap-1 py-1.5 md:py-0.5 text-left hover:bg-zinc-900 rounded px-1"
           style={{ paddingLeft: depth * 12 + 4 }}
           onClick={() => setOpen((v) => !v)}
         >
@@ -32,7 +33,8 @@ function Node({ node, depth }: { node: FileNode; depth: number }) {
 
   return (
     <button
-      className={cn('w-full flex items-center gap-1.5 py-0.5 text-left hover:bg-zinc-900 rounded px-1',
+      type="button"
+      className={cn('w-full flex items-center gap-1.5 py-1.5 md:py-0.5 text-left hover:bg-zinc-900 rounded px-1',
         activePath === node.path && 'bg-orange-500/10')}
       style={{ paddingLeft: depth * 12 + 6 }}
       onClick={() => void openFile(node.path)}
@@ -51,7 +53,7 @@ export function FileTree() {
     <ScrollArea className="h-full pretty-scroll">
       <div className="p-2 space-y-0.5">
         {tree ? <Node node={tree} depth={0} /> : (
-          <p className="text-xs text-zinc-600 px-2 py-4 text-center">loading…</p>
+          <p className="text-xs text-zinc-600 px-2 py-4 text-center animate-pulse">loading…</p>
         )}
       </div>
     </ScrollArea>

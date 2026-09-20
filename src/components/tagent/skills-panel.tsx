@@ -13,28 +13,46 @@ export function SkillsPanel() {
   const readSkill = useTagent((s) => s.readSkill)
   const [open, setOpen] = useState<string | null>(null)
   const [content, setContent] = useState('')
+  const [error, setError] = useState<string | null>(null)
 
   const view = async (name: string) => {
     setOpen(name)
+    setError(null)
     setContent('loading…')
-    setContent(await readSkill(name))
+    try {
+      setContent(await readSkill(name))
+    } catch (e) {
+      // never leave the panel stuck on "loading…" forever
+      setContent('')
+      setError(e instanceof Error ? e.message : 'failed to read skill')
+    }
   }
 
   if (open) {
     return (
       <div className="h-full flex flex-col min-h-0">
         <div className="h-9 shrink-0 flex items-center gap-2 px-3 border-b border-zinc-800/60">
-          <button className="text-zinc-500 hover:text-zinc-200" onClick={() => setOpen(null)}>
+          <button
+            type="button"
+            className="text-zinc-500 hover:text-zinc-200 p-1 -m-0.5"
+            onClick={() => setOpen(null)}
+            aria-label="Back to skill list"
+            title="Back to skill list"
+          >
             <ChevronLeft className="size-4" />
           </button>
-          <span className="font-mono text-xs text-zinc-300 truncate">{open}</span>
-          <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-zinc-700 text-zinc-500">SKILL.md</Badge>
+          <span className="font-mono text-xs text-zinc-300 truncate" title={open}>{open}</span>
+          <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-zinc-700 text-zinc-500 shrink-0">SKILL.md</Badge>
         </div>
-        <ScrollArea className="flex-1 pretty-scroll">
-          <div className="p-3 prose-chat text-xs text-zinc-300 leading-relaxed">
-            <ReactMarkdown>{content}</ReactMarkdown>
-          </div>
-        </ScrollArea>
+        {error ? (
+          <div className="p-3 text-[11px] text-red-400/90 font-mono break-words">{error}</div>
+        ) : (
+          <ScrollArea className="flex-1 pretty-scroll">
+            <div className="p-3 prose-chat text-xs text-zinc-300 leading-relaxed">
+              <ReactMarkdown>{content}</ReactMarkdown>
+            </div>
+          </ScrollArea>
+        )}
       </div>
     )
   }
@@ -51,6 +69,7 @@ export function SkillsPanel() {
         )}
         {skills.map((s) => (
           <button
+            type="button"
             key={s.name}
             onClick={() => void view(s.name)}
             className="w-full text-left rounded-lg border border-zinc-800/70 bg-zinc-950/40 px-3 py-2.5 hover:border-orange-500/40 transition-colors group"

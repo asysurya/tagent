@@ -21,6 +21,9 @@ const TOC = [
   ["userland", "Install — Android phone (UserLAnd)"],
   ["first-run", "First run"],
   ["usage", "Using the agent"],
+  ["github-sync", "GitHub login & sync"],
+  ["mcp", "MCP servers"],
+  ["plugins", "Plugins"],
   ["config", "Configuration"],
   ["update", "Updates & version check"],
   ["troubleshooting", "Troubleshooting"],
@@ -29,8 +32,9 @@ const TOC = [
 export default function DocsPage() {
   return (
     <div className="mx-auto grid max-w-6xl gap-12 px-4 py-12 lg:grid-cols-[13rem_1fr]">
-      {/* TOC */}
-      <aside className="top-24 hidden h-fit self-start lg:sticky">
+      {/* TOC — hidden on mobile; lg:block is required alongside lg:sticky
+          (position alone does not undo display:none) */}
+      <aside className="top-24 hidden h-fit self-start lg:sticky lg:block">
         <div className="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">On this page</div>
         <nav className="flex flex-col gap-1 text-sm">
           {TOC.map(([id, label]) => (
@@ -107,12 +111,38 @@ tagent web ~/my-project --no-open`}</Code>
         <H2 id="usage">Using the agent</H2>
         <ul className="mt-4 space-y-2 text-zinc-300">
           <li><b>Chat</b> — describe the task; the loop plans, calls tools, and reports back. Interrupt any time; steer mid-run.</li>
+          <li><b>Markdown</b> — assistant replies render properly in the terminal: headings, bold/italic, code blocks, lists and tables.</li>
+          <li><b>Keys</b> — ESC stops a running agent; while the transcript is scrolled up, ↑/↓ scroll it (input history stays on history recall — pgup/pgdn work too); the stats bar under the input keeps model · mode · tokens · time · workspace visible.</li>
           <li><b>Permissions</b> — every risky action (bash, write, edit, MCP tools) asks first — an arrow-key menu in the TUI, a dialog in the GUI. Choose once / session / always.</li>
           <li><b>Checkpoints</b> — auto-snapshots before writes; <span className="font-mono text-orange-300">/undo</span> restores.</li>
           <li><b>Plan mode</b> — read-only exploration before committing to changes.</li>
           <li><b>Subagents</b> — &quot;spawn a subagent to review X&quot; runs research in an isolated context.</li>
           <li><b>Slash commands</b> — <span className="font-mono text-orange-300">/model /mcp /plugins /sessions /undo /update</span> and plugin-defined ones. Menus are interactive: arrow keys + Enter, type to filter.</li>
           <li><b>Smart cache</b> — re-reading an unchanged file returns a tiny stub (the bytes are already in context); <span className="font-mono text-orange-300">read_files</span> batches up to 12 paths in one call; attach a file inline by mentioning <span className="font-mono text-orange-300">@src/file.ts</span> in chat. <span className="font-mono text-orange-300">tagent cache</span> inspects and clears it all.</li>
+        </ul>
+
+        <H2 id="github-sync">GitHub login &amp; sync</H2>
+        <p className="mt-4 text-zinc-300">
+          Guest-first: everything works locally, no account needed. When you want
+          your projects on GitHub, log in once — the token is stored in{" "}
+          <code className="rounded bg-zinc-800 px-1 text-xs">~/.tagent/credentials.json</code> (chmod 600,
+          never in config.json). After login, if the current workspace has files and
+          is not linked yet, tagent asks <b>once</b>: sync this project to a private
+          GitHub repo? — <b>Sync now</b> / <b>Later</b> / <b>Not this project</b> (remembered).
+        </p>
+        <div className="mt-4">
+          <Code>{`tagent auth              # login — PAT walkthrough (--device for the device flow)
+tagent sync              # snapshot the current project: commit + push
+tagent sync "docs: readme" # …with a custom commit message
+tagent projects          # linked projects — name, repo, last sync
+tagent clone my-app      # continue a project on this machine
+tagent whoami            # guest or login?
+tagent logout            # remove the local token only`}</Code>
+        </div>
+        <ul className="mt-4 space-y-2 text-zinc-300">
+          <li><b>Sync</b> — commits the workspace and pushes with a one-shot token; the remote URL stays clean in <code className="rounded bg-zinc-800 px-1 text-xs">.git/config</code> and the repo stays private.</li>
+          <li><b>Clone</b> — <span className="font-mono text-orange-300">tagent clone owner/repo</span> (or just the project name from your registry) restores it, then <span className="font-mono text-orange-300">cd</span> in and run <span className="font-mono text-orange-300">tagent start</span>.</li>
+          <li><b>Web GUI</b> — the same flow as dialogs: GitHub login, sync workspace, and a project list with last-sync times.</li>
         </ul>
 
         <H2 id="mcp">MCP servers</H2>
@@ -152,10 +182,15 @@ tagent web ~/my-project --no-open`}</Code>
   "apiKeys": { "openai": "sk-…" },
   "permissions": { "tools": { "bash": "ask", "write_file": "ask" } },
   "tools": { "bash": true, "browser": false },
-  "github": { "token": "ghp_…", "repo": "my-workspace" },
+  "github": { "repo": "my-workspace" },
   "maxTurns": 40
 }`}</Code>
         </div>
+        <p className="mt-4 text-sm text-zinc-500">
+          GitHub auth is not configured here — <code className="rounded bg-zinc-800 px-1 text-xs">tagent auth</code>
+          stores the token in the credentials store; the <code className="rounded bg-zinc-800 px-1 text-xs">github.repo</code> key
+          only overrides the repo name <code className="rounded bg-zinc-800 px-1 text-xs">tagent sync</code> pushes to.
+        </p>
 
         <H2 id="update">Updates &amp; version check</H2>
         <p className="mt-4 text-zinc-300">

@@ -1,19 +1,26 @@
-import type { Metadata } from "next"
+import type { Metadata, Viewport } from "next"
 import Link from "next/link"
 import "./globals.css"
 import { IconExternal, IconTerminal } from "@/components/icons"
+import { MobileNav } from "@/components/mobile-nav"
 
 export const metadata: Metadata = {
   title: "Tagent — terminal-native coding agent with a web GUI",
   description:
-    "An open agent platform: agent loop, subagents, MCP servers, plugins, skills, memory, permissions, checkpoints — on your machine, in your browser, even on your phone.",
+    "An open agent platform: agent loop, subagents, MCP servers, plugins, skills, memory, GitHub sync, permissions, checkpoints — on your machine, in your browser, even on your phone.",
   metadataBase: new URL("https://tagent-website.vercel.app"),
   openGraph: {
     title: "Tagent",
     description: "Terminal-native coding agent with a web GUI. Runs on your machine — even your phone.",
     images: ["/img-desktop.png"],
   },
-  icons: { icon: "/logo.svg" },
+  twitter: {
+    card: "summary_large_image",
+  },
+}
+
+export const viewport: Viewport = {
+  themeColor: "#09090b",
 }
 
 function Nav() {
@@ -22,7 +29,6 @@ function Nav() {
       <div className="mx-auto flex h-14 max-w-6xl items-center gap-6 px-4">
         <Link href="/" className="flex items-center gap-2.5 font-semibold tracking-tight group">
           <span className="relative">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/logo.svg" alt="Tagent logo" className="h-7 w-7 rounded-[6px] transition-transform group-hover:scale-105" width={28} height={28} />
           </span>
           <span className="text-zinc-100">tagent</span>
@@ -30,7 +36,7 @@ function Nav() {
             <IconTerminal className="size-2.5" /> terminal-native
           </span>
         </Link>
-        <nav className="ml-auto flex items-center gap-1 text-sm text-zinc-400">
+        <nav className="ml-auto hidden items-center gap-1 text-sm text-zinc-400 sm:flex" aria-label="Main">
           <Link className="rounded-md px-3 py-1.5 hover:bg-zinc-800/70 hover:text-zinc-200" href="/docs">Docs</Link>
           <Link className="rounded-md px-3 py-1.5 hover:bg-zinc-800/70 hover:text-zinc-200" href="/releases">Releases</Link>
           <Link className="rounded-md px-3 py-1.5 hover:bg-zinc-800/70 hover:text-zinc-200" href="/download">Download</Link>
@@ -44,6 +50,7 @@ function Nav() {
             <IconExternal className="size-3" />
           </a>
         </nav>
+        <MobileNav />
       </div>
     </header>
   )
@@ -55,7 +62,6 @@ function Footer() {
       <div className="mx-auto flex max-w-6xl flex-col items-start justify-between gap-6 px-4 py-10 text-sm text-zinc-500 sm:flex-row">
         <div>
           <div className="flex items-center gap-2">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/logo.svg" alt="" className="h-5 w-5 rounded-[4px]" width={20} height={20} />
             <span className="font-semibold text-zinc-300">Tagent</span>
           </div>
@@ -63,6 +69,7 @@ function Footer() {
             Open agent platform — engine on your machine, browser as the cockpit.
             MCP servers, plugins, subagents, BYOK providers. MIT licensed.
           </p>
+          <p className="mt-3 text-xs text-zinc-600">© {new Date().getFullYear()} Tagent — MIT licensed.</p>
         </div>
         <div className="flex gap-10">
           <div className="flex flex-col gap-1.5">

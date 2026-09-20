@@ -26,7 +26,9 @@ export function PermissionDialog() {
 
   return (
     <Dialog open={!!pending} onOpenChange={(o) => { if (!o) respond(false, 'once') }}>
-      <DialogContent className="bg-zinc-900 border-zinc-800 max-w-lg">
+      {/* keyed by request id: a new permission remounts this subtree, so the
+          remember-choice always restarts at the safe default "once" */}
+      <DialogContent key={pending?.id ?? 'none'} className="bg-zinc-900 border-zinc-800 max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto pretty-scroll">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-zinc-100">
             <span className="grid place-items-center size-8 rounded-lg bg-orange-500/15 text-orange-400">
@@ -49,9 +51,11 @@ export function PermissionDialog() {
           <div className="flex rounded-md border border-zinc-800 overflow-hidden">
             {(['once', 'session', 'always'] as const).map((r) => (
               <button
+                type="button"
                 key={r}
                 onClick={() => setRemember(r)}
-                className={`px-2.5 py-1 text-[11px] transition-colors ${
+                aria-pressed={remember === r}
+                className={`px-3 py-1.5 text-[11px] transition-colors ${
                   remember === r ? 'bg-orange-500/20 text-orange-300' : 'hover:bg-zinc-800 text-zinc-500'
                 }`}
               >

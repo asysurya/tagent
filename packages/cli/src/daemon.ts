@@ -4,7 +4,14 @@ import path from 'node:path'
 import fs from 'node:fs'
 import type { Server as HttpServer } from 'node:http'
 
-import { readShareFile, findRelayByCode, renderRelayViewerHtml, CURRENT_VERSION, type RelayEntry } from '@tagent/core'
+import {
+  readShareFile, findRelayByCode, renderRelayViewerHtml, CURRENT_VERSION,
+  validatePat, saveGithubLogin, authStatus, logout as coreLogout, syncProject,
+  getLinkedProject, linkProject, unlinkProject, listProjects, refuseLink,
+  workspaceHasWork, isLinkRefused, defaultRepoName, ensureRepoDetailed,
+  getCredential, readGlobalConfig,
+  type RelayEntry,
+} from '@tagent/core'
 
 import { AgentHost } from './host'
 import type { Socket } from 'socket.io'
@@ -215,6 +222,11 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     })
     viewers.delete(code)
   }
+
+  /** GitHub token from any store: credential → workspace cfg → global cfg
+   *  (same resolution order syncProject uses — keeps legacy GUI logins working). */
+  const ghToken = (): string | undefined =>
+    getCredential('github') || host.cfg.github?.token || readGlobalConfig().github?.token
 
   io.on('connection', (socket) => {
     /* -------- relay viewer: snapshot on connect, then live + read-only ---- */
@@ -441,6 +453,102 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
 
     socket.on('github:push', async (p: { message?: string }, cb?: (r: unknown) => void) => {
       try { cb?.(await host.githubPush(p?.message)) } catch (e) { cb?.({ error: (e as Error).message }) }
+    })
+
+    /* ------------------- auth + project sync (v0.13) -------------------
+     * Guest→login flow: a fresh install is a guest (no GitHub credential);
+     * `auth:login` validates a PAT and saves it exactly like `tagent auth`
+     * does (credential store + cached login). `sync:push` goes through
+     * core syncProject so the project registry (link + lastSyncAt) stays
+     * truthful — host.githubPush above is the legacy pre-registry path. */
+
+    socket.on('auth:status', (_p: unknown, cb?: (r: unknown) => void) => {
+      try {
+        const a = authStatus()
+        cb?.({ ok: true, guest: !a.logged, login: a.login })
+      } catch (e) { cb?.({ ok: false, guest: true, error: (e as Error).message }) }
+    })
+
+    socket.on('auth:login', async (p: { pat?: string }, cb?: (r: unknown) => void) => {
+      try {
+        const pat = String(p?.pat ?? '').trim()
+        if (!pat) return cb?.({ ok: false, error: 'no token provided' })
+        const login = await validatePat(pat) // network — a bad PAT must ack, never throw
+        saveGithubLogin(pat, login)          // credential store + cached login (same as `tagent auth`)
+        // keep the in-memory cfg login fresh so hello()/pushWorkspace skip a
+        // validatePat round-trip; the token itself never lands in config files
+        host.cfg.github = { ...host.cfg.github, login }
+        host.bus.emit('notify', { level: 'info', message: `GitHub connected as @${login}` })
+        // guest→login prompt payload: ask ONCE per workspace that has work,
+        // is not linked yet and was not refused (owner's requested UX)
+        const promptLink =
+          workspaceHasWork(host.root) && !getLinkedProject(host.root) && !isLinkRefused(host.root)
+        cb?.({ ok: true, login, promptLink })
+      } catch (e) { cb?.({ ok: false, error: (e as Error).message }) }
+    })
+
+    socket.on('auth:logout', async (_p: unknown, cb?: (r: unknown) => void) => {
+      try {
+        coreLogout()               // credential store + global-config scrub
+        await host.githubLogout()  // legacy token/login cached in the workspace config
+        host.bus.emit('notify', { level: 'info', message: 'Logged out of GitHub' })
+        cb?.({ ok: true })
+      } catch (e) { cb?.({ ok: false, error: (e as Error).message }) }
+    })
+
+    socket.on('sync:status', (_p: unknown, cb?: (r: unknown) => void) => {
+      try {
+        const linked = getLinkedProject(host.root)
+        const a = authStatus()
+        cb?.({
+          ok: true,
+          linked: !!linked,
+          repo: linked?.repo,
+          lastSyncAt: linked?.lastSyncAt,
+          guest: !a.logged,
+          login: a.login,
+        })
+      } catch (e) { cb?.({ ok: false, linked: false, guest: true, error: (e as Error).message }) }
+    })
+
+    socket.on('sync:push', async (p: { message?: string }, cb?: (r: unknown) => void) => {
+      try {
+        if (!ghToken()) return cb?.({ ok: false, error: 'not logged in' })
+        const result = await syncProject(host.root, host.cfg, {
+          message: p?.message,
+          onLog: (line) => host.bus.emit('notify', { level: 'info', message: line }),
+        })
+        host.bus.emit('notify', { level: 'info', message: `Synced ${result.repo} (${result.commit})` })
+        cb?.({ ok: true, repo: result.repo, url: result.url, commit: result.commit, lastSyncAt: Date.now() })
+      } catch (e) { cb?.({ ok: false, error: (e as Error).message }) }
+    })
+
+    socket.on('sync:link', async (p: { repo?: string }, cb?: (r: unknown) => void) => {
+      try {
+        const repo = String(p?.repo ?? '').trim()
+        if (repo) return cb?.({ ok: true, repo: linkProject(host.root, repo).repo })
+        // no explicit repo — ensure the default one exists on GitHub, then link
+        const token = ghToken()
+        if (!token) return cb?.({ ok: false, error: 'not logged in' })
+        let login = authStatus().login || host.cfg.github?.login
+        if (!login) login = await validatePat(token) // network — only when no cached login
+        const ensured = await ensureRepoDetailed(token, login, defaultRepoName(host.root))
+        const entry = linkProject(host.root, ensured.repo)
+        cb?.({ ok: true, repo: entry.repo, created: ensured.created })
+      } catch (e) { cb?.({ ok: false, error: (e as Error).message }) }
+    })
+
+    socket.on('sync:refuse', (_p: unknown, cb?: (r: unknown) => void) => {
+      // "Jangan untuk proyek ini" — the user opted out of the sync prompt for this root
+      try { refuseLink(host.root); cb?.({ ok: true }) } catch (e) { cb?.({ ok: false, error: (e as Error).message }) }
+    })
+
+    socket.on('sync:unlink', (_p: unknown, cb?: (r: unknown) => void) => {
+      try { cb?.({ ok: unlinkProject(host.root) }) } catch (e) { cb?.({ ok: false, error: (e as Error).message }) }
+    })
+
+    socket.on('projects:list', (_p: unknown, cb?: (r: unknown) => void) => {
+      try { cb?.({ ok: true, projects: listProjects() }) } catch (e) { cb?.({ ok: false, projects: [], error: (e as Error).message }) }
     })
 
     /* ----------------------------- terminal ----------------------------- */

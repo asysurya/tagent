@@ -44,6 +44,7 @@ export function TerminalPanel() {
                     ? 'text-orange-400 whitespace-pre-wrap'
                     : 'text-zinc-300 whitespace-pre-wrap'
                 }
+                style={{ overflowWrap: 'anywhere' }}
               >
                 {line}
               </pre>
@@ -61,10 +62,13 @@ export function TerminalPanel() {
             onKeyDown={(e) => e.key === 'Enter' && void run()}
             disabled={!bashOn || busy}
             placeholder={bashOn ? 'ls -la' : 'disabled'}
-            className="flex-1 bg-transparent py-1.5 pr-2 font-mono text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            className="flex-1 min-w-0 bg-transparent py-2.5 sm:py-1.5 pr-2 font-mono text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none"
           />
         </div>
-        <Button size="sm" className="h-8 px-2.5 text-xs bg-orange-500 hover:bg-orange-400 text-zinc-950" disabled={!cmd.trim() || busy || !bashOn} onClick={() => void run()}>
+        <Button size="sm" aria-label="Run command" className="h-10 sm:h-8 shrink-0 px-3 text-xs bg-orange-500 hover:bg-orange-400 text-zinc-950" disabled={!cmd.trim() || busy || !bashOn} onClick={() => void run()}>
           {busy ? <Loader2 className="size-3.5 animate-spin" /> : <TerminalIcon className="size-3.5" />}
         </Button>
       </div>

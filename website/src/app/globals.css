@@ -11,6 +11,18 @@ html {
   scroll-behavior: smooth;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+/* visible keyboard focus on the dark theme (orange, offset ring) */
+:focus-visible {
+  outline: 2px solid rgba(249, 115, 22, 0.8);
+  outline-offset: 2px;
+}
+
 body {
   background: var(--bg);
   color: #e4e4e7;
@@ -27,6 +39,7 @@ body {
     linear-gradient(rgba(63, 63, 70, 0.25) 1px, transparent 1px),
     linear-gradient(90deg, rgba(63, 63, 70, 0.25) 1px, transparent 1px);
   background-size: 44px 44px;
+  -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black 40%, transparent 100%);
   mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black 40%, transparent 100%);
 }
 

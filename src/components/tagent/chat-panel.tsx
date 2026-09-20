@@ -72,7 +72,7 @@ function StreamMessage() {
   if (!stream || status?.phase !== 'thinking') return null
   return (
     <div className="px-4 py-2 flex gap-3">
-      <span className="text-[10px] font-mono text-orange-400/80 pt-1 w-16 shrink-0 text-right select-none">tagent</span>
+      <span className="text-[10px] font-mono text-orange-400/80 pt-1 w-12 sm:w-16 shrink-0 text-right select-none">tagent</span>
       <div className="min-w-0 flex-1 text-sm text-zinc-400 whitespace-pre-wrap break-words leading-relaxed">
         {stream}
       </div>
@@ -109,6 +109,7 @@ function EmptyState() {
           {SUGGESTIONS.map((s) => (
             <button
               key={s.label}
+              type="button"
               onClick={() => void send(s.text)}
               className="flex items-center gap-3 rounded-lg border border-zinc-800/80 bg-zinc-900/40 px-3.5 py-2.5 text-left hover:border-orange-500/40 hover:bg-zinc-900 transition-colors"
             >
@@ -182,7 +183,7 @@ export function ChatPanel() {
       </div>
 
       {/* messages */}
-      <div className="flex-1 overflow-y-auto pretty-scroll" >
+      <div className="flex-1 overflow-y-auto overflow-x-hidden pretty-scroll">
         {messages.length === 0 && !running ? (
           <EmptyState />
         ) : (
@@ -216,18 +217,18 @@ export function ChatPanel() {
             placeholder="Describe a task… (Enter to send, Shift+Enter for newline)"
             className="w-full resize-none bg-transparent px-3.5 py-2.5 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none font-mono"
           />
-          <div className="flex items-center justify-between px-2 pb-2">
-            <span className="text-[10px] text-zinc-600 font-mono pl-1.5">
+          <div className="flex items-center justify-between gap-2 px-2 pb-2">
+            <span className="text-[10px] text-zinc-600 font-mono pl-1.5 truncate min-w-0">
               /undo · /new · /plan · /build · /worklog · /caveman
             </span>
             {running ? (
-              <Button size="sm" variant="destructive" className="h-7 gap-1 text-xs" onClick={interrupt}>
+              <Button size="sm" variant="destructive" className="h-9 md:h-7 shrink-0 gap-1 text-xs" onClick={interrupt} aria-label="Stop the agent">
                 <CircleStop className="size-3.5" /> stop
               </Button>
             ) : (
               <Button
                 size="sm"
-                className="h-7 gap-1 text-xs bg-orange-500 hover:bg-orange-400 text-zinc-950"
+                className="h-9 md:h-7 shrink-0 gap-1 text-xs bg-orange-500 hover:bg-orange-400 text-zinc-950"
                 disabled={!text.trim()}
                 onClick={submit}
               >

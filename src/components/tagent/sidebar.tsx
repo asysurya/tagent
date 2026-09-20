@@ -154,38 +154,46 @@ function SessionRow({ s }: { s: SessionMeta }) {
         </div>
         {running && <span className="size-1.5 rounded-full bg-orange-400 animate-pulse mt-1" />}
       </div>
-      <div className="absolute right-1.5 top-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="absolute right-1.5 top-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
         {connection === 'ready' && (
           <button
-            className="text-zinc-500 hover:text-orange-400"
+            type="button"
+            className="text-zinc-500 hover:text-orange-400 p-1.5 -m-0.5"
             onClick={(e) => void relay(e)}
             title="Share live — read-only relay link (updates in real time)"
+            aria-label="Share session live"
           >
             <RadioTower className="size-3.5" />
           </button>
         )}
         {connection === 'ready' && (
           <button
-            className="text-zinc-500 hover:text-sky-400"
+            type="button"
+            className="text-zinc-500 hover:text-sky-400 p-1.5 -m-0.5"
             onClick={(e) => void share(e)}
             title="Export a read-only share link (standalone HTML)"
+            aria-label="Export share link"
           >
             <Share2 className="size-3.5" />
           </button>
         )}
         {!editing && (
           <button
-            className="text-zinc-500 hover:text-orange-400"
+            type="button"
+            className="text-zinc-500 hover:text-orange-400 p-1.5 -m-0.5"
             onClick={startEdit}
             title="Rename session"
+            aria-label="Rename session"
           >
             <Pencil className="size-3.5" />
           </button>
         )}
         <button
-          className={armed ? 'text-red-400' : 'text-zinc-500 hover:text-red-400'}
+          type="button"
+          className={cn('p-1.5 -m-0.5', armed ? 'text-red-400' : 'text-zinc-500 hover:text-red-400')}
           onClick={onDelete}
           title={armed ? 'Click again to confirm delete' : 'Delete session'}
+          aria-label={armed ? 'Confirm delete session' : 'Delete session'}
         >
           {armed ? <Check className="size-3.5" /> : <Trash2 className="size-3.5" />}
         </button>
@@ -211,9 +219,11 @@ function LiveShares() {
   return (
     <div className="border-t border-zinc-800/60 pt-1.5">
       <button
-        className="w-full flex items-center justify-between text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
+        type="button"
+        className="w-full flex items-center justify-between text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors group"
         onClick={() => setOpen((v) => !v)}
         title="Live read-only shares of your sessions"
+        aria-expanded={open}
       >
         <span className="inline-flex items-center gap-1.5">
           <RadioTower className="size-3 text-orange-400" /> live shares
@@ -237,16 +247,20 @@ function LiveShares() {
                 </p>
               </div>
               <button
-                className="text-zinc-500 hover:text-sky-400 shrink-0"
+                type="button"
+                className="text-zinc-500 hover:text-sky-400 shrink-0 p-1.5 -m-0.5"
                 onClick={() => copy(r.code)}
                 title="Copy the live link"
+                aria-label="Copy live link"
               >
                 <Copy className="size-3" />
               </button>
               <button
-                className="text-zinc-500 hover:text-red-400 shrink-0"
+                type="button"
+                className="text-zinc-500 hover:text-red-400 shrink-0 p-1.5 -m-0.5"
                 onClick={() => void relayRevoke(r.code)}
                 title="End this live share"
+                aria-label="End live share"
               >
                 <X className="size-3" />
               </button>
@@ -292,8 +306,9 @@ export function Sidebar() {
 
       <div className="border-t border-zinc-800/60 p-2 space-y-1.5">
         <button
+          type="button"
           onClick={() => void undo()}
-          className="w-full flex items-center justify-between text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors group"
+          className="w-full flex items-center justify-between text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors group py-0.5"
           title="Restore the latest checkpoint"
         >
           <span className="inline-flex items-center gap-1.5"><RotateCcw className="size-3" /> undo checkpoint</span>
@@ -307,7 +322,7 @@ export function Sidebar() {
           <span>model</span>
           <span className="font-mono truncate max-w-28">{config?.defaultModel ?? '—'}</span>
         </div>
-        <p className="text-[10px] text-zinc-700 truncate font-mono" title={workspace?.path}>
+        <p className="text-[10px] text-zinc-500 truncate font-mono" title={workspace?.path}>
           {workspace?.path ?? ''}
         </p>
         <LiveShares />

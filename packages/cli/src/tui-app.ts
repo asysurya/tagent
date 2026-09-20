@@ -41,6 +41,11 @@ import {
   CURRENT_VERSION,
   SUBAGENT_TEMPLATE,
   checkUpdate,
+  syncProject,
+  getLinkedProject,
+  authStatus,
+  getCredential,
+  readGlobalConfig,
   type LoopSummary,
   type PermissionRequest,
   type SessionData,
@@ -53,7 +58,6 @@ import {
 import type { AgentHost } from './host'
 import type { DaemonHandle } from './daemon'
 import { selfUpdate } from './updater'
-
 /* ------------------------------------------------------------------ */
 /* ansi + format helpers                                                */
 /* ------------------------------------------------------------------ */
@@ -644,7 +648,7 @@ export interface TuiAppOptions {
 }
 
 const EDITOR_PLACEHOLDER = 'Message tagent… (/ for commands, ctrl+x menu, @ to attach files)'
-const FOOTER_KEYS = 'enter send · alt+enter newline · ctrl+x menu · pgup/pgdn scroll · ctrl+c interrupt · esc clear'
+const FOOTER_KEYS = 'enter send · alt+enter newline · ctrl+x menu · pgup/pgdn scroll · esc stop/clear · ctrl+c exit'
 
 /* ------------------------------------------------------------------ */
 /* the app                                                             */
@@ -654,6 +658,10 @@ interface LogLine {
   raw: string
   w?: number
   wrapped?: string[]
+  /** set on raw assistant-stream output (onChunk): lets onAssistantMessage
+   * know these rows belong to the message it may roll back for the
+   * markdown re-render */
+  stream?: true
 }
 
 export class TuiApp {
@@ -705,9 +713,23 @@ export class TuiApp {
   private todos: TodoItem[] = []
   private lastSubagentTurn = new Map<string, number>()
   private printedLines = 0
+  /** this.log.length when the current message started streaming — the
+   * markdown re-render in onAssistantMessage rolls the transcript back here */
+  private streamStartLog = 0
   private lastCtrlC = 0
   private notice = ''
   private lastDoneLabel = ''
+  /** session clock + slow ticker for the persistent stats row */
+  private startedAt = Date.now()
+  private statsTimer: ReturnType<typeof setInterval> | undefined
+  /** markdown renderer (A2's module, v0.13.0 contract) — loaded at boot;
+   * undefined while (or if) it is unavailable, raw text still renders */
+  private mdRender: ((text: string, width?: number) => string[]) | undefined
+  /** GitHub sync badge for the stats row — '⎇ owner/repo' while the project is
+   * linked AND logged in, empty otherwise. Cached: the registry is file I/O,
+   * so it is only refreshed at boot, after /push and after the auth wizard —
+   * never per-frame. */
+  private syncBadge = ''
 
   /* ticker */
   private statusKind: 'none' | 'status' | 'stream' = 'none'
@@ -759,6 +781,9 @@ export class TuiApp {
     try {
       this.wireHost()
       this.wireInput()
+      this.preloadMarkdown()
+      this.refreshSyncBadge()
+      this.startStatsTicker()
       this.banner()
       if (this.opts.updateCheck !== false) await this.startupUpdate()
       // the most recent session is one /open away — keep its todos loaded
@@ -788,6 +813,10 @@ export class TuiApp {
     if (this.frameTimer) {
       clearTimeout(this.frameTimer)
       this.frameTimer = undefined
+    }
+    if (this.statsTimer) {
+      clearInterval(this.statsTimer)
+      this.statsTimer = undefined
     }
     if (this.escTimer) {
       clearTimeout(this.escTimer)
@@ -896,8 +925,11 @@ export class TuiApp {
   private onChunk(full: string): void {
     const lines = full.split('\n')
     const complete = lines.slice(0, -1)
+    // fresh message → snapshot the transcript so onAssistantMessage can roll
+    // these raw lines back and replace them with the markdown render
+    if (this.printedLines === 0 && complete.length > 0) this.streamStartLog = this.log.length
     for (let i = this.printedLines; i < complete.length; i++) {
-      this.println(complete[i] === '' ? '' : complete[i])
+      this.println(complete[i] === '' ? '' : complete[i], true)
     }
     this.printedLines = complete.length
     const partial = (lines[lines.length - 1] ?? '').trimEnd()
@@ -908,13 +940,53 @@ export class TuiApp {
     }
   }
 
+  /**
+   * Final assistant text. While streaming (onChunk) the user watched the raw
+   * lines arrive; now that the whole message is known, those raw lines are
+   * rolled back and the message is printed exactly once, as rendered
+   * markdown (A2's renderMarkdown, v0.13.0 contract).
+   *
+   * The rollback is only safe when every log entry appended since the stream
+   * snapshot is `stream: true` raw onChunk output — tool / notify lines that
+   * interleaved with the stream would be eaten by a rollback, so that rare
+   * path keeps the raw lines and only prints the un-streamed tail via the
+   * printedLines dedup (the message stays raw, but nothing is lost or
+   * duplicated). A non-empty frozen buffer (lines parked mid-permission)
+   * also blocks the rollback: those lines are not in this.log yet and would
+   * re-appear out of order after the flush.
+   */
   private onAssistantMessage(content: string): void {
     this.hideStatus()
+    const streamed = this.printedLines
+    this.printedLines = 0
+    const snapshot = this.streamStartLog
+    this.streamStartLog = 0
+    if (
+      this.mdRender &&
+      streamed > 0 &&
+      content.trim().length > 0 &&
+      snapshot >= 0 &&
+      snapshot <= this.log.length &&
+      this.frozen.length === 0
+    ) {
+      let safe = true
+      for (let i = snapshot; i < this.log.length; i++) {
+        if (!this.log[i].stream) {
+          safe = false
+          break
+        }
+      }
+      if (safe) {
+        this.log.length = snapshot
+        this.flat = null
+        for (const l of this.mdRender(content, this.transcriptW())) this.println(l)
+        return
+      }
+    }
     const lines = content.split('\n')
-    for (let i = this.printedLines; i < lines.length; i++) {
+    for (let i = streamed; i < lines.length; i++) {
       this.println(lines[i])
     }
-    this.printedLines = 0
   }
 
   private onToolStart(call: ToolCallRecord): void {
@@ -1040,18 +1112,27 @@ export class TuiApp {
 
   /* ---------------- output primitives ---------------- */
 
-  /** append a (possibly multi-line) styled string to the transcript */
-  println(s: string): void {
+  /**
+   * append a (possibly multi-line) styled string to the transcript.
+   * `stream` marks raw assistant-stream output (onChunk) — see
+   * onAssistantMessage for why those entries are special.
+   */
+  println(s: string, stream = false): void {
     if (this.permissionFrozen) {
       this.frozen.push(s)
       return
     }
-    this.addLine(s)
+    this.addLine(s, stream)
   }
 
-  private addLine(s: string): void {
-    for (const l of s.split('\n')) this.log.push({ raw: l })
-    if (this.log.length > 4000) this.log.splice(0, this.log.length - 4000)
+  private addLine(s: string, stream = false): void {
+    for (const l of s.split('\n')) this.log.push(stream ? { raw: l, stream: true } : { raw: l })
+    if (this.log.length > 4000) {
+      const cut = this.log.length - 4000
+      this.log.splice(0, this.log.length - 4000)
+      // keep the stream snapshot pointing at the same entry after the trim
+      this.streamStartLog = Math.max(0, this.streamStartLog - cut)
+    }
     this.flat = null
     if (this.offset > 0) this.newBelow += 1
     this.requestRender()
@@ -1144,6 +1225,10 @@ export class TuiApp {
       const n = s[1]
       if (n === '\r' || n === '\n') return { key: { t: 'enter', mod: 'alt' }, skip: 2 }
       if (n === '\x03') return { key: { t: 'ctrl', ch: 'c' }, skip: 2 }
+      // esc esc (or an esc-prefixed sequence that is itself an escape) — emit
+      // the esc instead of swallowing BOTH: users mash esc to close things,
+      // and '\x1b\x1b[A' used to eat the arrow and TYPE the leftover bytes
+      if (n === '\x1b') return { key: { t: 'esc' }, skip: 1 }
       if (n === 'O') {
         if (s.length < 3) return { skip: 0, wait: true }
         if (s[2] === 'H') return { key: { t: 'home' }, skip: 3 }
@@ -1225,11 +1310,7 @@ export class TuiApp {
       this.settle(top, undefined)
       return
     }
-    if (this.running) {
-      this.println(yellow('  ■ interrupting…'))
-      this.host.interrupt()
-      return
-    }
+    if (this.running) return this.interruptRun()
     const now = Date.now()
     if (now - this.lastCtrlC < 2000) {
       this.exit()
@@ -1240,11 +1321,25 @@ export class TuiApp {
     }
   }
 
+  /**
+   * interrupt the running agent and drop the queued messages — they were
+   * promised "after this run", and that run is now cancelled
+   * (esc, ctrl+c, /stop all land here)
+   */
+  private interruptRun(): void {
+    const dropped = this.queued.length
+    this.queued = []
+    const tail = dropped > 0 ? ` ${dim(`· ${dropped} queued message${dropped > 1 ? 's' : ''} dropped`)}` : ''
+    this.println(yellow('  ■ interrupting…') + tail)
+    this.host.interrupt()
+  }
+
   private editorKey(k: Key): void {
     const pal = this.slashPalette()
     const file = this.fileCompletion()
     switch (k.t) {
       case 'print': {
+        this.jumpToBottom()
         this.editor.insert(k.ch)
         this.palDismissed = null
         this.fileDismissed = null
@@ -1257,11 +1352,13 @@ export class TuiApp {
           return
         }
         if (pal) return this.paletteEnter()
+        this.jumpToBottom()
         return this.submit()
       }
       case 'tab': {
         if (file) return this.insertFileCandidate()
         if (pal) return this.paletteComplete()
+        this.jumpToBottom()
         this.editor.insert('  ')
         return
       }
@@ -1292,6 +1389,9 @@ export class TuiApp {
           this.fileCursor = Math.max(0, this.fileCursor - 1)
           return
         }
+        // scroll mode: while the transcript is scrolled up, the arrows scroll
+        // it (one line) instead of moving the cursor / walking the history
+        if (this.offset > 0) return this.scrollViewport(-1, 1)
         if (!this.editor.up()) this.editor.histPrev()
         return
       }
@@ -1304,6 +1404,7 @@ export class TuiApp {
           this.fileCursor = Math.min(file.items.length - 1, this.fileCursor + 1)
           return
         }
+        if (this.offset > 0) return this.scrollViewport(1, 1)
         if (!this.editor.down()) this.editor.histNext()
         return
       }
@@ -1322,7 +1423,16 @@ export class TuiApp {
           this.palDismissed = '/' + pal.token
           return
         }
-        if (!this.editor.isEmpty) this.editor.clear()
+        // opencode-style esc priority: overlay → close (handled above),
+        // running → interrupt, text → clear, idle → a visible no-op so esc
+        // never feels dead
+        if (this.running) return this.interruptRun()
+        if (!this.editor.isEmpty) {
+          this.editor.clear()
+          return
+        }
+        this.notice = 'esc — nothing to cancel'
+        this.requestRender()
         return
       }
       case 'ctrl': {
@@ -1349,14 +1459,26 @@ export class TuiApp {
     }
   }
 
-  private scrollViewport(dir: number): void {
+  /** dir<0 scrolls up, dir>0 down; `lines` overrides the default full-page
+   * stride (arrows scroll one line, pgup/pgdn a page) */
+  private scrollViewport(dir: number, lines = 0): void {
     const h = Math.max(1, this.viewportHeight() - this.overlayRows(this.termW, Math.max(1, this.viewportHeight())).length)
-    if (dir < 0) this.offset = Math.min(Math.max(0, this.flatLines().length - h), this.offset + h)
+    const step = lines > 0 ? lines : h
+    if (dir < 0) this.offset = Math.min(Math.max(0, this.flatLines().length - h), this.offset + step)
     else {
-      this.offset = Math.max(0, this.offset - h)
+      this.offset = Math.max(0, this.offset - step)
       if (this.offset === 0) this.newBelow = 0
     }
     this.requestRender()
+  }
+
+  /** scrolled-up transcript + the user types → snap to the bottom first
+   * (opencode behavior — typed keys are never lost to the scrollback) */
+  private jumpToBottom(): void {
+    if (this.offset > 0) {
+      this.offset = 0
+      this.newBelow = 0
+    }
   }
 
   /* ---------------- submit / send (port of handleLine + send) ---------------- */
@@ -2573,14 +2695,23 @@ export class TuiApp {
       }
 
       case 'push': {
-        const github = host.cfg.github ?? {}
-        if (!github.token) return this.println(red('  not connected — /auth first'))
+        // v0.13: routed through core syncProject — the same path as daemon
+        // sync:push and `tagent sync` — so the project registry (link +
+        // lastSyncAt) stays truthful. Token resolution order matches
+        // syncProject: credential store → workspace cfg → global cfg.
+        const token = getCredential('github') || host.cfg.github?.token || readGlobalConfig().github?.token
+        if (!token) return this.println(red('  not logged in — /auth first (or run `tagent auth`)'))
         this.println(dim('  pushing…'))
         try {
-          const r = await host.githubPush(arg || undefined)
-          const res = (r as { result: { repo: string; commit: string } }).result
-          this.println(green(`  ✔ pushed to ${res.repo} (${res.commit})`))
+          const r = await syncProject(host.root, host.cfg, {
+            message: arg || undefined,
+            onLog: (l) => this.println(dim(`  ${l}`)),
+          })
+          this.println(green(`  ✔ pushed to ${r.repo} (${r.commit})`))
+          this.println(dim(`  ${r.url}`))
+          this.refreshSyncBadge()
         } catch (e) {
+          this.refreshSyncBadge() // syncProject may have linked before the push failed
           this.println(red(`  ✗ ${(e as Error).message}`))
         }
         return
@@ -2645,8 +2776,7 @@ export class TuiApp {
 
       case 'stop': {
         if (!this.running) return this.println(dim('  nothing running'))
-        this.host.interrupt()
-        this.println(yellow('  ■ interrupting…'))
+        this.interruptRun()
         return
       }
 
@@ -3027,6 +3157,7 @@ export class TuiApp {
       const a = (await this.ask('switch account? (l = logout, enter = stay)')) ?? ''
       if (a.trim().toLowerCase().startsWith('l')) {
         await host.githubLogout()
+        this.refreshSyncBadge()
         this.println(dim('  logged out'))
       }
       return
@@ -3055,7 +3186,8 @@ export class TuiApp {
       } else {
         return this.println(dim('  cancelled'))
       }
-      this.println(dim('  push this workspace any time with /push'))
+      this.refreshSyncBadge()
+      this.println(dim('  sync this workspace any time with `tagent sync`'))
     } catch (e) {
       this.println(red(`  ✗ ${(e as Error).message}`))
     }
@@ -3169,14 +3301,18 @@ export class TuiApp {
     const edRows = this.editorRows(W)
     const statusRow = safeRow(this.statusRow(W))
     const footerRow = safeRow(this.footerRow(W))
+    const statsRow = safeRow(this.statsRow(W))
 
-    const viewportH = Math.max(1, H - rows.length - edRows.length - 2)
+    // header + status + stats + footer rows are fixed; the rest is the
+    // transcript viewport
+    const viewportH = Math.max(1, H - rows.length - edRows.length - 3)
     const ovRows = this.overlayRows(W, viewportH)
     const transH = Math.max(0, viewportH - ovRows.length)
     for (const r of this.transcriptRows(transH)) rows.push(safeRow(r))
     for (const r of ovRows) rows.push(safeRow(r))
     rows.push(statusRow)
     for (const r of edRows) rows.push(safeRow(r))
+    rows.push(statsRow)
     rows.push(footerRow)
     return rows
   }
@@ -3184,7 +3320,8 @@ export class TuiApp {
   private viewportHeight(): number {
     const H = this.termH
     const edRows = this.editorRows(this.termW)
-    return Math.max(1, H - 1 - edRows.length - 2)
+    // header + status + stats + footer
+    return Math.max(1, H - 1 - edRows.length - 3)
   }
 
   /** sanitized config with a 1s cache — the header reads it every frame */
@@ -3224,7 +3361,11 @@ export class TuiApp {
       s = `${dim('│ ')}${this.statusLabel}${dim('▌')}${dim(` · ${this.streamChars} chars`)}`
     } else if (this.statusKind === 'status') {
       s = `${cyan(SPINNER[this.spinnerFrame])} ${dim(this.statusLabel)}`
-    } else if (this.newBelow > 0 && this.offset > 0) {
+    } else if (this.offset > 0) {
+      // scroll-mode indicator: while scrolled up, the arrows scroll the
+      // transcript (not the cursor / history) and typing jumps back down
+      s = dim(`↑ scrolled — ↑↓/pgdn to follow · typing jumps down${this.newBelow > 0 ? ` · ↓ ${this.newBelow} new lines` : ''}`)
+    } else if (this.newBelow > 0) {
       s = dim(`↓ ${this.newBelow} new lines — pgdn to follow`)
     } else if (this.lastDoneLabel) {
       s = dim(this.lastDoneLabel)
@@ -3234,6 +3375,65 @@ export class TuiApp {
 
   private footerRow(W: number): string {
     return dim(truncateStyled(FOOTER_KEYS, W))
+  }
+
+  /**
+   * Persistent stats row — always visible, right under the editor box:
+   * model · mode · session tokens · elapsed · workspace. One dim line,
+   * truncation-safe, CJK-width-aware (truncateStyled / vwidthANSI).
+   */
+  private statsRow(W: number): string {
+    const cfg = this.cfgFast() as { defaultModel: string }
+    const tok = this.tokensIn + this.tokensOut > 0 ? `${fmtTok(this.tokensIn)}↑ ${fmtTok(this.tokensOut)}↓` : '0↑ 0↓'
+    // GitHub sync badge — cached via refreshSyncBadge() (registry is file
+    // I/O, never read per-frame). '⎇ owner/repo' only while linked + logged
+    // in; guests see nothing. Kept before the workspace name so the row
+    // still ends with the workspace (stable in tests + muscle memory).
+    const badge = this.syncBadge ? ` · ⎇ ${this.syncBadge}` : ''
+    return dim(
+      truncateStyled(
+        ` ${shortModelName(cfg.defaultModel)} · ${this.mode} · ${tok} · ${fmtElapsed(Date.now() - this.startedAt)}${badge} · ${
+          path.basename(this.host.root) || this.host.root
+        }`,
+        W,
+      ),
+    )
+  }
+
+  /** slow ticker (30s) — keeps the elapsed-time stat fresh while idle; while
+   * a run is going the spinner already re-renders every 100ms */
+  private startStatsTicker(): void {
+    if (this.statsTimer) return
+    this.statsTimer = setInterval(() => {
+      if (this.exited || this.destroyed) return
+      this.requestRender()
+    }, 30_000)
+  }
+
+  /** load A2's markdown renderer once at boot — dynamic on purpose: the app
+   * still boots (and streams raw text) if the module is missing or broken */
+  private preloadMarkdown(): void {
+    import('./markdown')
+      .then((m) => {
+        this.mdRender = m.renderMarkdown
+      })
+      .catch(() => undefined)
+  }
+
+  /** refresh the cached GitHub sync badge (stats row '⎇ owner/repo').
+   * Reads the project registry + credential state — file I/O, so this is
+   * called only at boot, after /push and after the auth wizard, never in
+   * the render path. Login check mirrors syncProject's token resolution
+   * (credential store / global config cover `tagent auth` + the GUI dialog;
+   * the workspace cfg token covers the in-TUI legacy /auth path). */
+  private refreshSyncBadge(): void {
+    try {
+      const linked = getLinkedProject(this.host.root)
+      const logged = authStatus().logged || !!this.host.cfg?.github?.token
+      this.syncBadge = linked && logged ? linked.repo : ''
+    } catch {
+      this.syncBadge = ''
+    }
   }
 
   private flatLines(): string[] {
@@ -3573,6 +3773,20 @@ function summarizeInput(call: { tool?: string; input?: unknown }): string {
 /** 12345 → "12.3k" for the usage footer */
 function fmtTok(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+}
+
+/** ms → "42s" / "12m" / "1h 05m" for the persistent stats row */
+function fmtElapsed(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m`
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`
+}
+
+/** compact display name for a model id — the last path/hierarchy segment */
+function shortModelName(m: string): string {
+  return truncateStyled(m.split(/[/:]/).pop() ?? m, 24)
 }
 
 /* ------------------------------------------------------------------ */

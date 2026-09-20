@@ -120,13 +120,22 @@ export async function selfUpdate(info: UpdateInfo): Promise<boolean> {
     console.log(r.ok ? `  ✔ updated via bun — restart Tagent` : `  ✗ ${r.output}\n    manual: bun add -g tagent@latest`)
     return r.ok
   }
-  // source checkout
-  const r = run('git', ['pull', '--ff-only'])
+  // source checkout — only pull when cwd really is the tagent repo
+  // (a misdetection must never `git pull` the USER's project)
+  const remote = run('git', ['config', '--get', 'remote.origin.url'])
+  if (!remote.ok || !/asysurya\/tagent(\.git)?$/i.test(remote.output)) {
+    console.log(`  ✗ not a tagent source checkout (cwd: ${process.cwd()})`)
+    console.log(`    manual: git pull in your tagent checkout — https://github.com/${REPO}`)
+    return false
+  }
+  const top = run('git', ['rev-parse', '--show-toplevel'])
+  const repoDir = top.ok ? top.output || undefined : undefined
+  const r = run('git', ['pull', '--ff-only'], repoDir)
   if (!r.ok) {
     console.log(`  ✗ ${r.output || 'git pull failed'} — update manually with git pull`)
     return false
   }
-  run('bun', ['install'])
+  run('bun', ['install'], repoDir)
   console.log(`  ✔ source updated — restart Tagent`)
   return true
 }

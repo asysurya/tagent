@@ -54,8 +54,16 @@ export {
   relayUrl, relaysPath, renderRelayViewerHtml, type RelayEntry,
 } from './relay'
 export {
-  startDeviceLogin, pollDeviceToken, validatePat, ensureRepo, pushWorkspace,
+  startDeviceLogin, pollDeviceToken, validatePat, ensureRepo, ensureRepoDetailed,
+  pushWorkspace, defaultRepoName, authUrl, DEFAULT_REMOTE_BASE,
+  type DeviceCodeStart, type EnsureRepoResult, type PushResult, type PushOpts,
 } from './github'
+export {
+  listProjects, getLinkedProject, linkProject, unlinkProject, markSynced,
+  refuseLink, isLinkRefused, workspaceHasWork, authStatus, logout,
+  syncProject, restoreProject, saveGithubLogin,
+  type ProjectReg, type SyncOpts,
+} from './projects'
 export {
   getStorageAdapter, LocalAdapter, MegaAdapter, syncMemoryToMega, pullMemoryFromMega,
   type StorageAdapter,

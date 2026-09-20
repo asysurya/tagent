@@ -229,4 +229,75 @@ export interface HelloPayload {
   plugins?: PluginMeta[]
 }
 
+/* --------- GitHub auth + project sync (v0.13 guest→login flow) --------- */
+
+/** 'auth:status' — guest until a GitHub credential exists (no network) */
+export interface AuthStatusResponse {
+  ok: boolean
+  guest: boolean
+  login?: string
+  error?: string
+}
+
+/** 'auth:login' — PAT validated against GitHub, then saved locally */
+export interface AuthLoginResponse {
+  ok: boolean
+  login?: string
+  /** true when the workspace has work, isn't linked and wasn't refused —
+   *  show the one-time "sync this project to GitHub?" dialog */
+  promptLink?: boolean
+  error?: string
+}
+
+/** 'sync:status' — registry link + auth state for the active workspace */
+export interface SyncStatusResponse {
+  ok: boolean
+  linked: boolean
+  repo?: string
+  lastSyncAt?: number
+  guest: boolean
+  login?: string
+  error?: string
+}
+
+/** 'sync:push' — commit + push via core syncProject (registry auto-link) */
+export interface SyncPushResponse {
+  ok: boolean
+  repo?: string
+  url?: string
+  commit?: string
+  lastSyncAt?: number
+  /** auth guard: 'not logged in' → the GUI should open the login dialog */
+  error?: string
+}
+
+/** 'sync:link' — link the workspace to a repo (ensures the default repo when omitted) */
+export interface SyncLinkResponse {
+  ok: boolean
+  repo?: string
+  /** true when the repo was just created on GitHub */
+  created?: boolean
+  error?: string
+}
+
+/** 'projects:list' — the global project registry (~/.tagent/projects.json) */
+export interface ProjectListResponse {
+  ok: boolean
+  projects: ProjectReg[]
+  error?: string
+}
+
+/** registry entry — client-side mirror of @tagent/core ProjectReg */
+export interface ProjectReg {
+  id: string
+  /** workspace display name (basename of root) */
+  name: string
+  /** owner/name on GitHub */
+  repo: string
+  /** resolved absolute workspace path — the registry key */
+  root: string
+  linkedAt: number
+  lastSyncAt?: number
+}
+
 export type Connection = 'connecting' | 'ready' | 'demo'

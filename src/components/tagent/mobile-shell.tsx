@@ -42,11 +42,13 @@ export function MobileShell() {
           fileBuffer ? (
             <div className="flex flex-col h-full">
               <button
+                type="button"
+                aria-label="Close file and go back to the file tree"
                 onClick={() => closeFile()}
                 className="shrink-0 flex items-center gap-1.5 px-3 h-9 text-[11px] font-medium text-zinc-400 hover:text-zinc-200 border-b border-zinc-800/60 bg-zinc-950/80"
               >
-                <ArrowLeft className="size-3.5" />
-                <span className="truncate text-orange-300/80">{fileBuffer.path}</span>
+                <ArrowLeft className="size-3.5 shrink-0" />
+                <span className="truncate text-orange-300/80" title={fileBuffer.path}>{fileBuffer.path}</span>
               </button>
               <div className="flex-1 min-h-0">
                 <FileEditor />
@@ -69,14 +71,16 @@ export function MobileShell() {
         {TABS.map((t) => (
           <button
             key={t.id}
+            type="button"
+            aria-current={tab === t.id ? 'page' : undefined}
             onClick={() => setTab(t.id)}
             className={cn(
-              'flex-1 flex flex-col items-center justify-center gap-0.5 py-1.5 text-[9px] font-medium transition-colors',
+              'flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 py-2 text-[9px] font-medium transition-colors',
               tab === t.id ? 'text-orange-300' : 'text-zinc-500 active:text-zinc-300',
             )}
           >
             <t.icon className={cn('size-4', tab === t.id && 'drop-shadow-[0_0_6px_rgba(249,115,22,0.45)]')} />
-            {t.label}
+            <span className="truncate max-w-full">{t.label}</span>
           </button>
         ))}
       </nav>

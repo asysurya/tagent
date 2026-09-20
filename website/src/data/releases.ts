@@ -4,6 +4,12 @@
  *
  * Keep newest first. After editing, run `bun scripts/sync-latest.ts` to
  * regenerate public/latest.json, and tag the repo: `git tag vX.Y.Z`.
+ *
+ * Preparing a release BEFORE it is cut: add the entry at the top with
+ * `unreleased: true` and keep LATEST pointing at the shipped version — the
+ * site lists the entry as "upcoming" and never links to assets or tags that
+ * do not exist yet. At release time: bump LATEST to the new version, remove
+ * the `unreleased` flag, then run `bun scripts/sync-latest.ts`.
  */
 export interface Release {
   version: string
@@ -15,11 +21,64 @@ export interface Release {
   sections: { name: string; items: string[] }[]
   /** first version considered "stable enough" for the download page */
   stable?: boolean
+  /** entry exists but the release has not been cut yet — renders as "upcoming",
+   *  no asset/tag links until the flag is removed at release time */
+  unreleased?: boolean
 }
 
+/** The version the download buttons point at — bumped at release time, in
+ *  lockstep with removing `unreleased` from the newest entry (see header). */
 export const LATEST = '0.12.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.13.0',
+    date: '2026-09-20',
+    title: 'GitHub login & project sync, markdown in the terminal, TUI polish',
+    summary:
+      'Log in with GitHub — guests keep working locally, nothing requires an account — and tagent offers to sync the current project to a private repo; tagent clone continues it on any device. Assistant replies now render real markdown in the TUI: headings, code blocks, lists, tables. Plus a persistent stats bar under the input, ESC to stop a running agent, and arrow-key transcript scrolling.',
+    stable: true,
+    unreleased: true, // ← release time: remove this line and bump LATEST
+    sections: [
+      {
+        name: 'GitHub login & project sync',
+        items: [
+          'tagent auth logs you in — PAT walkthrough by default, --device for the GitHub device flow, or pipe the token when non-interactive; the token lands in ~/.tagent/credentials.json (chmod 600), never in config.json',
+          'Guest-first: every feature stays local without an account. After login, tagent asks once per project — "sync this workspace to GitHub?" with Sync now / Later / Not this project (answers are remembered)',
+          'tagent sync [message] snapshots the workspace (commit + push) into a private repo; the token is used one-shot and never written into .git/config',
+          'tagent projects lists linked projects — name, repo, last sync, ▸ marks the current one; tagent clone <owner/name|name> restores any of them on this machine and prints the next steps',
+          'tagent whoami reports guest/login status; tagent logout removes only the local token — the GitHub side is never touched',
+          '/push inside the TUI goes through the same sync engine — the project registry stays truthful no matter which surface you push from',
+          'Web GUI: matching login and sync dialogs wired to new daemon RPC events (auth:*, sync:*, projects:*) — any client can drive the same flow',
+        ],
+      },
+      {
+        name: 'Markdown in the TUI',
+        items: [
+          'Assistant replies render real markdown in the terminal — bold colored headings, **bold**, *italic*, `inline code`',
+          'Fenced code blocks draw a dim left rail with a language label; nested lists indent; > quotes and --- rules render',
+          'Pipe tables render best-effort and links degrade to "text (url)" — all width-aware, double-width CJK glyphs included',
+        ],
+      },
+      {
+        name: 'TUI polish',
+        items: [
+          'Persistent stats bar under the chat input: model · mode · tokens · time · workspace — always visible while you type; a dim ⎇ owner/repo badge appears once the project is synced',
+          'ESC stops a running agent — model calls and bash tools cancel mid-flight, the conversation stays usable',
+          'Arrow keys scroll the transcript without touching input history (while scrolled up, ↑/↓ move one line; pgup/pgdn a page as before)',
+        ],
+      },
+      {
+        name: 'Under the hood',
+        items: [
+          'Core sync engine: project registry (~/.tagent/projects.json), link/refuse state, guest→login flow, restore/clone — 57 offline hermetic tests',
+          'CLI update flow hardened: the source-install updater now verifies the git remote before ever running git pull',
+          'GUI state slice for auth & sync (guest · login · linkedRepo · lastSyncAt) with login/sync/projects methods',
+          'Website: responsive & tidy audit pass — mobile hamburger nav, scrollable download tables, focus rings, refreshed docs',
+        ],
+      },
+    ],
+  },
   {
     version: '0.12.0',
     date: '2026-09-20',

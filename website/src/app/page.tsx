@@ -4,10 +4,16 @@ import { RELEASES, LATEST } from "@/data/releases"
 import {
   IconLoop, IconBot, IconShield, IconBrain, IconPlug, IconPuzzle, IconGlobe, IconPhone,
   IconNetwork, IconTerminal, IconZap, IconDownload, IconPackage, IconArrowRight,
-  IconMonitor, IconKeyboard, IconRefresh, IconCheck,
+  IconMonitor, IconRefresh, IconCheck, IconBranch,
 } from "@/components/icons"
 
 const FEATURES = [
+  {
+    icon: IconBranch,
+    title: "GitHub sync",
+    body: "Nothing requires an account — but log in (tagent auth) and tagent offers to sync the current project to a private GitHub repo. Continue on any machine with tagent clone.",
+    tag: "new",
+  },
   {
     icon: IconZap,
     title: "Smart cache",
@@ -89,7 +95,7 @@ function FeatureCard({ icon: Icon, title, body, tag }: (typeof FEATURES)[number]
 }
 
 export default function Home() {
-  const [newest] = RELEASES
+  const newest = RELEASES.find((r) => r.version === LATEST) ?? RELEASES[0]
   return (
     <>
       {/* hero */}
@@ -98,7 +104,6 @@ export default function Home() {
         <div className="glow absolute -top-32 left-1/2 h-96 w-[52rem] -translate-x-1/2" aria-hidden />
         <div className="relative mx-auto max-w-6xl px-4 pb-20 pt-20 text-center sm:pt-28">
           <div className="mx-auto mb-6 w-fit">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/logo.svg" alt="Tagent" className="h-20 w-20 rounded-2xl shadow-2xl shadow-orange-500/20" width={80} height={80} />
           </div>
           <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-zinc-800 bg-zinc-900/60 px-3 py-1 text-xs text-zinc-400">
@@ -115,7 +120,7 @@ export default function Home() {
           </h1>
           <p className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-zinc-400">
             Tagent runs the engine on your machine — loop, subagents, MCP servers,
-            plugins, skills, memory, permissions. One self-contained binary (web GUI
+            plugins, skills, memory, GitHub sync, permissions. One self-contained binary (web GUI
             included) for Windows, macOS and Linux. The TUI is the interface
             (terminal or phone), the web GUI is the companion. Open source, BYOK.
           </p>
@@ -156,7 +161,6 @@ export default function Home() {
       {/* screenshots */}
       <section className="mx-auto max-w-6xl px-4">
         <div className="relative rounded-xl border border-zinc-800 bg-zinc-900/40 p-2 shadow-2xl shadow-black/50">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/img-desktop.png"
             alt="Tagent web GUI on desktop — chat, file tree, editor and terminal"
@@ -167,7 +171,6 @@ export default function Home() {
         </div>
         <div className="mt-6 flex flex-col items-center gap-6 sm:flex-row sm:justify-center">
           <figure className="w-56">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/img-mobile-files.png"
               alt="Tagent mobile layout — files tab"
@@ -180,7 +183,6 @@ export default function Home() {
             </figcaption>
           </figure>
           <figure className="w-56">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/img-mobile-chat.png"
               alt="Tagent mobile layout — chat tab"
@@ -240,6 +242,8 @@ export default function Home() {
                 "Arrow-key menus everywhere — model picker, sessions, permissions, y/N confirms",
                 "Type-to-filter across 40+ providers and hundreds of models",
                 "Slash commands: /mcp, /plugins, /update, /model, /sessions, /auth…",
+                "Answers render as markdown — headings, code blocks, lists, tables",
+                "Stats bar under the input (model · mode · tokens · time), ESC stops the run, ↑/↓ scrolls",
                 "Streams tokens live, queues your next message mid-run",
               ].map((t) => (
                 <li key={t} className="flex gap-2.5">
@@ -264,6 +268,7 @@ export default function Home() {
                 "Chat with tool cards, streaming, live todos and subagent timeline",
                 "File tree, editor, terminal — workspace in a tab",
                 "Settings: providers, MCP servers, plugins, permissions",
+                "GitHub login & project sync as dialogs, not terminal flags",
                 "Mobile layout with bottom tabs; live relay to share a session",
               ].map((t) => (
                 <li key={t} className="flex gap-2.5">

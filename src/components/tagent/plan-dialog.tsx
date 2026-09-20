@@ -17,7 +17,7 @@ export function PlanDialog() {
 
   return (
     <Dialog open={!!plan} onOpenChange={(o) => { if (!o) respondPlan(false) }}>
-      <DialogContent className="bg-zinc-900 border-zinc-800 max-w-xl">
+      <DialogContent className="bg-zinc-900 border-zinc-800 max-w-xl max-h-[calc(100dvh-2rem)] overflow-y-auto pretty-scroll">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-zinc-100">
             <span className="grid place-items-center size-8 rounded-lg bg-sky-500/15 text-sky-400">

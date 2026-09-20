@@ -22,7 +22,7 @@ function AgentsEditor({ which }: { which: 'workspace' | 'global' }) {
         <div className="flex-1" />
         <Button
           size="sm"
-          className={cn('h-6 px-2 text-[10px] gap-1', dirty ? 'bg-orange-500 hover:bg-orange-400 text-zinc-950' : 'bg-zinc-800 text-zinc-400')}
+          className={cn('h-7 px-2 text-[10px] gap-1', dirty ? 'bg-orange-500 hover:bg-orange-400 text-zinc-950' : 'bg-zinc-800 text-zinc-400')}
           disabled={!dirty}
           onClick={async () => {
             await saveAgents(which, text)
@@ -59,9 +59,11 @@ export function MemoryPanel() {
           <div className="flex rounded border border-zinc-800 overflow-hidden text-[10px]">
             {(['workspace', 'global'] as const).map((w) => (
               <button
+                type="button"
                 key={w}
+                aria-pressed={which === w}
                 onClick={() => setWhich(w)}
-                className={cn('px-2 py-0.5', which === w ? 'bg-orange-500/20 text-orange-300' : 'text-zinc-500 hover:text-zinc-300')}
+                className={cn('px-3 py-1.5', which === w ? 'bg-orange-500/20 text-orange-300' : 'text-zinc-500 hover:text-zinc-300')}
               >
                 {w}
               </button>
@@ -87,8 +89,9 @@ export function MemoryPanel() {
             className="flex-1 rounded-md border border-zinc-800 bg-zinc-950/60 px-2 py-1.5 text-xs text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:border-orange-500/40"
           />
           <Button
-            size="sm" className="h-7 px-2 text-[10px] bg-orange-500 hover:bg-orange-400 text-zinc-950"
+            size="sm" className="h-8 px-2.5 text-[10px] bg-orange-500 hover:bg-orange-400 text-zinc-950"
             disabled={!fact.trim()}
+            aria-label="Add fact"
             onClick={() => { void addFact(fact.trim()); setFact('') }}
           >
             <Plus className="size-3.5" />
@@ -106,9 +109,13 @@ export function MemoryPanel() {
           {memory.facts.map((f) => (
             <div key={f.id} className="group flex items-start gap-2 rounded-md border border-zinc-800/60 bg-zinc-950/40 px-2.5 py-1.5">
               <p className="flex-1 text-[11px] text-zinc-300 leading-relaxed break-words">{f.text}</p>
+              {/* visible on touch (no hover state there) */}
               <button
-                className="text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                type="button"
+                className="text-zinc-600 hover:text-red-400 p-1.5 -m-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity shrink-0"
                 onClick={() => void deleteFact(f.id)}
+                aria-label="Delete fact"
+                title="Delete fact"
               >
                 <Trash2 className="size-3" />
               </button>

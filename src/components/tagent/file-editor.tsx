@@ -33,18 +33,22 @@ export function FileEditor() {
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <div className="h-9 shrink-0 flex items-center gap-2 px-3 border-b border-zinc-800/60">
-        <span className="font-mono text-[11px] text-zinc-300 truncate flex-1">{buffer.path}</span>
-        <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-zinc-700 text-zinc-500">{lines} lines</Badge>
+        <span className="font-mono text-[11px] text-zinc-300 truncate flex-1" title={buffer.path}>{buffer.path}</span>
+        {buffer.binary && (
+          <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-zinc-700 text-zinc-500 shrink-0">binary</Badge>
+        )}
+        <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-zinc-700 text-zinc-500 shrink-0">{lines} lines</Badge>
         <Button
-          size="sm" variant="ghost" className="h-6 px-1.5 text-[10px] text-zinc-400 gap-1"
+          size="sm" variant="ghost" className="h-7 w-7 p-0 text-zinc-400"
           title="Undo agent changes (checkpoint)"
+          aria-label="Undo agent changes (checkpoint)"
           onClick={() => void undo()}
         >
-          <Undo2 className="size-3" />
+          <Undo2 className="size-3.5" />
         </Button>
         <Button
           size="sm"
-          className={cn('h-6 px-2 text-[10px] gap-1', buffer.dirty
+          className={cn('h-7 px-2.5 text-[10px] gap-1 shrink-0', buffer.dirty
             ? 'bg-orange-500 hover:bg-orange-400 text-zinc-950'
             : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700')}
           disabled={!buffer.dirty || buffer.binary}

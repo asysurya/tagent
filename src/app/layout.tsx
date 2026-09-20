@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
@@ -19,6 +19,16 @@ export const metadata: Metadata = {
     "An open, provider-agnostic coding agent engine with a web GUI: agentic loop, subagents, skills, memory, permissions, checkpoints, plugins. Runs locally, syncs to GitHub & MEGA.",
   keywords: ["tagent", "ai agent", "coding agent", "cli", "gui", "byok"],
   icons: { icon: "/logo.svg" },
+};
+
+/* Android Chrome does not resize the layout viewport when the virtual
+ * keyboard opens — without this the chat composer stays hidden behind it.
+ * `interactiveWidget: "resizes-content"` makes the visual+layout viewport
+ * shrink, so h-dvh tracks the visible area (A7 note, wired by A9). */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({

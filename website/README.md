@@ -23,9 +23,13 @@ bun run dev          # http://localhost:3100
 ## Keeping releases in sync
 
 - Changelog lives in `src/data/releases.ts` (newest first).
-- After adding a release: bump `LATEST`, run `bun scripts/sync-latest.ts`
-  (regenerates `public/latest.json` — the CLI update-check endpoint),
-  then `git tag vX.Y.Z && git push --tags` so the archive links resolve.
+- **Preparing a release before it is cut**: add the entry at the top with
+  `unreleased: true` and leave `LATEST` at the shipped version — the site
+  shows the entry as "upcoming" and links nothing that does not exist yet.
+- **At release time**: bump `LATEST` to the new version, remove the
+  `unreleased` flag, run `bun scripts/sync-latest.ts` (regenerates
+  `public/latest.json` — the CLI update-check endpoint), then
+  `git tag vX.Y.Z && git push --tags` so the archive links resolve.
 
 ## Pages
 
