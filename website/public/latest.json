@@ -1,6 +1,6 @@
 {
-  "version": "0.12.0",
+  "version": "0.13.0",
   "date": "2026-09-20",
-  "notes": "The app TUI gets the fixes that matter: pressing Enter on a highlighted slash command now RUNS it (the palette used to silently submit the raw \"/\" you typed), every box gained proper side rails, the slash palette and @file completion render in real framed boxes, and typing a search that finds nothing now points you at the custom-provider wizard instead of a dead end. New: /model custom adds any OpenAI-compatible, Anthropic or Google endpoint right from the terminal — ollama, lm studio, openrouter, self-hosted gateways.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.12.0"
+  "notes": "Log in with GitHub — guests keep working locally, nothing requires an account — and tagent offers to sync the current project to a private repo; tagent clone continues it on any device. Assistant replies now render real markdown in the TUI: headings, code blocks, lists, tables. Plus a persistent stats bar under the input, ESC to stop a running agent, and arrow-key transcript scrolling.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.13.0"
 }

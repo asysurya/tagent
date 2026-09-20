@@ -28,7 +28,7 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.12.0'
+export const LATEST = '0.13.0'
 
 export const RELEASES: Release[] = [
   {
@@ -38,7 +38,6 @@ export const RELEASES: Release[] = [
     summary:
       'Log in with GitHub — guests keep working locally, nothing requires an account — and tagent offers to sync the current project to a private repo; tagent clone continues it on any device. Assistant replies now render real markdown in the TUI: headings, code blocks, lists, tables. Plus a persistent stats bar under the input, ESC to stop a running agent, and arrow-key transcript scrolling.',
     stable: true,
-    unreleased: true, // ← release time: remove this line and bump LATEST
     sections: [
       {
         name: 'GitHub login & project sync',
