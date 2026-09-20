@@ -49,57 +49,35 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v0.13.0 — GitHub login & project sync, markdown in the terminal, TUI polish
+## v__VER__ — updater honesty fix (source installs)
 
-Your projects now follow you. Log in with GitHub and tagent offers — once per
-project — to sync the workspace to a private repo; `tagent clone` continues it
-on any device. Guests keep everything local: no account is ever required.
+`tagent update` on a **source install** could lie: it pulled whatever repo
+happened to be the current directory, printed "✔ source updated", and left the
+running tagent untouched (caught from a live report — thanks!). v__VER__
+updates the checkout that actually provides the running code — and proves it.
 
-### GitHub login & project sync
-- **`tagent auth`** — PAT walkthrough by default (github.com/settings/tokens,
-  scope `repo`), `--device` for the OAuth device flow, or pipe the token when
-  non-interactive. It lands in `~/.tagent/credentials.json` (chmod 600) — never
-  in config.json, never in .git/config
-- **Guest-first**: every feature stays local without an account. After login,
-  tagent asks once per project — “sync this workspace to GitHub?” with
-  *Sync now / Later / Not this project* (answers are remembered)
-- **`tagent sync [message]`** snapshots the workspace (commit + push) into a
-  private repo — `tagent-<dirname>` by default; the token is used one-shot and
-  never written anywhere persistent
-- **`tagent projects`** lists linked projects (name · repo · last sync, ▸ marks
-  the current one); **`tagent clone <owner/name | name>`** restores any of them
-  on this machine and prints the next steps
-- **`tagent whoami`** / **`tagent logout`** — status and local-token removal;
-  the GitHub side is never touched
-- **Web GUI**: matching login + sync dialogs, wired to the new daemon RPC
-  events (`auth:*`, `sync:*`, `projects:*`) — any client can drive the same flow
-- The TUI `/push` command now goes through the same sync engine, and the stats
-  bar grows a dim `⎇ owner/repo` badge once a project is linked
+### What changed
+- The updater walks up from the **running entry file** (through symlinks and
+  wrappers — `bun link`, `~/.local/bin/tagent`) to find the tagent checkout and
+  pulls **that**, never whatever repo you happen to be standing in
+- After pulling it reads the new version back and prints it — a stale branch
+  or a second install can no longer fake a successful update
+- When `which tagent` resolves somewhere else than the updated checkout, a
+  warning names both paths (old installs can be removed with `tagent uninstall`)
+- **UserLAnd / proot**: updates run `bun install --linker=hoisted` so socket.io
+  loads correctly afterwards
+- Not near a tagent checkout? The updater says so and prints the manual fix
+  instead of touching the repo you are in
 
-### Markdown in the TUI
-- Assistant replies render real markdown in the terminal — bold colored
-  headings, **bold**, *italic*, `inline code`
-- Fenced code blocks draw a dim left rail with a language label; nested lists
-  indent; `>` quotes and `---` rules render
-- Pipe tables render best-effort and links degrade to “text (url)” — all
-  width-aware, double-width CJK glyphs included
+### Getting this fix when you're on v0.13.0 or older
+The old updater is the broken part — update once manually:
 
-### TUI polish
-- Persistent stats bar under the chat input: model · mode · tokens · time ·
-  workspace — always visible while you type
-- **ESC stops a running agent** — model calls and bash tools cancel mid-flight,
-  the conversation stays usable
-- Arrow keys scroll the transcript without touching input history (while
-  scrolled up, ↑/↓ move one line; pgup/pgdn a page as before)
+```bash
+cd <your tagent clone> && git pull && bun install
+tagent --version   # -> 0.13.1
+```
 
-### Under the hood
-- Core sync engine: project registry (`~/.tagent/projects.json`),
-  link/refuse state, guest→login flow, restore/clone — 57 offline hermetic tests
-- CLI update flow hardened: the source-install updater verifies the git remote
-  before ever running `git pull`
-- GUI state slice for auth & sync (guest · login · linkedRepo · lastSyncAt)
-- Website: responsive & tidy audit pass — mobile hamburger nav, scrollable
-  download tables, focus rings, refreshed docs
+(or download a single-file binary below and skip source entirely)
 
 ---
 
@@ -112,12 +90,12 @@ embedded inside the binary and self-extracts on first run).
 
 | File | Platform |
 | --- | --- |
-| `tagent-v0.13.0-windows-x64.exe` | Windows 10+ (64-bit) |
-| `tagent-v0.13.0-windows-arm64.exe` | Windows 10+ on ARM |
-| `tagent-v0.13.0-linux-x64` | Linux (glibc, 64-bit) |
-| `tagent-v0.13.0-linux-arm64` | Linux ARM64 (incl. Raspberry Pi 5) |
-| `tagent-v0.13.0-macos-x64` | macOS Intel |
-| `tagent-v0.13.0-macos-arm64` | macOS Apple silicon |
+| `tagent-v__VER__-windows-x64.exe` | Windows 10+ (64-bit) |
+| `tagent-v__VER__-windows-arm64.exe` | Windows 10+ on ARM |
+| `tagent-v__VER__-linux-x64` | Linux (glibc, 64-bit) |
+| `tagent-v__VER__-linux-arm64` | Linux ARM64 (incl. Raspberry Pi 5) |
+| `tagent-v__VER__-macos-x64` | macOS Intel |
+| `tagent-v__VER__-macos-arm64` | macOS Apple silicon |
 
 Native edition (Go):
 
@@ -144,11 +122,11 @@ edition automatically.
 
 ```bash
 # Linux / macOS
-chmod +x tagent-v0.13.0-linux-x64 && ./tagent-v0.13.0-linux-x64 doctor
+chmod +x tagent-v__VER__-linux-x64 && ./tagent-v__VER__-linux-x64 doctor
 # Windows (PowerShell) — the .exe runs as-is
-.\tagent-v0.13.0-windows-x64.exe doctor
+.	agent-v__VER__-windows-x64.exe doctor
 # Windows 7 / 32-bit — native edition (just run it: the app TUI opens)
-.\tagent-native-windows-386.exe
+.	agent-native-windows-386.exe
 ```
 
 **Verify a download**
@@ -158,12 +136,13 @@ sha256sum --check SHA256SUMS.txt   # certutil -hashfile <file> SHA256 on Windows
 ```
 EOF
 )
+BODY=${BODY//__VER__/$VERSION}
 echo "[release] creating GitHub release v$VERSION …"
 RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — GitHub login & project sync, markdown in the terminal, TUI polish" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — updater honesty fix (source installs update the checkout that runs)" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")
