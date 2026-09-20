@@ -1,6 +1,6 @@
 {
-  "version": "0.13.0",
+  "version": "0.13.1",
   "date": "2026-09-20",
-  "notes": "Log in with GitHub — guests keep working locally, nothing requires an account — and tagent offers to sync the current project to a private repo; tagent clone continues it on any device. Assistant replies now render real markdown in the TUI: headings, code blocks, lists, tables. Plus a persistent stats bar under the input, ESC to stop a running agent, and arrow-key transcript scrolling.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.13.0"
+  "notes": "`tagent update` on a source install now updates the checkout that actually provides the running code (resolved through wrappers and symlinks), verifies the new version afterwards, warns when PATH resolves tagent elsewhere, and uses the hoisted linker on UserLAnd/proot. Before this fix, running the update from any other directory could pull the wrong repo and still print \"source updated\".",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.13.1"
 }

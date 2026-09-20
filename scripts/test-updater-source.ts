@@ -90,11 +90,12 @@ fs.writeFileSync(path.join(DECOY, 'project.txt'), 'user data\n')
 git(DECOY, 'add', '-A'); git(DECOY, 'commit', '-qm', 'user project')
 const DECOY_HEAD = git(DECOY, 'rev-parse', 'HEAD')
 
-// 4. bun shim: swallow `bun install` (assert it's called), exec real bun otherwise
+// 4. bun shim: swallow `bun install` (records it via marker), exec real bun otherwise
+const BUN_MARKER = path.join(WORK, 'bun-install.ran')
 fs.mkdirSync(SHIM, { recursive: true })
 fs.writeFileSync(path.join(SHIM, 'bun'), [
   '#!/bin/sh',
-  'if [ "$1" = "install" ]; then echo "shim: bun install skipped"; exit 0; fi',
+  `if [ "$1" = "install" ]; then echo ran >> ${JSON.stringify(BUN_MARKER)}; exit 0; fi`,
   `exec ${process.execPath} "$@"`,
   '',
 ].join('\n'))
@@ -133,7 +134,7 @@ ok(A.out.includes(`source updated → v${NEW}`), 'reports the real new version',
 ok(A.out.includes('tagent-A'), 'names the checkout it updated', A.out)
 ok(cloneVer === NEW, `stale clone bumped ${OLD} → ${cloneVer}`, `clone version.ts = ${cloneVer}`)
 ok(decoyHeadAfter === DECOY_HEAD, 'decoy repo untouched')
-ok(A.out.includes('bun install skipped'), 'bun install ran (shimmed)')
+ok(fs.existsSync(BUN_MARKER), 'bun install ran (shimmed)')
 
 // and the version command now reads the updated tree
 const V = sh('tagent --version', { cwd: DECOY, env: CHILD_ENV })

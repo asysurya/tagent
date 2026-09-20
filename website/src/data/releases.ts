@@ -28,9 +28,29 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.13.0'
+export const LATEST = '0.13.1'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.13.1',
+    date: '2026-09-20',
+    title: 'Updater honesty fix — source installs update the checkout that runs',
+    summary:
+      '`tagent update` on a source install now updates the checkout that actually provides the running code (resolved through wrappers and symlinks), verifies the new version afterwards, warns when PATH resolves tagent elsewhere, and uses the hoisted linker on UserLAnd/proot. Before this fix, running the update from any other directory could pull the wrong repo and still print "source updated".',
+    stable: true,
+    sections: [
+      {
+        name: 'Fixes',
+        items: [
+          'source installs: the updater walks up from the running entry file (through symlinks — bun link, ~/.local/bin wrappers) to the tagent checkout and pulls THAT, never whatever repo happens to be the current directory',
+          'after pulling, the new version is read back and printed — a branch that lags main or a stale second install can no longer fake a successful update',
+          'when `which tagent` points somewhere else than the updated checkout, a warning names both paths',
+          'UserLAnd / proot: `bun install --linker=hoisted` is used during updates (socket.io fails to load without it)',
+          'not near a tagent checkout? the updater says so and prints the manual fix instead of touching the repo you are standing in',
+        ],
+      },
+    ],
+  },
   {
     version: '0.13.0',
     date: '2026-09-20',
