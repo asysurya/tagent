@@ -17,6 +17,8 @@ const BLOCKLIST: { re: RegExp; why: string }[] = [
 
 const MAX_OUTPUT = 32_000
 const DEFAULT_TIMEOUT = 60_000
+/** ceiling, not a target — the agent decides how long a command may run */
+const MAX_TIMEOUT = 3_600_000
 
 /**
  * Resolve the shell to run commands with. On Linux/macOS this is plain
@@ -50,13 +52,13 @@ export const bashTool: ToolDefinition = {
   risk: 'high',
   params: {
     command: 'string (required) — the shell command',
-    timeout: 'number — ms before the command is killed (default 60000)',
+    timeout: 'number — ms before the command is killed. You control it: default 60000, raise it freely for long builds/tests/installs (up to 3600000)',
   },
   inputSchema: {
     type: 'object',
     properties: {
       command: { type: 'string', description: 'The shell command to run' },
-      timeout: { type: 'number', description: 'ms before the command is killed (default 60000)' },
+      timeout: { type: 'number', description: 'ms before the command is killed (default 60000, up to 3600000 for long tasks)' },
     },
     required: ['command'],
   },
@@ -69,7 +71,8 @@ export const bashTool: ToolDefinition = {
     for (const b of BLOCKLIST) {
       if (b.re.test(command)) return `Error: command rejected — ${b.why}.`
     }
-    const timeout = Math.min(Number(input.timeout ?? DEFAULT_TIMEOUT), 300_000)
+    // agent-settable — the ceiling only exists so a typo can't hang a run forever
+    const timeout = Math.min(Math.max(Number(input.timeout ?? DEFAULT_TIMEOUT) || DEFAULT_TIMEOUT, 1_000), MAX_TIMEOUT)
     return await new Promise<string>((resolve) => {
       const child = spawn(resolveShell(), ['-lc', command], {
         cwd: ctx.workspaceRoot,

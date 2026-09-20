@@ -47,7 +47,7 @@ export const serveTool: ToolDefinition = {
     action: 'string (required) — "start" | "stop" | "status" | "logs"',
     command: 'string — explicit command to run (default: detected from package.json)',
     port: 'number — expected port (default: parsed from server output)',
-    timeout: 'number — ms to wait for the server to answer (default 90000)',
+    timeout: 'number — ms to wait for the server to answer. You control it: default 90000, raise it for slow cold starts (up to 3600000)',
   },
   inputSchema: {
     type: 'object',
@@ -55,7 +55,7 @@ export const serveTool: ToolDefinition = {
       action: { type: 'string', enum: ['start', 'stop', 'status', 'logs'], description: 'Serve action' },
       command: { type: 'string', description: 'Explicit dev-server command (default: auto-detect)' },
       port: { type: 'number', description: 'Expected port number' },
-      timeout: { type: 'number', description: 'Ready-wait timeout in ms (default 90000)' },
+      timeout: { type: 'number', description: 'Ready-wait timeout in ms (default 90000, up to 3600000 for slow cold starts)' },
     },
     required: ['action'],
   },
@@ -149,7 +149,7 @@ async function startServer(input: Record<string, unknown>, ctx: Parameters<ToolD
   // daemon shutdown hygiene — never leak dev servers past our process
   registerExitHook()
 
-  const timeout = Math.min(Number(input.timeout ?? DEFAULT_READY_TIMEOUT), 300_000)
+  const timeout = Math.min(Math.max(Number(input.timeout ?? DEFAULT_READY_TIMEOUT) || DEFAULT_READY_TIMEOUT, 1_000), 3_600_000)
 
   // 1) the port may be user-provided or parsed from server output
   const port = await waitForPort(st, timeout)

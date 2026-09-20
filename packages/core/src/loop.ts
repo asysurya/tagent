@@ -148,7 +148,7 @@ export class AgentLoop {
         readOnly: opts.readOnly,
         depth: opts.depth ?? 0,
         config: opts.config,
-        ...(opts.mode === 'test' ? { mode: 'test' as const } : {}),
+        ...(opts.mode ? { mode: opts.mode } : {}),
       }),
       ...(opts.readOnly ? [] : (opts.extraTools ?? [])),
     ].filter((t) => !opts.toolsFilter || opts.toolsFilter.includes(t.name))
@@ -346,10 +346,16 @@ export class AgentLoop {
                   : `Unknown tool "${action.tool}". Available: ${this.tools.map((t) => t.name).join(', ')}`,
               )
             }
-            if (this.opts.mode === 'plan' && !isReadOnlyTool(tool.name)) {
+            // plan mode is read-only for the PROJECT — but external MCP/plugin
+            // tools stay available: they are what plan mode investigates with
+            // (search servers, data lookups, …) and the permission gate still
+            // asks the human for every risky call
+            const external = tool.name.startsWith('mcp_') || tool.name.startsWith('plugin_')
+            if (this.opts.mode === 'plan' && !isReadOnlyTool(tool.name) && !external) {
               throw new Error('Plan mode is read-only — switch to build mode to modify files.')
             }
-            if (this.opts.mode === 'test' && !TEST_MODE_TOOLS.has(tool.name)) {
+            // same for test mode: the QA toolset + external tools, no source writes
+            if (this.opts.mode === 'test' && !TEST_MODE_TOOLS.has(tool.name) && !external) {
               throw new Error(
                 'Test mode is read-only — it verifies the project without modifying it (the only write is test_report). ' +
                   'Switch to build mode to fix issues.',
