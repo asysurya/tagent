@@ -1,6 +1,6 @@
 {
-  "version": "0.16.0",
+  "version": "0.16.1",
   "date": "2026-09-20",
-  "notes": "The agent can now ask you questions through interactive forms (ask_user): option, multi-option and input fields, add-your-own options, an optional notes box — plan-mode interviews become one form instead of a chat interrogation. And the built-in Z.ai provider’s model list moved from code to a config file you can edit: ~/.tagent/zai-models.json.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.16.0"
+  "notes": "The update that never blocks on local changes: source installs auto-stash a dirty checkout before pulling. doctor no longer false-flags a connected GitHub account, and MCP servers get a 60s cold-start budget.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.16.1"
 }

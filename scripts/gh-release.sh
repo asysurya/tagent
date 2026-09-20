@@ -36,63 +36,41 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — AI ask forms + Z.ai models as a config file
+## v__VER__ — update fixes: dirty checkouts, doctor, MCP cold starts
 
-Two things this release: the agent can now **ask you questions through
-interactive forms**, and the built-in Z.ai provider's model list is **a config
-file you can edit**.
+A live report straight from a Codespace: `tagent update` died with
+"Your local changes … would be overwritten by merge", doctor flagged a
+perfectly connected GitHub account, and all four npx-based MCP servers timed
+out. All three are fixed.
 
-### ask_user — the interview form
+### `tagent update` never blocks on local changes anymore
 
-When a decision materially changes the work, the agent asks, not guesses —
-through a form, not a wall of text:
+Source installs sometimes end up with a dirty checkout — `bun.lock` churn from
+a different bun version, a stray edit — and `git pull` refuses to run when the
+incoming commits touch the same files:
 
-- **three field kinds** — `option` (single choice, radio), `multi` (multiple
-  choice, checkboxes) and `input` (free text); one call batches up to 6
-  questions, so plan-mode interviews become one form instead of a chat
-  interrogation
-- option/multi fields always offer **+ add your own option** — your custom
-  answer becomes a first-class choice, selected like any other
-- every form carries an **optional notes textarea** under the fields for
-  anything else worth saying
-- **the inline TUI** renders it as an interactive overlay: ↑↓ move ·
-  space/enter pick · `a` add option · tab next field · esc cancel; required
-  fields block submit and jump the cursor back to you
-- **the web GUI** gets a matching dialog — radio pills, checkboxes, textareas,
-  an inline add-option input
-- **the classic TUI** asks sequentially with the arrow-key menus
-- plan mode's INTERVIEW step uses the form by default; build and test modes
-  can too
-- headless-safe: pipes and subagents get an honest "no interactive user"
-  answer, so the model proceeds with stated assumptions instead of hanging; a
-  dismissed form says so explicitly
-- answers flow back to the model verbatim (notes included), and a one-line
-  trail lands in your transcript so the answers stay in the scrollback
+- the updater now **auto-stashes local changes before pulling** (labelled
+  `tagent update v… — backup of local changes`, so it's recoverable forever)
+- the output tells you exactly **where the stash lives** and how to review or
+  restore it (`git stash show -p` / `git stash pop`) — nothing is ever lost
+- if stashing itself fails, the update still refuses to touch your tree
 
-### Z.ai models as a config file
+### doctor tells the truth again
 
-The built-in provider's model catalog moved from hardcoded arrays to
-`packages/core/src/data/zai-models.json` — data, not code. And you can
-override or extend it without touching the binary:
+- **`✗ github: connected as <user>`** on healthy installs — the token moved to
+  `~/.tagent/credentials.json` in the auth rework, but the check still read
+  `config.json` (which keeps only the login). It reads the credential store
+  now, with config as a legacy fallback
+- a **timed-out MCP server gets an explanation**: the first `npx` run
+  downloads the package — retry once warm, or raise the budget
 
-- `~/.tagent/zai-models.json` (global) or `<workspace>/.tagent/zai-models.json`
-  (per project)
-- same-id entries replace the built-ins in place, new ids append,
-  `"replace": true` swaps the whole list
-- per-model `vision: true` now works end to end — the Z.ai adapter maps image
-  parts to the SDK's content blocks, so GLM-4.7 / 4.6 / 4.5V actually receive
-  the screenshots in test mode
-- the model id is passed through to the SDK on every call — harmless where
-  the endpoint ignores it, forward-compatible when it starts honoring it
+### MCP cold starts: 25s → 60s
 
-### Fixes under the hood
-
-- gh-release.sh had lost its header (token/version parsing + `--no-build`) in
-  the 0.15.0 body rewrite — restored
-- ask_user is allow-listed by default (risk: low) — no permission
-  double-prompt for the privilege of being asked a question
-- subagents never see the form tool (filtered from their toolset + a runtime
-  guard) — only the primary agent faces the human
+A fresh Codespace/CI box easily spends 30–50s on the first `npx` download of
+each server, which blew the old 25s initialize budget — every server showed as
+timed out. The budget is now 60s, overridable with
+`TAGENT_MCP_INIT_TIMEOUT_MS=<millis>` (values under 1s are ignored). Servers
+still start in parallel, so it's one wait, not four.
 
 ---
 
@@ -145,7 +123,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — AI ask forms + Z.ai models config" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — update fixes: dirty checkouts, doctor, MCP cold starts" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")

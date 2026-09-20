@@ -157,7 +157,11 @@ console.log('\nscenario C — dirty checkout (local edits + bun.lock churn) auto
 // made `git pull` abort with "would be overwritten by merge".
 const NEW2 = '0.14.0'
 setVersion(ORIGIN, NEW2)
-git(ORIGIN, 'add', '-A'); git(ORIGIN, 'commit', '-qm', 'chore: marker v0.14.0')
+// the incoming commit must touch the SAME files the user edited locally —
+// that is exactly what made git refuse with "would be overwritten by merge"
+fs.appendFileSync(path.join(ORIGIN, 'bun.lock'), `# upstream change ${NEW2}\n`)
+fs.appendFileSync(path.join(ORIGIN, 'packages/cli/src/index.ts'), `// upstream change ${NEW2}\n`)
+git(ORIGIN, 'add', '-A'); git(ORIGIN, 'commit', '-qm', `chore: marker v${NEW2} (touches files the user also edited)`)
 fs.writeFileSync(FEED, JSON.stringify({ version: NEW2, date: '2026-09-20', notes: 'test feed 2', url: 'https://x' }))
 fs.appendFileSync(path.join(CLONE, 'bun.lock'), '# local churn\n')
 fs.appendFileSync(path.join(CLONE, 'packages/cli/src/index.ts'), '// local edit\n')
@@ -174,7 +178,7 @@ ok(cloneVer2 === NEW2, `clone bumped ${NEW} → ${cloneVer2}`, `clone version.ts
 ok(/tagent update v0\.14\.0/.test(stashList), 'stash entry labelled for recovery', stashList)
 ok(stashShow.includes('# local churn'), 'bun.lock edits preserved in the stash', stashShow.slice(0, 300))
 ok(stashShow.includes('// local edit'), 'index.ts edits preserved in the stash', stashShow.slice(0, 300))
-ok(!cloneIndex.includes('// local edit'), 'working tree is the clean updated file')
+ok(cloneIndex.includes('// upstream change 0.14.0') && !cloneIndex.includes('// local edit'), 'working tree is the clean updated file')
 ok(git(DECOY, 'rev-parse', 'HEAD') === DECOY_HEAD, 'decoy untouched again')
 
 /* ---------------- report ---------------- */

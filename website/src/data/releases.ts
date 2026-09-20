@@ -28,9 +28,28 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.16.0'
+export const LATEST = '0.16.1'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.16.1',
+    date: '2026-09-20',
+    title: 'Update fixes: dirty checkouts, doctor, MCP cold starts',
+    summary:
+      'The update that never blocks on local changes: source installs auto-stash a dirty checkout before pulling. doctor no longer false-flags a connected GitHub account, and MCP servers get a 60s cold-start budget.',
+    stable: true,
+    sections: [
+      {
+        name: 'Fixes',
+        items: [
+          'tagent update no longer dies with "Your local changes … would be overwritten by merge" — the checkout is auto-stashed (recoverable, labelled "tagent update v…") before the pull, and the output tells you where the stash lives and how to restore it',
+          'doctor reported "✗ github: connected as <user>" on perfectly healthy installs — the token moved to ~/.tagent/credentials.json in the auth rework but the check still read config.json; it reads the credential store now (config = legacy fallback)',
+          'MCP initialize budget 25s → 60s: npx/uvx cold starts (a fresh Codespace, CI boxes) easily blew the old limit and every server showed as timed out — override with TAGENT_MCP_INIT_TIMEOUT_MS=<millis>',
+          'doctor explains a timed-out MCP server: first run downloads the package via npx, retry once warm — or raise the budget',
+        ],
+      },
+    ],
+  },
   {
     version: '0.16.0',
     date: '2026-09-20',

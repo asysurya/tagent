@@ -416,6 +416,10 @@ the built-ins.
 Permissions: `/allow mcp_<server>` (per server), `mcp` (catch-all), or the default ask.
 `tagent doctor` starts every configured server and reports per-server health.
 
+The first `npx`/`uvx` run downloads the server package, so the initialize budget
+is a generous 60s — raise it with `TAGENT_MCP_INIT_TIMEOUT_MS=<millis>` on slow
+links (a fresh Codespace can easily spend 30–50s per server on cold start).
+
 ## Plugins — tools, commands, hooks
 
 Drop a `.mjs` file into `.tagent/plugins/` (workspace) or `~/.tagent/plugins/` (global) —
