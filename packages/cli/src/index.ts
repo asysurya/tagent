@@ -10,7 +10,8 @@
  *   tagent [start] [path]   interactive TUI (add --web-gui for the browser UI)
  *   tagent web [path]       daemon + web GUI only — for phone / remote use
  *   tagent run [path] "msg" one-shot agent run, prints the result
- *   tagent auth [--device]   GitHub login — PAT by default, --device = device flow
+ *   tagent auth [--web]    GitHub login — web connect (browser page), or
+ *                           a PAT pasted in the terminal (--device: OAuth)
  *   tagent sync [message]   link + push this project to GitHub
  *   tagent projects         list linked projects (name, repo, last sync)
  *   tagent clone <repo>     restore a project from GitHub
@@ -78,6 +79,7 @@ import { createDaemon } from './daemon'
 import { Tui, runPiped } from './tui'
 import { runApp, appCapable } from './tui-app'
 import { lanIPv4s } from './net'
+import { runWebLogin, openBrowser } from './web-auth'
 import { loadRelays, revokeRelay } from '@tagent/core'
 import { selfUpdate, detectInstallKind } from './updater'
 import { uninstall } from './uninstall'
@@ -209,9 +211,10 @@ function printHelp() {
             daemon + web GUI only (no TUI) — phone / remote use
     tagent run [path] "prompt" [--json]
             one-shot: run the agent on a prompt, print the result, exit
-    tagent auth [--device]
-            GitHub login — paste a personal access token
-            (github.com/settings/tokens, scope: repo).
+    tagent auth [--web]
+            GitHub login — in a terminal you get a picker:
+            web connect (a browser page opens, paste the token there)
+            or paste a PAT right in the terminal (scope: repo).
             --device switches to the OAuth device flow (needs
             TAGENT_GH_CLIENT_ID). after login, a workspace with files
             gets a one-time "sync to GitHub?" offer.
@@ -479,7 +482,7 @@ async function mainRun() {
 }
 
 /* ------------------------------------------------------------------ */
-/* tagent auth — GitHub login (PAT primary; device flow behind a flag)  */
+/* tagent auth — GitHub login (web connect primary; PAT + device flow too)  */
 /* ------------------------------------------------------------------ */
 
 /** surgical raw-JSON edit: drop cached github token/login from a config file */
@@ -536,6 +539,12 @@ async function mainAuth() {
     return
   }
 
+  // web connect — explicit opt-in: a one-time page on 127.0.0.1
+  if (has('--web')) {
+    await runWebConnect(root)
+    return
+  }
+
   // device flow — explicit opt-in; needs an OAuth client id we don't ship
   if (has('--device')) {
     const clientId = loadConfig(root).github?.clientId || process.env.TAGENT_GH_CLIENT_ID || ''
@@ -552,6 +561,28 @@ async function mainAuth() {
       die(`login failed: ${(e as Error).message}`)
     }
     return
+  }
+
+  // interactive terminal → the picker (web connect is the happy path).
+  // Piped/scripted sessions skip straight to the paste/pipe prompt below.
+  if (process.stdin.isTTY) {
+    const pick = await select<string>({
+      title: 'GitHub login — pick a method',
+      items: [
+        { label: 'Web connect', value: 'web', hint: 'recommended', detail: 'a browser page opens — paste the token there' },
+        { label: 'Paste token', value: 'paste', hint: 'right here', detail: 'github.com/settings/tokens · scope repo' },
+      ],
+      footer: 'OAuth device flow: tagent auth --device',
+    })
+    if (pick === 'web') {
+      await runWebConnect(root)
+      return
+    }
+    if (pick === undefined) {
+      console.log(dim('  cancelled — nothing changed'))
+      return
+    }
+    // 'paste' → fall through
   }
 
   // primary path — personal access token
@@ -578,9 +609,35 @@ async function mainAuth() {
   }
 }
 
+/** web connect — the browser flow: a one-time page on 127.0.0.1, the token
+ *  never typed in the terminal at all. See web-auth.ts for the security shape. */
+async function runWebConnect(root: string): Promise<void> {
+  console.log(bold('\n  GitHub login — web connect\n'))
+  try {
+    const r = await runWebLogin({
+      onReady: (url) => {
+        if (openBrowser(url)) {
+          console.log(`  ✔ browser opened — ${dim('paste the token on that page')}`)
+        } else {
+          // no opener here (UserLAnd, headless box, ssh without -X…) — the
+          // URL is the whole UI. On UserLAnd the phone's own browser reaches
+          // 127.0.0.1 (proot shares the network namespace with Android).
+          console.log('  open this in a browser on THIS device:')
+          console.log(`    ${bold(url)}`)
+          if (isAndroidish()) console.log(dim('    UserLAnd/Termux: the phone browser works — 127.0.0.1 is the same device'))
+        }
+        console.log(`\n  waiting for the browser… ${dim('Ctrl+C to cancel')}`)
+      },
+    })
+    await finishLogin(root, r.token, r.login) // login already validated by the web flow
+  } catch (e) {
+    die(`web connect failed: ${(e as Error).message}`)
+  }
+}
+
 /** validate + store the token, cache the login, print it, offer the first sync */
-async function finishLogin(root: string, token: string): Promise<void> {
-  const login = await validatePat(token) // throws on an invalid token
+async function finishLogin(root: string, token: string, preValidated?: string): Promise<void> {
+  const login = preValidated ?? (await validatePat(token)) // throws on an invalid token
   saveGithubLogin(token, login) // credential store + login cached in the global config
   console.log(green(`\n  ✔ logged in as ${login}`))
   await maybePromptLinkWorkspace(root)

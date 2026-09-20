@@ -58,7 +58,7 @@ process when you want a browser. Same engine, same sessions, same permissions.
 | 📚 **Skills** | `SKILL.md` playbooks with progressive disclosure (name+description in prompt, full body on demand) |
 | 🌐 **Web tools** | `web_fetch`, `ddg_search` (no API key), `browser` (Playwright-based e2e signal — optional) |
 | 🗄️ **Storage adapters** | Local today, MEGA.nz (E2E-encrypted snapshots & memory) implemented as an experimental adapter |
-| 🐙 **GitHub** | PAT or device-flow auth (`tagent auth`) → auto private repo + one-click workspace push |
+| 🐙 **GitHub** | PAT, web-connect or device-flow auth (`tagent auth`) → auto private repo + one-click workspace push |
 | 📋 **Worklog + todos** | Live todo list + timestamped WORKLOG.md journal the agent keeps as it works |
 | 🦴 **Caveman mode** | Omni-route style token saver — terse replies, compact prompts, tighter budgets |
 | 🔗 **Share links** | Export any session as a standalone read-only HTML file |
@@ -147,7 +147,8 @@ tagent start [path]        # the TUI — primary interface
            --port --host --no-open --gui <dir>
 tagent web [path]          # daemon + web GUI only (no TUI) — phone/remote
 tagent run [path] "msg"    # one-shot run, prints the result (--json too)
-tagent auth                # GitHub login wizard (device flow / PAT)
+tagent auth                # GitHub login wizard (web connect / PAT)
+           --web           # browser page login — no typing in the terminal
 tagent config list|get|set # settings from the shell (-g = global)
 tagent sessions [path]     # list a workspace's sessions
 tagent share [id] [path]   # export a session as standalone HTML

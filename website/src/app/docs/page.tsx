@@ -124,14 +124,21 @@ tagent web ~/my-project --no-open`}</Code>
         <H2 id="github-sync">GitHub login &amp; sync</H2>
         <p className="mt-4 text-zinc-300">
           Guest-first: everything works locally, no account needed. When you want
-          your projects on GitHub, log in once — the token is stored in{" "}
+          your projects on GitHub, log in once. In a terminal the picker defaults
+          to <b>web connect</b>: a one-time page opens in your browser (served on
+          127.0.0.1 with a one-time secret URL), you paste the token there and
+          the terminal takes it from there — nothing is ever typed into the
+          terminal itself. On UserLAnd/Termux the printed URL opens fine in the
+          phone's own browser. The token is stored in{" "}
           <code className="rounded bg-zinc-800 px-1 text-xs">~/.tagent/credentials.json</code> (chmod 600,
           never in config.json). After login, if the current workspace has files and
           is not linked yet, tagent asks <b>once</b>: sync this project to a private
           GitHub repo? — <b>Sync now</b> / <b>Later</b> / <b>Not this project</b> (remembered).
         </p>
         <div className="mt-4">
-          <Code>{`tagent auth              # login — PAT walkthrough (--device for the device flow)
+          <Code>{`tagent auth              # login — picker: web connect (browser page) or paste a PAT
+                          #   --web  straight to the browser flow
+                          #   --device  OAuth device flow (needs TAGENT_GH_CLIENT_ID)
 tagent sync              # snapshot the current project: commit + push
 tagent sync "docs: readme" # …with a custom commit message
 tagent projects          # linked projects — name, repo, last sync
@@ -140,6 +147,7 @@ tagent whoami            # guest or login?
 tagent logout            # remove the local token only`}</Code>
         </div>
         <ul className="mt-4 space-y-2 text-zinc-300">
+          <li><b>Web connect</b> — a local one-time page on <code className="rounded bg-zinc-800 px-1 text-xs">127.0.0.1</code>: the repo scope is pre-selected via the create-token link, the token is validated against the GitHub API and stored exactly like the paste flow. Loopback-only bind, secret URL path, Origin checks, and the server dies after the login.</li>
           <li><b>Sync</b> — commits the workspace and pushes with a one-shot token; the remote URL stays clean in <code className="rounded bg-zinc-800 px-1 text-xs">.git/config</code> and the repo stays private.</li>
           <li><b>Clone</b> — <span className="font-mono text-orange-300">tagent clone owner/repo</span> (or just the project name from your registry) restores it, then <span className="font-mono text-orange-300">cd</span> in and run <span className="font-mono text-orange-300">tagent start</span>.</li>
           <li><b>Web GUI</b> — the same flow as dialogs: GitHub login, sync workspace, and a project list with last-sync times.</li>
