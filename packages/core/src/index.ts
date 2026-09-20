@@ -43,12 +43,17 @@ export {
   type NativeToolDef, type NativeToolCall, type WireMessage,
 } from './providers'
 export {
+  zaiModels, zaiModelsUserPath, EMBEDDED_ZAI_MODELS,
+  type ZaiModelEntry, type ZaiModelsFile,
+} from './providers/zai-models'
+export {
   CATALOG, catalogById, parseModelRef, resolveApiKey,
   refreshModelCache, readModelCache, cleanModelIds,
   modelsFor, modelsForCustom,
   type CatalogEntry, type AdapterKind, type ModelRef, type DiscoveryResult,
 } from './providers/registry'
 export { buildToolset, ALL_TOOLS, worklogTool, worklogPath, resolveShell } from './tools'
+export { askUserTool, parseAskInput, formatAskResponse } from './tools/ask'
 export { exportShare, readShareFile, shareDir, renderShareHtml, type ShareResult } from './share'
 export {
   loadRelays, saveRelays, createRelay, findRelayByCode, revokeRelay,

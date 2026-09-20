@@ -36,6 +36,7 @@ export function defaultConfig(): TagentConfig {
         browser: 'ask',
         serve: 'ask',
         test_report: 'allow',
+        ask_user: 'allow',
         mcp: 'ask',
         plugin: 'ask',
       },

@@ -12,6 +12,8 @@ import {
   SUBAGENT_TEMPLATE,
   type LoopSummary,
   type PermissionRequest,
+  type AskFormRequest,
+  type AskFormResponse,
   type SessionData,
   type SubagentInfo,
   type TodoItem,
@@ -194,6 +196,7 @@ export class Tui {
       this.println(`  ${icon} ${d.message}`)
     })
     bus.on('permission:request', (req: PermissionRequest) => void this.onPermission(req))
+    bus.on('ask:request', (form: AskFormRequest) => void this.onAskUser(form))
     bus.on('chat:done', (d: { summary: LoopSummary }) => this.onChatDone(d.summary))
     bus.on('session:active', (s: SessionData) => {
       this.todos = s.todos ?? []
@@ -295,6 +298,83 @@ export class Tui {
     this.permissionFrozen = false
     this.flushFrozen()
     this.println(approved ? green('  ✔ allowed') : yellow('  ⊘ denied'))
+  }
+
+  /**
+   * ask_user tool — the classic fallback: sequential prompts (pick / type),
+   * same semantics as the inline TUI form: options, add-your-own, notes.
+   */
+  private async onAskUser(form: AskFormRequest): Promise<void> {
+    this.permissionFrozen = true
+    this.hideTicker()
+    this.println('')
+    this.println(`  ${bold('┌ agent asks')} ${dim(`· ${form.title ?? form.fields[0]?.label ?? 'questions'}`)}`)
+    if (form.intro) this.println(dim(`  │ ${form.intro}`))
+    const answers: Record<string, string | string[]> = {}
+    for (const f of form.fields) {
+      this.println(`  ${bold('│')} ${bold(f.label)}${f.required ? red(' *') : ''}`)
+      if (f.type === 'input') {
+        answers[f.id] = (await this.ask(`  ${bold('│')}   → `)).trim()
+        continue
+      }
+      const options = [...(f.options ?? [])]
+      if (f.type === 'option') {
+        for (;;) {
+          const items: SelectItem<string>[] = options.map((o) => ({ label: o, value: o }))
+          if (f.allowAddOption !== false) items.push({ label: '+ add your own…', value: '__add__', keep: true })
+          const v = await this.pick(items, `  └ ${f.label}`)
+          if (v === undefined) break // esc = leave unanswered
+          if (v === '__add__') {
+            const t = (await this.ask(`  ${bold('│')}   new option: `)).trim()
+            if (t && !options.some((o) => o.toLowerCase() === t.toLowerCase())) options.push(t)
+            continue
+          }
+          answers[f.id] = v
+          break
+        }
+      } else {
+        const sel: string[] = []
+        for (;;) {
+          const items: SelectItem<string>[] = options.map((o) => ({
+            label: `${sel.includes(o) ? green('☑') : dim('☐')} ${o}`,
+            value: o,
+          }))
+          items.push({
+            label: sel.length ? `done — keep ${sel.length} selected` : 'skip this question',
+            value: '__done__',
+            keep: true,
+          })
+          if (f.allowAddOption !== false) items.push({ label: '+ add your own…', value: '__add__', keep: true })
+          const v = await this.pick(items, `  └ ${f.label}`)
+          if (v === undefined || v === '__done__') break
+          if (v === '__add__') {
+            const t = (await this.ask(`  ${bold('│')}   new option: `)).trim()
+            if (t && !options.some((o) => o.toLowerCase() === t.toLowerCase())) {
+              options.push(t)
+              sel.push(t)
+            }
+            continue
+          }
+          const at = sel.indexOf(v)
+          if (at >= 0) sel.splice(at, 1)
+          else sel.push(v)
+        }
+        answers[f.id] = sel
+      }
+    }
+    let notes = ''
+    if (form.allowNotes !== false) {
+      notes = (await this.ask(`  ${bold('│')} ${form.notesLabel ?? 'notes (optional)'}: `)).trim()
+    }
+    this.permissionFrozen = false
+    this.flushFrozen()
+    const res: AskFormResponse = { answers, ...(notes ? { notes } : {}) }
+    this.host.askRespond(form.id, res)
+    const summary = Object.values(answers)
+      .map((a) => (Array.isArray(a) ? a.join(', ') : a))
+      .filter(Boolean)
+      .join(' · ')
+    this.println(`  ${green('└ answered')} ${dim(summary || '—')}`)
   }
 
   /** mode switch banner — tells the user (and the next prompt run) what the job is */

@@ -58,6 +58,8 @@ process when you want a browser. Same engine, same sessions, same permissions.
 | 📚 **Skills** | `SKILL.md` playbooks with progressive disclosure (name+description in prompt, full body on demand) |
 | 🌐 **Web tools** | `web_fetch`, `ddg_search` (no API key), `browser` (Playwright — full e2e signal: click/type/screenshot/audit) |
 | 🧪 **Test mode** | `tagent test` — QA agent: serves the project, clicks through it with a real browser, screenshots + audits responsive/typography/contrast, writes `TEST-REPORT.md` (vision models see the screenshots) |
+| 📝 **AI ask forms** | `ask_user` tool — the agent interviews you through interactive forms: option / multi-option / input fields, add your own options, optional notes box; answers flow back into the run (TUI overlay · GUI dialog · headless-safe) |
+| 🛠 **Z.ai models config** | The built-in provider's model list is data: edit `~/.tagent/zai-models.json` (or `<workspace>/.tagent/zai-models.json`) to add/relabel/flag models — no release wait |
 | 🗄️ **Storage adapters** | Local today, MEGA.nz (E2E-encrypted snapshots & memory) implemented as an experimental adapter |
 | 🐙 **GitHub** | PAT, web-connect or device-flow auth (`tagent auth`) → auto private repo + one-click workspace push · multi-device safe (fetch+rebase before push) |
 | 📋 **Worklog + todos** | Live todo list + timestamped WORKLOG.md journal the agent keeps as it works |
@@ -282,6 +284,7 @@ action blocks ends the run. See `packages/core/src/system-prompt.ts`.
 
 `read_file` · `list_files` · `grep` · `write_file` · `edit_file` · `bash` (blocklist-guarded) ·
 `web_fetch` · `ddg_search` · `task` (subagents) · `todowrite` · `memory` · `load_skill` · `browser` (optional Playwright) ·
+`serve` + `test_report` (test mode) · `ask_user` (interview forms) ·
 `mcp_<server>_<tool>` (every connected MCP server) · `plugin_<name>_<tool>` (every loaded plugin)
 
 All file tools are **jailed to the workspace root** — traversal outside is rejected.
@@ -344,6 +347,50 @@ else — any OpenAI-compatible endpoint (vLLM, llama.cpp, LiteLLM, OneAPI, Azure
 Live model discovery (`GET /models`) fills every pickable list — GUI button, TUI
 `/model refresh`, CLI `tagent models --refresh`, plus a background warm-up when the
 daemon starts. Results are cached in `~/.tagent/models.json`.
+
+### The built-in Z.ai provider — models as a config file
+
+The zero-config **zai** provider (default in sandbox/z.ai environments — no key
+needed) reads its model list from data, not code. The shipped catalog lives at
+`packages/core/src/data/zai-models.json`; you can override or extend it **without
+touching the binary**:
+
+```jsonc
+// ~/.tagent/zai-models.json            (global)
+// <workspace>/.tagent/zai-models.json  (per project — wins over global)
+{
+  "models": [
+    { "id": "glm-4.7", "label": "GLM-4.7 (default)", "vision": true },
+    { "id": "glm-my-finetune", "label": "My finetune" }   // new ids append
+  ]
+  // "replace": true  ← use ONLY these models, drop the built-ins
+}
+```
+
+Same-id entries replace the built-ins in place, new ids append, `vision: true`
+enables screenshot verification in test mode, and the file never needs to wait
+for a tagent release — a new model is one JSON edit away.
+
+## Ask forms — `ask_user`
+
+When a decision materially changes the work, the agent **asks, not guesses** —
+through an interactive form, not a wall of text:
+
+- **option** — single choice (radio) · **multi** — pick any (checkboxes) ·
+  **input** — free text
+- option/multi fields always offer **+ add your own option** — your custom
+  answer becomes a first-class choice
+- every form carries an optional **notes** box under the fields for anything
+  else worth saying
+- one `ask_user` call batches up to 6 questions — one round-trip instead of
+  a chat interrogation
+
+Surfaces: the inline TUI renders the form as an interactive overlay (↑↓ move ·
+space/enter pick · `a` add option · tab next field · esc cancels), the web GUI
+shows a proper dialog (radio buttons, checkboxes, textareas), the classic TUI
+asks sequentially, and headless runs (pipes, subagents) get an honest
+"no interactive user" answer so the model proceeds with stated assumptions
+instead of hanging. Plan mode's interview step uses it by default.
 
 ## MCP servers — Model Context Protocol
 

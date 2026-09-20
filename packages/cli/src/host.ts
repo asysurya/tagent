@@ -56,6 +56,8 @@ import {
   runDiagnostics,
   type RelayEntry,
   type AgentEvents,
+  type AskFormRequest,
+  type AskFormResponse,
   type ChatMessage,
   type LoopSummary,
   type PermissionDecision,
@@ -85,6 +87,12 @@ interface PendingPermission {
   timer: ReturnType<typeof setTimeout>
 }
 
+interface PendingAsk {
+  resolve: (r: AskFormResponse | null) => void
+  form: AskFormRequest
+  timer: ReturnType<typeof setTimeout>
+}
+
 export interface HostOptions {
   workspaceRoot: string
   configOverride?: Partial<TagentConfig>
@@ -102,6 +110,7 @@ export class AgentHost {
   session: SessionData | undefined
   private loop: AgentLoop | undefined
   private pending = new Map<string, PendingPermission>()
+  private pendingAsks = new Map<string, PendingAsk>()
   /** last device-flow start (github:device:poll consumes it) */
   private deviceStart: Awaited<ReturnType<typeof startDeviceLogin>> | undefined
   /** MCP connections — one manager per workspace config */
@@ -157,7 +166,7 @@ export class AgentHost {
     return {
       defaultProvider: this.cfg.defaultProvider,
       defaultModel: this.cfg.defaultModel,
-      providers: listProviderInfos(this.cfg),
+      providers: listProviderInfos(this.cfg, this.root),
       permissions: this.cfg.permissions,
       tools: this.cfg.tools,
       github: { connected: !!this.cfg.github?.token, login: this.cfg.github?.login ?? null, repo: this.cfg.github?.repo ?? null },
@@ -337,7 +346,7 @@ export class AgentHost {
     const permissions = new PermissionManager(this.cfg, () => this.persist())
     this.loop = new AgentLoop({
       session: s,
-      provider: getAdapter(this.cfg.defaultProvider, this.cfg),
+      provider: getAdapter(this.cfg.defaultProvider, this.cfg, this.root),
       model: this.cfg.defaultModel,
       events,
       permissions,
@@ -423,6 +432,16 @@ export class AgentHost {
           this.pending.set(req.id, { resolve, req, timer })
           this.bus.emit('permission:request', req)
         }),
+      onAskUser: (form: AskFormRequest) =>
+        new Promise<AskFormResponse | null>((resolve) => {
+          // generous window — a form is more work than a y/n permission
+          const timer = setTimeout(() => {
+            this.pendingAsks.delete(form.id)
+            resolve(null)
+          }, 30 * 60 * 1000)
+          this.pendingAsks.set(form.id, { resolve, form, timer })
+          this.bus.emit('ask:request', form)
+        }),
     }
   }
 
@@ -432,6 +451,16 @@ export class AgentHost {
     clearTimeout(pending.timer)
     this.pending.delete(requestId)
     pending.resolve({ approved: !!approved, remember })
+    return true
+  }
+
+  /** Resolve a presented ask_user form (response = answers · null = dismissed). */
+  askRespond(requestId: string, response: AskFormResponse | null) {
+    const pending = this.pendingAsks.get(requestId)
+    if (!pending) return false
+    clearTimeout(pending.timer)
+    this.pendingAsks.delete(requestId)
+    pending.resolve(response ?? null)
     return true
   }
 

@@ -81,6 +81,7 @@ class FakeHost {
   session: { id: string; title: string; mode: 'build' | 'plan'; todos: unknown[]; messages: unknown[] } | undefined
   sent: Sent[] = []
   responded: { id: string; approved: boolean; remember?: string }[] = []
+  askResponses: { id: string; response: import('@tagent/core').AskFormResponse | null }[] = []
   interrupted = 0
   approvedPlan: boolean | undefined
   saved: Record<string, unknown>[] = []
@@ -162,6 +163,10 @@ class FakeHost {
   }
   permissionRespond(id: string, approved: boolean, remember?: string): boolean {
     this.responded.push({ id, approved, remember })
+    return true
+  }
+  askRespond(id: string, response: import('@tagent/core').AskFormResponse | null): boolean {
+    this.askResponses.push({ id, response })
     return true
   }
   approvePlan(execute: boolean): { ok: boolean } {
@@ -831,6 +836,153 @@ test('palette renders inside a box with the command descriptions aligned', async
 /* ---------------- run ---------------- */
 
 setAppColor(true)
+
+/* ---------------- ask form overlay (ask_user tool) ---------------- */
+
+const ASK_FORM = {
+  id: 'ask-1',
+  title: 'stack choice',
+  intro: 'before I start building',
+  fields: [
+    { id: 'f1', label: 'Database?', type: 'option' as const, options: ['postgres', 'mysql'] },
+    { id: 'f2', label: 'Features?', type: 'multi' as const, options: ['auth', 'payments'] },
+    { id: 'f3', label: 'App name?', type: 'input' as const, placeholder: 'my-app' },
+  ],
+  allowNotes: true,
+}
+
+function frameText(app: TuiApp): string {
+  return app.lastFrame.map(stripAnsi).join('\n')
+}
+
+test('ask form: renders questions, options, inputs, notes, submit', async () => {
+  const host = new FakeHost(tmp)
+  const { app, out } = await started(host, { rows: 44 })
+  host.bus.emit('ask:request', ASK_FORM)
+  await sleep(30)
+  app.renderNow()
+  const text = frameText(app)
+  if (!text.includes('agent asks') && !text.includes('stack choice')) throw new Error('form title missing')
+  if (!text.includes('1. Database?')) throw new Error('field 1 label missing')
+  if (!text.includes('postgres')) throw new Error('options missing')
+  if (!text.includes('+ add option')) throw new Error('add-option CTA missing')
+  if (!text.includes('3. App name?')) throw new Error('input field label missing')
+  if (!text.includes('my-app')) throw new Error('input placeholder missing')
+  if (!text.includes('notes for the agent')) throw new Error('notes label missing')
+  if (!text.includes('submit answers')) throw new Error('submit row missing')
+  // esc dismisses → host.askRespond(null)
+  app.feed('\x1b')
+  await sleep(90)
+  if (host.askResponses.length !== 1 || host.askResponses[0].response !== null) throw new Error('esc should dismiss with null')
+  if (!stripAnsi(out.text()).includes('dismissed')) throw new Error('dismissed trail missing from scrollback')
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+test('ask form: pick option → auto-advance, multi toggle, type input, notes, submit', async () => {
+  const host = new FakeHost(tmp)
+  const { app, out } = await started(host)
+  host.bus.emit('ask:request', ASK_FORM)
+  await sleep(30)
+  app.renderNow()
+  // field 1 (option): cursor starts on 'postgres' — press enter to pick it (auto-advance to field 2)
+  app.feed('\r')
+  await sleep(20)
+  // field 2 (multi): cursor on 'auth' → enter toggles it on, then down + enter toggles 'payments'
+  app.feed('\r')
+  await sleep(20)
+  app.feed('\x1b[B') // down to payments
+  await sleep(20)
+  app.feed('\r')
+  await sleep(20)
+  // field 3 (input): tab jumps to the input row — type directly
+  app.feed('\t')
+  await sleep(20)
+  app.feed('acme-app')
+  await sleep(20)
+  // tab jumps to notes… then to submit; type notes first
+  app.feed('\t')
+  await sleep(20)
+  app.feed('keep it cheap')
+  await sleep(20)
+  // tab → submit, enter
+  app.feed('\t')
+  await sleep(20)
+  app.feed('\r')
+  await sleep(40)
+  if (host.askResponses.length !== 1) throw new Error('submit did not respond')
+  const r = host.askResponses[0].response
+  if (!r) throw new Error('response is null — form dismissed?')
+  if (r.answers.f1 !== 'postgres') throw new Error(`f1: expected postgres, got ${JSON.stringify(r.answers.f1)}`)
+  if (JSON.stringify(r.answers.f2) !== JSON.stringify(['auth', 'payments'])) throw new Error(`f2: ${JSON.stringify(r.answers.f2)}`)
+  if (r.answers.f3 !== 'acme-app') throw new Error(`f3: ${JSON.stringify(r.answers.f3)}`)
+  if (r.notes !== 'keep it cheap') throw new Error(`notes: ${JSON.stringify(r.notes)}`)
+  // answered trail lands in the scrollback
+  const scroll = stripAnsi(out.text())
+  if (!scroll.includes('answered')) throw new Error('answered trail missing from scrollback')
+  if (!scroll.includes('postgres')) throw new Error('answers not printed to scrollback')
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+test('ask form: add-option flow appends a custom option and selects it', async () => {
+  const host = new FakeHost(tmp)
+  const { app } = await started(host)
+  host.bus.emit('ask:request', { ...ASK_FORM, fields: ASK_FORM.fields.slice(0, 1) })
+  await sleep(30)
+  // cursor on 'postgres'; down, down to the add row, press 'a' → nested input overlay
+  app.feed('\x1b[B\x1b[B')
+  await sleep(20)
+  app.feed('a')
+  await sleep(60)
+  app.renderNow()
+  if (!frameText(app).includes('new option')) throw new Error('nested add-option overlay missing')
+  app.feed('supabase\r')
+  await sleep(40)
+  app.renderNow()
+  const text = frameText(app)
+  if (!text.includes('supabase')) throw new Error('custom option not rendered in the form')
+  // submit
+  app.feed('\t\t\r')
+  await sleep(40)
+  const r = host.askResponses[0]?.response
+  if (r?.answers.f1 !== 'supabase') throw new Error(`custom option not selected: ${JSON.stringify(r?.answers.f1)}`)
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+test('ask form: required fields block submit and flag the row', async () => {
+  const host = new FakeHost(tmp)
+  const { app } = await started(host)
+  host.bus.emit('ask:request', {
+    id: 'ask-2',
+    fields: [
+      { id: 'f1', label: 'Must answer?', type: 'option', options: ['yes', 'no'], required: true },
+      { id: 'f2', label: 'Optional?', type: 'input' },
+    ],
+    allowNotes: false,
+  })
+  await sleep(30)
+  // tab past everything onto submit, press enter — required f1 is empty
+  app.feed('\t\t\r')
+  await sleep(30)
+  if (host.askResponses.length !== 0) throw new Error('submit must be blocked while a required field is empty')
+  if (!frameText(app).includes('needs an answer')) throw new Error('required hint missing')
+  // now pick an answer and submit
+  app.feed('\r') // cursor was jumped back to field 1's first option
+  await sleep(20)
+  app.feed('\t\t\r')
+  await sleep(40)
+  const r = host.askResponses[0]?.response
+  if (r?.answers.f1 !== 'yes') throw new Error(`required answer missing: ${JSON.stringify(r)}`)
+  if (r?.notes !== undefined) throw new Error('notes should be absent when allowNotes=false')
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
 
 async function main(): Promise<void> {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tagent-app-test-'))

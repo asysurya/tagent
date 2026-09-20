@@ -19,6 +19,7 @@ import { ChatPanel } from './chat-panel'
 import { RightPanel } from './right-panel'
 import { MobileShell } from './mobile-shell'
 import { PermissionDialog } from './permission-dialog'
+import { AskDialog } from './ask-dialog'
 import { PlanDialog } from './plan-dialog'
 import { SettingsDialog } from './settings-dialog'
 import { LoginDialog, ConfirmLogoutDialog, GuestBadge, relTime, repoUrl, useGithubAuth } from './login-dialog'
@@ -88,6 +89,7 @@ export function TagentApp() {
       </div>
 
       <PermissionDialog />
+      <AskDialog />
       <PlanDialog />
 
       <LoginDialog open={loginOpen} onOpenChange={setLoginOpen} />

@@ -171,7 +171,7 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   const forward = [
     'agent:status', 'message:new', 'agent:chunk', 'tool:start', 'tool:end',
     'todos:update', 'subagent:update', 'files:changed', 'notify',
-    'permission:request', 'chat:done', 'session:active', 'session:list',
+    'permission:request', 'ask:request', 'chat:done', 'session:active', 'session:list',
     'workspace:changed', 'plan:ready',
   ]
   for (const event of forward) host.bus.on(event, (payload) => io.to('gui').emit(event, payload))
@@ -364,6 +364,14 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       'permission:respond',
       (p: { requestId: string; approved: boolean; remember?: 'once' | 'session' | 'always' }) => {
         host.permissionRespond(p?.requestId, !!p?.approved, p?.remember)
+      },
+    )
+
+    /* ---------------------------- ask forms ---------------------------- */
+    socket.on(
+      'ask:respond',
+      (p: { requestId: string; response: import('@tagent/core').AskFormResponse | null }) => {
+        host.askRespond(p?.requestId, p?.response ?? null)
       },
     )
 

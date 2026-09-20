@@ -28,9 +28,50 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.15.0'
+export const LATEST = '0.16.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.16.0',
+    date: '2026-09-20',
+    title: 'AI ask forms + Z.ai models as a config file',
+    summary:
+      'The agent can now ask you questions through interactive forms (ask_user): option, multi-option and input fields, add-your-own options, an optional notes box — plan-mode interviews become one form instead of a chat interrogation. And the built-in Z.ai provider\u2019s model list moved from code to a config file you can edit: ~/.tagent/zai-models.json.',
+    stable: true,
+    sections: [
+      {
+        name: 'ask_user — the interview form',
+        items: [
+          'three field kinds: option (single choice, radio), multi (multiple choice, checkboxes) and input (free text) — batch up to 6 questions in one call, one round-trip',
+          'option/multi fields always offer "+ add your own option" — your custom answer becomes a first-class choice, selected like any other',
+          'every form carries an optional notes textarea under the fields for anything else worth saying',
+          'the inline TUI renders the form as an interactive overlay: ↑↓ move · space/enter pick · a add option · tab next field · esc cancel — required fields block submit and jump back to you',
+          'the web GUI gets a matching dialog (radio pills, checkboxes, textareas, add-option inline input); the classic TUI asks sequentially with arrow-key menus',
+          'plan mode\u2019s INTERVIEW step now uses the form by default; build and test modes can use it too (one form instead of a wall of text)',
+          'headless-safe: pipes and subagents get an honest "no interactive user" answer, so the model proceeds with stated assumptions instead of hanging; a dismissed form says so explicitly',
+          'answers are formatted back to the model verbatim (with the notes) — plus a one-line trail lands in the transcript so the answers are in your scrollback',
+        ],
+      },
+      {
+        name: 'Z.ai models as a config file',
+        items: [
+          'the built-in provider\u2019s model catalog moved from hardcoded arrays to packages/core/src/data/zai-models.json — data, not code',
+          'override or extend it without touching the binary: ~/.tagent/zai-models.json (global) or <workspace>/.tagent/zai-models.json (per project)',
+          'same-id entries replace the built-ins in place, new ids append, "replace": true swaps the whole list — a new model is one JSON edit away, no release wait',
+          'per-model "vision" flag now works end-to-end: the Z.ai adapter maps image parts to the SDK\u2019s content blocks, so GLM-4.7/4.6/4.5V actually receive the screenshots in test mode (the seed flags say the truth now)',
+          'the model id is passed through to the SDK on every call — harmless where the endpoint ignores it, forward-compatible when it starts honoring it',
+        ],
+      },
+      {
+        name: 'Fixes under the hood',
+        items: [
+          'gh-release.sh had lost its header (token/version parsing + --no-build) in the 0.15.0 body rewrite — restored',
+          'the ask_user tool is allow-listed by default (risk: low) — no permission double-prompt for the privilege of being asked a question',
+          'subagents never see the form tool (filtered from their toolset + a runtime guard) — only the primary agent faces the human',
+        ],
+      },
+    ],
+  },
   {
     version: '0.15.0',
     date: '2026-09-20',

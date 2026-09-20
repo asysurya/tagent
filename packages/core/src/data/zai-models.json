@@ -1,0 +1,40 @@
+{
+  "$comment": [
+    "Built-in Z.ai model catalog — the zero-config provider every tagent ships with.",
+    "",
+    "This file is the default list. Users can override or extend it WITHOUT touching",
+    "the binary: create ~/.tagent/zai-models.json (global) or <workspace>/.tagent/",
+    "zai-models.json (per project) with the same shape — entries with the same id",
+    "replace the built-ins, new ids are appended. Set \"replace\": true at the top",
+    "level to use ONLY the models in your file.",
+    "",
+    "Fields: id (sent to the API), label (shown in pickers), vision (accepts image",
+    "input — enables screenshot verification in test mode), description (short note)."
+  ],
+  "models": [
+    {
+      "id": "glm-4.7",
+      "label": "GLM-4.7 (default)",
+      "vision": true,
+      "description": "flagship — best overall quality"
+    },
+    {
+      "id": "glm-4.6",
+      "label": "GLM-4.6",
+      "vision": true,
+      "description": "previous flagship — solid all-rounder"
+    },
+    {
+      "id": "glm-4.5v",
+      "label": "GLM-4.5V",
+      "vision": true,
+      "description": "vision-optimized — strongest at image understanding"
+    },
+    {
+      "id": "glm-4.5-air",
+      "label": "GLM-4.5 Air",
+      "vision": false,
+      "description": "lightweight — fastest + cheapest"
+    }
+  ]
+}

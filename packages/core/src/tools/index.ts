@@ -8,6 +8,7 @@ import { taskTool } from './task'
 import { browserTool } from './browser'
 import { serveTool } from './serve'
 import { testReportTool } from './report'
+import { askUserTool } from './ask'
 import { memoryTool } from '../memory'
 import { loadSkillTool } from '../skills'
 
@@ -29,6 +30,7 @@ const ALL_TOOLS: ToolDefinition[] = [
   browserTool,
   serveTool,
   testReportTool,
+  askUserTool,
 ]
 
 export interface BuildToolsetOptions {
@@ -43,6 +45,7 @@ export interface BuildToolsetOptions {
 export const TEST_MODE_TOOLS = new Set([
   'read_file', 'read_files', 'list_files', 'grep', 'web_fetch', 'ddg_search',
   'bash', 'browser', 'serve', 'test_report', 'todowrite', 'memory', 'load_skill',
+  'ask_user',
 ])
 
 /**
@@ -74,11 +77,13 @@ export function buildToolset(opts: BuildToolsetOptions = {}): ToolDefinition[] {
     if (readOnly) {
       const RO = new Set([
         'read_file', 'read_files', 'list_files', 'grep', 'web_fetch', 'ddg_search',
-        'todowrite', 'memory', 'load_skill',
+        'todowrite', 'memory', 'load_skill', 'ask_user',
       ])
       return RO.has(t.name)
     }
     if (isSubagent && t.name === 'task') return false
+    // subagents never face the human — asking is the primary agent's job
+    if (isSubagent && t.name === 'ask_user') return false
     if (cfg && t.name === 'bash' && !cfg.tools.bash) return false
     if (cfg && t.name === 'browser' && !cfg.tools.browser) return false
     if (cfg && t.name === 'serve' && cfg.tools.serve === false) return false

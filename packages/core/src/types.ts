@@ -56,6 +56,48 @@ export interface SessionData extends SessionMeta {
 
 export type AgentMode = 'build' | 'plan' | 'test'
 
+/* ------------------------------------------------------------------ */
+/* ask_user — interactive question forms                                */
+/* ------------------------------------------------------------------ */
+
+/** One field of an ask_user form. */
+export interface AskFormField {
+  /** stable key the answers come back under (auto f1/f2… when omitted) */
+  id: string
+  /** the question shown to the user */
+  label: string
+  /** option = single choice · multi = multiple choice · input = free text */
+  type: 'option' | 'multi' | 'input'
+  /** choices for option/multi */
+  options?: string[]
+  /** option/multi: the user may add their own option (default true) */
+  allowAddOption?: boolean
+  /** input: placeholder hint */
+  placeholder?: string
+  /** answer required before submit (default false) */
+  required?: boolean
+}
+
+/** Form request the agent sends via the ask_user tool. */
+export interface AskFormRequest {
+  id: string
+  title?: string
+  /** short context line above the fields */
+  intro?: string
+  fields: AskFormField[]
+  /** show the notes textarea under the fields (default true) */
+  allowNotes?: boolean
+  notesLabel?: string
+}
+
+/** The user's answers (null = the form was dismissed). */
+export interface AskFormResponse {
+  /** field id → the chosen option / custom text, or the selected choices for multi */
+  answers: Record<string, string | string[]>
+  /** the optional free-form note below the fields */
+  notes?: string
+}
+
 /** MCP server definition (stdio transport) — see core/src/mcp.ts */
 export interface McpServerConfig {
   command: string
@@ -198,6 +240,8 @@ export interface AgentEvents {
   onToolStart?(call: ToolCallRecord): void
   onToolEnd?(call: ToolCallRecord): void
   onPermission?(req: PermissionRequest): Promise<PermissionDecision>
+  /** ask_user tool — present the form to the human; null = dismissed/unavailable */
+  onAskUser?(form: AskFormRequest): Promise<AskFormResponse | null>
   onTodos?(todos: TodoItem[]): void
   onSubagent?(info: SubagentInfo): void
   onFilesChanged?(paths: string[]): void

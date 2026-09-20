@@ -59,6 +59,8 @@ import {
   readGlobalConfig,
   type LoopSummary,
   type PermissionRequest,
+  type AskFormRequest,
+  type AskFormResponse,
   type SessionData,
   type SubagentInfo,
   type TodoItem,
@@ -565,6 +567,60 @@ type Overlay =
   | { kind: 'permission'; req: PermissionRequest; cursor: number; resolve: (v: 'once' | 'always' | 'session' | 'deny') => void }
   | { kind: 'plan'; plan: string[]; scroll: number; cursor: number; resolve: (v: 'execute' | 'keep' | 'dismiss') => void }
   | { kind: 'text'; title: string; lines: string[]; scroll: number; resolve: () => void }
+  | {
+      kind: 'askform'
+      form: AskFormRequest
+      /** flat list of focusable rows (options, add-option CTAs, inputs, notes, submit) */
+      rows: AskRow[]
+      cursor: number
+      scroll: number
+      /** field id → selected option values (0/1 for option, 0..n for multi) */
+      selected: Record<string, string[]>
+      /** field id → working option list (user additions append here) */
+      options: Record<string, string[]>
+      /** one Editor per input-type field, indexed by field position */
+      editors: Editor[]
+      /** the optional notes textarea under the fields */
+      notes: Editor
+      /** required-but-unanswered labels (set on submit attempt) */
+      missing: string[]
+      resolve: (v: AskFormResponse | null) => void
+    }
+
+/** one focusable row of the ask form overlay */
+interface AskRow {
+  kind: 'option' | 'add' | 'input' | 'notes' | 'submit'
+  /** index into form.fields (-1 for notes/submit) */
+  fieldIndex: number
+  /** index into the field's options (-1 otherwise) */
+  optionIndex: number
+}
+
+/** the flat focusable-row list of an ask form (rebuilt when options grow) */
+function askFormRows(form: AskFormRequest, options: Record<string, string[]>): AskRow[] {
+  const rows: AskRow[] = []
+  form.fields.forEach((f, i) => {
+    if (f.type === 'input') {
+      rows.push({ kind: 'input', fieldIndex: i, optionIndex: -1 })
+    } else {
+      for (let oi = 0; oi < (options[f.id] ?? []).length; oi++) {
+        rows.push({ kind: 'option', fieldIndex: i, optionIndex: oi })
+      }
+      if (f.allowAddOption !== false) rows.push({ kind: 'add', fieldIndex: i, optionIndex: -1 })
+    }
+  })
+  if (form.allowNotes !== false) rows.push({ kind: 'notes', fieldIndex: -1, optionIndex: -1 })
+  rows.push({ kind: 'submit', fieldIndex: -1, optionIndex: -1 })
+  return rows
+}
+
+/** reverse-video block cursor spliced into a single line at `col` */
+function blockCursorLine(text: string, col: number): string {
+  const before = text.slice(0, col)
+  const at = text.slice(col, col + nextLen(text, col)) || ' '
+  const after = text.slice(col + (at === ' ' && col >= text.length ? 0 : at.length))
+  return before + (USE_COLOR ? `\x1b[7m${at}\x1b[27m` : at) + after
+}
 
 /* ------------------------------------------------------------------ */
 /* slash command table (palette + help)                                */
@@ -933,6 +989,7 @@ export class TuiApp {
       }
     })
     add('permission:request', (req: PermissionRequest) => void this.onPermission(req))
+    add('ask:request', (form: AskFormRequest) => void this.onAskUserHost(form))
     add('chat:done', (d: { summary: LoopSummary }) => this.onChatDone(d.summary))
     add('session:active', (s: SessionData) => {
       this.todos = s.todos ?? []
@@ -1010,6 +1067,55 @@ export class TuiApp {
     if (info.turns === last) return
     this.lastSubagentTurn.set(info.id, info.turns)
     this.println(`  ${magenta('⎿')} ${dim(`subagent · ${info.description} — turn ${info.turns}`)}`)
+  }
+
+  /**
+   * ask_user tool — render the agent's question form as an interactive
+   * overlay. The user fills it (choices, custom options, notes) and the
+   * answers flow back to the model; esc dismisses the form as unanswered.
+   */
+  private async onAskUserHost(form: AskFormRequest): Promise<void> {
+    this.permissionFrozen = true
+    this.hideStatus()
+    const options: Record<string, string[]> = {}
+    for (const f of form.fields) {
+      if (f.type !== 'input') options[f.id] = [...(f.options ?? [])]
+    }
+    const editors: Editor[] = form.fields.map((f) => (f.type === 'input' ? new Editor() : (undefined as never)))
+    const rows = askFormRows(form, options)
+    const res = await new Promise<AskFormResponse | null>((resolve) => {
+      this.overlayStack.push({
+        kind: 'askform',
+        form,
+        rows,
+        cursor: 0,
+        scroll: 0,
+        selected: {},
+        options,
+        editors,
+        notes: new Editor(),
+        missing: [],
+        resolve,
+      })
+      this.requestRender()
+    })
+    this.permissionFrozen = false
+    this.flushFrozen()
+    this.host.askRespond(form.id, res)
+    // answer trail in the scrollback — the questions were material
+    const q = form.title ?? (form.fields[0]?.label ?? 'questions')
+    if (res) {
+      const parts = form.fields.map((f) => {
+        const a = res.answers?.[f.id]
+        const v = Array.isArray(a) ? a.join(', ') : (a ?? '')
+        return `${dim(`${f.label}:`)} ${v || dim('—')}`
+      })
+      this.println(`  ${dim('⎿')} ${green('answered')} ${dim(`· ${q}`)}`)
+      for (const p of parts) this.println(`    ${p}`)
+      if (res.notes?.trim()) this.println(`    ${dim(`note: ${res.notes.trim().split('\n')[0]}`)}`)
+    } else {
+      this.println(`  ${dim('⎿')} ${yellow('⊘')} ${dim(`form dismissed · ${q}`)}`)
+    }
   }
 
   private async onPermission(req: PermissionRequest): Promise<void> {
@@ -1300,6 +1406,11 @@ export class TuiApp {
     if (top && top.kind === 'permission') {
       // mirrors tui.ts: ctrl+c during a permission prompt denies the call
       this.settle(top, 'deny')
+      return
+    }
+    if (top && top.kind === 'askform') {
+      // ctrl+c during a form dismisses it (null answers, not a hang)
+      this.settle(top, null)
       return
     }
     if (top) {
@@ -1668,6 +1779,7 @@ export class TuiApp {
       case 'input':
       case 'confirm':
       case 'permission':
+      case 'askform':
       case 'plan':
         ov.resolve(value as never)
         break
@@ -1687,6 +1799,8 @@ export class TuiApp {
         return this.confirmKey(ov, k)
       case 'permission':
         return this.permissionKey(ov, k)
+      case 'askform':
+        return this.askFormKey(ov, k)
       case 'plan':
         return this.planKey(ov, k)
       case 'text':
@@ -1869,6 +1983,164 @@ export class TuiApp {
       if (ch === 's') return this.settle(ov, 'session')
       if (ch === 'n') return this.settle(ov, 'deny')
     }
+  }
+
+  /* ---------------- ask form overlay (ask_user tool) ---------------- */
+
+  private askFormKey(ov: Extract<Overlay, { kind: 'askform' }>, k: Key): void {
+    const rows = ov.rows
+    if (!rows.length) return this.settle(ov, null)
+    if (k.t === 'esc') return this.settle(ov, null)
+
+    const row = rows[Math.min(ov.cursor, rows.length - 1)]
+    const field = row.fieldIndex >= 0 ? ov.form.fields[row.fieldIndex] : undefined
+    const ed = row.kind === 'input' ? ov.editors[row.fieldIndex] : row.kind === 'notes' ? ov.notes : undefined
+    const move = (d: number) => {
+      ov.cursor = Math.max(0, Math.min(rows.length - 1, ov.cursor + d))
+    }
+    const clearMissing = () => {
+      if (ov.missing.length) ov.missing = []
+    }
+
+    switch (k.t) {
+      case 'up':
+        clearMissing()
+        move(-1)
+        return
+      case 'down':
+        clearMissing()
+        move(1)
+        return
+      case 'tab': {
+        // jump to the next field boundary (input / notes / submit)
+        clearMissing()
+        for (let i = ov.cursor + 1; i < rows.length; i++) {
+          const r = rows[i]
+          if (r.kind === 'input' || r.kind === 'notes' || r.kind === 'submit') {
+            ov.cursor = i
+            return
+          }
+        }
+        ov.cursor = rows.length - 1
+        return
+      }
+      case 'enter': {
+        if (k.mod === 'shift' || k.mod === 'alt') {
+          if (row.kind === 'notes' && ed) {
+            ed.newline()
+            return
+          }
+        }
+        if (row.kind === 'submit') return this.askFormSubmit(ov)
+        if (row.kind === 'option' && field) {
+          const opt = ov.options[field.id]?.[row.optionIndex]
+          if (opt === undefined) return
+          if (field.type === 'multi') {
+            const cur = ov.selected[field.id] ?? []
+            ov.selected[field.id] = cur.includes(opt) ? cur.filter((o) => o !== opt) : [...cur, opt]
+            return
+          }
+          // single choice: select and advance to the next field
+          ov.selected[field.id] = [opt]
+          const next = rows.findIndex((r) => r.fieldIndex > row.fieldIndex)
+          ov.cursor = next >= 0 ? next : rows.length - 1
+          return
+        }
+        if (row.kind === 'add') return this.askFormAddOption(ov, row.fieldIndex)
+        // input / notes rows: enter moves on
+        clearMissing()
+        move(1)
+        return
+      }
+      case 'print': {
+        // space on an option = select/toggle; 'a' on the add row opens the prompt
+        if (row.kind === 'option' && k.ch === ' ') return this.askFormKey(ov, { t: 'enter' })
+        if (row.kind === 'add' && (k.ch === 'a' || k.ch === 'A')) return this.askFormAddOption(ov, row.fieldIndex)
+        if (ed) {
+          clearMissing()
+          ed.insert(k.ch)
+        }
+        return
+      }
+      case 'backspace':
+        if (ed) ed.backspace()
+        return
+      case 'delete':
+        if (ed) ed.del()
+        return
+      case 'left':
+        if (ed) ed.left()
+        return
+      case 'right':
+        if (ed) ed.right()
+        return
+      case 'home':
+        if (ed) ed.home()
+        return
+      case 'end':
+        if (ed) ed.end()
+        return
+      default:
+        return
+    }
+  }
+
+  /** "+ add option…" — nested input overlay, appends a user option and selects it */
+  private askFormAddOption(ov: Extract<Overlay, { kind: 'askform' }>, fieldIndex: number): void {
+    const f = ov.form.fields[fieldIndex]
+    if (!f || f.type === 'input') return
+    if ((ov.options[f.id] ?? []).length >= 12) {
+      this.notice = 'option limit reached (12)'
+      return
+    }
+    void this.ask(`new option — ${f.label}`).then((text) => {
+      const t = (text ?? '').trim()
+      if (!t) return
+      const list = ov.options[f.id] ?? []
+      if (list.some((o) => o.toLowerCase() === t.toLowerCase())) {
+        this.notice = 'that option already exists'
+      } else {
+        list.push(t)
+        ov.options[f.id] = list
+        const cur = ov.selected[f.id] ?? []
+        ov.selected[f.id] = f.type === 'option' ? [t] : [...cur, t]
+      }
+      ov.rows = askFormRows(ov.form, ov.options)
+      const idx = ov.rows.findIndex(
+        (r) => r.kind === 'option' && r.fieldIndex === fieldIndex && ov.options[f.id]?.[r.optionIndex] === t,
+      )
+      ov.cursor = idx >= 0 ? idx : ov.cursor
+      this.requestRender()
+    })
+  }
+
+  /** validate required fields, collect answers, resolve the form */
+  private askFormSubmit(ov: Extract<Overlay, { kind: 'askform' }>): void {
+    const answers: Record<string, string | string[]> = {}
+    const missing: string[] = []
+    ov.form.fields.forEach((f, i) => {
+      if (f.type === 'input') {
+        const t = (ov.editors[i]?.text ?? '').trim()
+        answers[f.id] = t
+        if (f.required && !t) missing.push(f.label)
+      } else {
+        const sel = ov.selected[f.id] ?? []
+        answers[f.id] = f.type === 'option' ? (sel[0] ?? '') : sel
+        if (f.required && sel.length === 0) missing.push(f.label)
+      }
+    })
+    if (missing.length) {
+      ov.missing = missing
+      const firstIdx = ov.form.fields.findIndex((f) => missing.includes(f.label))
+      if (firstIdx >= 0) {
+        const rowIdx = ov.rows.findIndex((r) => r.fieldIndex === firstIdx && r.kind !== 'add')
+        if (rowIdx >= 0) ov.cursor = rowIdx
+      }
+      this.requestRender()
+      return
+    }
+    const notes = ov.notes.text.trim()
+    this.settle(ov, { answers, ...(notes ? { notes } : {}) })
   }
 
   private planKey(ov: Extract<Overlay, { kind: 'plan' }>, k: Key): void {
@@ -3533,6 +3805,8 @@ export class TuiApp {
         return this.renderConfirmOverlay(ov, W)
       case 'permission':
         return this.renderPermissionOverlay(ov, W, viewportH)
+      case 'askform':
+        return this.renderAskFormOverlay(ov, W, viewportH)
       case 'plan':
         return this.renderPlanOverlay(ov, W, viewportH)
       case 'text':
@@ -3647,6 +3921,103 @@ export class TuiApp {
     }
     const footer = 'y=once · a=always · s=session · n=deny'
     return this.box('permission needed', inner.slice(0, Math.max(3, viewportH - 4)), footer, W)
+  }
+
+  /** the ask_user form — questions, radio/checkbox options, inputs, notes, submit */
+  private renderAskFormOverlay(ov: Extract<Overlay, { kind: 'askform' }>, W: number, viewportH: number): string[] {
+    const boxW = Math.min(W - 2, 78)
+    const innerW = Math.max(4, boxW - 4)
+    const lines: { text: string; row: number }[] = []
+    const push = (text: string, row = -1) => lines.push({ text, row })
+
+    if (ov.form.intro) {
+      for (const l of wrapStyled(ov.form.intro, innerW - 2)) push(dim(l))
+      push('')
+    }
+
+    const cur = ov.rows[Math.min(ov.cursor, ov.rows.length - 1)]
+    const rowIndexOf = (pred: (r: AskRow) => boolean) => {
+      const i = ov.rows.findIndex(pred)
+      return i >= 0 ? i : -1
+    }
+
+    ov.form.fields.forEach((f, i) => {
+      const hint = f.type === 'option' ? ' — pick one' : f.type === 'multi' ? ' — pick any' : ''
+      const q = `${i + 1}. ${f.label}${f.required ? ' *' : ''}`
+      for (const l of wrapStyled(bold(q) + dim(hint), innerW - 2)) push(l)
+      if (ov.missing.includes(f.label)) push(`  ${red('required — this one needs an answer')}`)
+
+      if (f.type === 'input') {
+        const ed = ov.editors[i]
+        const rowIdx = rowIndexOf((r) => r.kind === 'input' && r.fieldIndex === i)
+        const focused = cur && cur.kind === 'input' && cur.fieldIndex === i
+        if (focused && ed) {
+          push(blockCursorLine(ed.lines[ed.row] ?? '', ed.col), rowIdx)
+        } else {
+          const t = ed?.text ?? ''
+          push(t ? truncateStyled(t, innerW - 4) : dim(f.placeholder ?? 'type here…'), rowIdx)
+        }
+      } else {
+        const opts = ov.options[f.id] ?? []
+        opts.forEach((opt, oi) => {
+          const rowIdx = rowIndexOf((r) => r.kind === 'option' && r.fieldIndex === i && r.optionIndex === oi)
+          const isCursor = cur && cur.kind === 'option' && cur.fieldIndex === i && cur.optionIndex === oi
+          const sel = (ov.selected[f.id] ?? []).includes(opt)
+          const mark = f.type === 'option' ? (sel ? green('●') : dim('○')) : (sel ? green('☑') : dim('☐'))
+          const label = truncateStyled(opt, innerW - 8)
+          push(`${isCursor ? cyan('❯') : ' '} ${mark} ${isCursor ? bold(cyan(label)) : label}`, rowIdx)
+        })
+        if (f.allowAddOption !== false) {
+          const rowIdx = rowIndexOf((r) => r.kind === 'add' && r.fieldIndex === i)
+          const isCursor = cur && cur.kind === 'add' && cur.fieldIndex === i
+          push(`${isCursor ? cyan('❯') : ' '} ${isCursor ? bold(cyan('+ add option…')) : dim('+ add option…')}`, rowIdx)
+        }
+      }
+      push('')
+    })
+
+    if (ov.form.allowNotes !== false) {
+      push(dim(ov.form.notesLabel ?? 'notes for the agent (optional)'))
+      const rowIdx = rowIndexOf((r) => r.kind === 'notes')
+      const focused = cur && cur.kind === 'notes'
+      const shown = ov.notes.isEmpty ? [] : ov.notes.lines.slice(0, 3)
+      if (!shown.length) {
+        push(`${focused ? cyan('❯') : ' '} ${dim('…')}`, rowIdx)
+      } else {
+        shown.forEach((l, li) => {
+          const mark = li === 0 ? (focused ? cyan('❯') : ' ') : '  '
+          if (focused && ov.notes.row === li) {
+            push(`${mark} ${blockCursorLine(l, ov.notes.col)}`, rowIdx)
+          } else {
+            push(`${mark} ${truncateStyled(l, innerW - 4)}`, rowIdx)
+          }
+        })
+      }
+      push('')
+    }
+
+    {
+      const rowIdx = rowIndexOf((r) => r.kind === 'submit')
+      const isCursor = cur && cur.kind === 'submit'
+      push(`${isCursor ? cyan('❯') : ' '} ${isCursor ? bold(green('submit answers')) : dim('submit answers')}`, rowIdx)
+    }
+
+    const footer = '↑↓ move · space/enter pick · a add option · tab next field · esc cancel'
+
+    // window the form around the cursor line (forms can outgrow small terminals)
+    const textLines = lines.map((l) => l.text)
+    const cursorLine = lines.findIndex((l) => l.row === ov.cursor)
+    const visibleH = Math.max(3, viewportH - 2)
+    let start = Math.max(0, Math.min(ov.scroll, Math.max(0, textLines.length - visibleH)))
+    if (cursorLine >= 0) {
+      if (cursorLine < start) start = cursorLine
+      if (cursorLine >= start + visibleH) start = cursorLine - visibleH + 1
+    }
+    start = Math.max(0, Math.min(start, Math.max(0, textLines.length - visibleH)))
+    ov.scroll = start
+    const shown = textLines.slice(start, start + visibleH)
+    while (shown.length < Math.min(visibleH, 3)) shown.push('')
+    return this.box(ov.form.title ?? 'agent asks', shown, footer, W)
   }
 
   private renderPlanOverlay(ov: Extract<Overlay, { kind: 'plan' }>, W: number, viewportH: number): string[] {

@@ -6,6 +6,7 @@ import {
   modelsForCustom,
   resolveApiKey,
 } from './registry'
+import { zaiModels } from './zai-models'
 
 /** Tool definition in OpenAI "function calling" shape. */
 export interface NativeToolDef {
@@ -73,7 +74,7 @@ export interface ProviderAdapter {
 
 /** Model ids that accept image input — best-effort heuristic for discovery-cached models. */
 const MULTIMODAL_RE =
-  /gpt-4o|gpt-4\.1|gpt-4-turbo|gpt-5|\bo3\b|o4-|chatgpt|claude-3|claude-4|claude-5|claude-opus|claude-sonnet|claude-haiku|gemini|glm-4v|glm-4\.\dv|qwen[^ ]*vl|qwen2-vl|-vl-|vision|pixtral|grok-4|grok[^ ]*vision|llama[^ ]*vision|step-1v|internvl|minicpm-v|moondream|llava|granite-vision|mistral-small-latest/i
+  /gpt-4o|gpt-4\.1|gpt-4-turbo|gpt-5|\bo3\b|o4-|chatgpt|claude-3|claude-4|claude-5|claude-opus|claude-sonnet|claude-haiku|gemini|glm-4v|glm-4\.\d|qwen[^ ]*vl|qwen2-vl|-vl-|vision|pixtral|grok-4|grok[^ ]*vision|llama[^ ]*vision|step-1v|internvl|minicpm-v|moondream|llava|granite-vision|mistral-small-latest/i
 
 /** Does this adapter+model accept image parts? (registry seed flag, or id heuristic) */
 export function acceptsImages(adapter: ProviderAdapter, model: string): boolean {
@@ -495,11 +496,14 @@ export class ZaiAdapter implements ProviderAdapter {
   id = 'zai'
   label = 'Z.ai (built-in)'
   supportsNativeTools = false // markdown action protocol only
-  models: ModelInfo[] = [
-    { id: 'glm-4.7', label: 'GLM-4.7 (default)', provider: 'zai' },
-    { id: 'glm-4.6', label: 'GLM-4.6', provider: 'zai' },
-  ]
+  models: ModelInfo[]
   private zai: any = null
+
+  constructor(root?: string) {
+    // the model catalog is data: packages/core/src/data/zai-models.json,
+    // overridable via ~/.tagent/zai-models.json (+ workspace .tagent/)
+    this.models = zaiModels(root)
+  }
 
   private async client(): Promise<any> {
     if (!this.zai) {
@@ -523,6 +527,28 @@ export class ZaiAdapter implements ProviderAdapter {
     }
   }
 
+  /**
+   * WireMessage → SDK shape. The SDK expects the system prompt as an
+   * 'assistant' message, and image parts as OpenAI-style content blocks
+   * (`[{type:'text'...},{type:'image_url', image_url:{url:'data:...'}}]`).
+   */
+  private sdkMessages(req: CompletionRequest): { role: string; content: unknown }[] {
+    return req.messages.map((m) => {
+      const role = m.role === 'system' ? 'assistant' : m.role
+      if (!m.images?.length) return { role, content: m.content }
+      return {
+        role,
+        content: [
+          { type: 'text', text: m.content },
+          ...m.images.map((i) => ({
+            type: 'image_url',
+            image_url: { url: `data:${i.mediaType};base64,${i.data}` },
+          })),
+        ],
+      }
+    })
+  }
+
   async complete(req: CompletionRequest): Promise<string> {
     const r = await this.completeStream(req)
     return r.text
@@ -530,18 +556,14 @@ export class ZaiAdapter implements ProviderAdapter {
 
   async completeStream(req: CompletionRequest): Promise<CompletionResult> {
     const zai = await this.client()
-    // The SDK expects the system prompt as an 'assistant' message.
-    const messages = req.messages.map((m) =>
-      m.role === 'system' ? { role: 'assistant', content: m.content } : m,
-    )
+    const messages = this.sdkMessages(req)
+    // The model id rides along (harmless when the endpoint ignores it —
+    // forward-compatible when it starts honoring it).
+    const base = { messages, thinking: { type: 'disabled' } as const, model: req.model }
     // Try real token streaming first; some SDK builds may not support it.
     try {
-      const stream = await this.with429Retry(() =>
-        zai.chat.completions.create({
-          messages,
-          thinking: { type: 'disabled' },
-          stream: true,
-        }),
+      const stream: any = await this.with429Retry(() =>
+        zai.chat.completions.create({ ...base, stream: true }),
       )
       let text = ''
       for await (const chunk of stream) {
@@ -555,12 +577,7 @@ export class ZaiAdapter implements ProviderAdapter {
     } catch {
       /* fall through to the non-streaming path */
     }
-    const completion = await this.with429Retry(() =>
-      zai.chat.completions.create({
-        messages,
-        thinking: { type: 'disabled' },
-      }),
-    )
+    const completion: any = await this.with429Retry(() => zai.chat.completions.create(base))
     const text = completion?.choices?.[0]?.message?.content
     if (typeof text !== 'string' || !text) throw new Error('Z.ai: empty completion')
     req.onText?.(text)
@@ -575,11 +592,12 @@ export class ZaiAdapter implements ProviderAdapter {
 /**
  * All providers the user can pick: the zero-config Z.ai adapter, the full
  * catalog (key from config or env) and custom endpoints. Models are the
- * registry seeds merged with the discovery cache.
+ * registry seeds merged with the discovery cache. `root` enables the
+ * workspace-level zai-models.json override for the built-in provider.
  */
-export function listProviderInfos(cfg: TagentConfig): ProviderInfo[] {
+export function listProviderInfos(cfg: TagentConfig, root?: string): ProviderInfo[] {
   const infos: ProviderInfo[] = [
-    { id: 'zai', label: 'Z.ai (built-in)', kind: 'builtin', needsKey: false, hasKey: true, models: new ZaiAdapter().models },
+    { id: 'zai', label: 'Z.ai (built-in)', kind: 'builtin', needsKey: false, hasKey: true, models: zaiModels(root) },
   ]
   for (const entry of CATALOG) {
     const key = resolveApiKey(entry, cfg)
@@ -609,7 +627,7 @@ export function listProviderInfos(cfg: TagentConfig): ProviderInfo[] {
   return infos
 }
 
-export function getAdapter(providerId: string, cfg: TagentConfig): ProviderAdapter {
+export function getAdapter(providerId: string, cfg: TagentConfig, root?: string): ProviderAdapter {
   const custom = (cfg.customProviders ?? []).find((p) => p.id === providerId)
   if (custom) {
     const key = custom.apiKey || cfg.apiKeys?.[custom.id] || ''
@@ -622,7 +640,7 @@ export function getAdapter(providerId: string, cfg: TagentConfig): ProviderAdapt
     }
     return new OpenAICompatibleAdapter(custom.id, custom.label, custom.baseUrl, key, models)
   }
-  if (providerId === 'zai') return new ZaiAdapter()
+  if (providerId === 'zai') return new ZaiAdapter(root)
   const entry = catalogById(providerId)
   if (entry) {
     const key = resolveApiKey(entry, cfg)

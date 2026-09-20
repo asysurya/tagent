@@ -90,6 +90,32 @@ export interface FallbackEntry {
   label?: string
 }
 
+/* ---------------- ask_user forms (agent → user questions) ---------------- */
+
+export interface AskFormField {
+  id: string
+  label: string
+  type: 'option' | 'multi' | 'input'
+  options?: string[]
+  allowAddOption?: boolean
+  placeholder?: string
+  required?: boolean
+}
+
+export interface AskFormRequest {
+  id: string
+  title?: string
+  intro?: string
+  fields: AskFormField[]
+  allowNotes?: boolean
+  notesLabel?: string
+}
+
+export interface AskFormResponse {
+  answers: Record<string, string | string[]>
+  notes?: string
+}
+
 export interface SanitizedConfig {
   defaultProvider: string
   defaultModel: string

@@ -230,7 +230,7 @@ async function main() {
     ok('gpt-4o → true', acceptsImages(fakeAdapter, 'gpt-4o'))
     ok('claude-sonnet-4-5 → true', acceptsImages(fakeAdapter, 'claude-sonnet-4-5'))
     ok('gemini-2.5-pro → true', acceptsImages(fakeAdapter, 'gemini-2.5-pro'))
-    ok('glm-4.7 → false (text-only)', !acceptsImages(fakeAdapter, 'glm-4.7'))
+    ok('glm-4.7 → true (heuristic glm-4.x)', acceptsImages(fakeAdapter, 'glm-4.7'))
     ok('glm-4v → true', acceptsImages(fakeAdapter, 'glm-4v'))
     ok('phi-3 not caught by o3 substring', !acceptsImages(fakeAdapter, 'phi-3-mini'))
     ok('qwen2.5-vl → true', acceptsImages(fakeAdapter, 'qwen2.5-vl-72b'))

@@ -27,6 +27,8 @@ import {
 import type {
   AgentMode,
   AgentStatus,
+  AskFormRequest,
+  AskFormResponse,
   AuthLoginResponse,
   ChatMessage,
   CheckpointMeta,
@@ -91,6 +93,8 @@ interface TagentState {
   subagents: SubagentInfo[]
   pendingPermission: PermissionRequest | null
   permissionHistory: Record<string, 'ask' | 'allow' | 'deny'>
+  /** ask_user form awaiting the user's answers (server: `ask:request`) */
+  pendingAsk: AskFormRequest | null
   /** plan-mode draft awaiting approval (server: `plan:ready` / `plan:approve`) */
   planOffer: string | null
 
@@ -127,6 +131,7 @@ interface TagentState {
   send: (text: string) => Promise<void>
   interrupt: () => void
   respondPermission: (approved: boolean, remember?: 'once' | 'session' | 'always') => void
+  respondAsk: (response: AskFormResponse | null) => void
   respondPlan: (execute: boolean) => void
   saveFallback: (entries: FallbackEntry[]) => Promise<void>
   setModel: (provider: string, model: string) => Promise<void>
@@ -197,6 +202,7 @@ interface TagentState {
     subagent: (i: SubagentInfo) => void
     filesChanged: () => void
     permission: (p: PermissionRequest | null) => void
+    ask: (f: AskFormRequest | null) => void
     chatDone: (s: LoopSummary) => void
     chunk: (t: string) => void
   }
@@ -227,6 +233,7 @@ const initial = {
   subagents: [],
   pendingPermission: null,
   permissionHistory: {},
+  pendingAsk: null,
   planOffer: null,
   rightTab: 'files' as RightTab,
   rightOpen: true,
@@ -326,6 +333,7 @@ export const useTagent = create<TagentState>((set, get) => ({
     })
     socket.on('files:changed', () => get()._apply.filesChanged())
     socket.on('permission:request', (p: PermissionRequest) => get()._apply.permission(p))
+    socket.on('ask:request', (f: AskFormRequest) => get()._apply.ask(f))
     socket.on('plan:ready', (d: { plan?: string }) => {
       if (d?.plan) set({ planOffer: d.plan })
     })
@@ -451,6 +459,9 @@ export const useTagent = create<TagentState>((set, get) => ({
     permission(p) {
       set({ pendingPermission: p })
     },
+    ask(form: AskFormRequest | null) {
+      set({ pendingAsk: form })
+    },
     chatDone(summary) {
       set((st) => ({
         running: false,
@@ -483,6 +494,7 @@ export const useTagent = create<TagentState>((set, get) => ({
       running: false,
       subagents: [],
       pendingPermission: null,
+      pendingAsk: null,
       planOffer: null,
       fileTree: null,
       fileBuffer: null,
@@ -612,6 +624,19 @@ export const useTagent = create<TagentState>((set, get) => ({
       socket.emit('permission:respond', { requestId: pendingPermission.id, approved, remember })
     }
     set({ pendingPermission: null })
+  },
+
+  /** answer (or dismiss) the agent's ask_user form */
+  respondAsk(response) {
+    const { socket, pendingAsk, connection } = get()
+    if (connection === 'demo') {
+      set({ pendingAsk: null })
+      return
+    }
+    if (socket && pendingAsk) {
+      socket.emit('ask:respond', { requestId: pendingAsk.id, response })
+    }
+    set({ pendingAsk: null })
   },
 
   respondPlan(execute) {

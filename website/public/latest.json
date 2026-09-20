@@ -1,6 +1,6 @@
 {
-  "version": "0.15.0",
+  "version": "0.16.0",
   "date": "2026-09-20",
-  "notes": "A third agent mode joins build and plan: TEST. `tagent test` (or `/test` in the TUI, or the Test button in the GUI) turns the agent into a QA engineer for your project — it boots the app itself, clicks through it with a real browser, checks responsiveness and typography, and writes TEST-REPORT.md with a pass/warn/fail verdict. Screenshots are attached to the model’s context when the model can see images, so the agent JUDGES the UI instead of guessing. Also fixes a real bug in the old browser tool (it could never launch a page at all).",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.15.0"
+  "notes": "The agent can now ask you questions through interactive forms (ask_user): option, multi-option and input fields, add-your-own options, an optional notes box — plan-mode interviews become one form instead of a chat interrogation. And the built-in Z.ai provider’s model list moved from code to a config file you can edit: ~/.tagent/zai-models.json.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.16.0"
 }
