@@ -1,3 +1,40 @@
+#!/usr/bin/env bash
+# Creates the GitHub release for the current version, cross-compiles the
+# single-file binaries and uploads them (plus SHA256SUMS) as release assets.
+#
+# Usage: scripts/gh-release.sh <token> [version] [--no-build]
+#   token    GitHub PAT with repo scope
+#   version  defaults to the version in packages/core/src/version.ts
+#   --no-build  skip compilation (use existing dist/tagent-v<version>/ binaries)
+set -euo pipefail
+cd "$(dirname "$0")/.."
+TOKEN=""
+VERSION_ARG=""
+NO_BUILD=0
+for a in "$@"; do
+  case "$a" in
+    --no-build) NO_BUILD=1 ;;
+    --*) ;;
+    *) if [ -z "$TOKEN" ]; then TOKEN="$a"; else VERSION_ARG="$a"; fi ;;
+  esac
+done
+REPO="asysurya/tagent"
+VERSION="${VERSION_ARG:-$(grep -oP "(?<=CURRENT_VERSION = ')[0-9][0-9a-zA-Z.]*" packages/core/src/version.ts)}"
+if [ -z "${TOKEN:-}" ]; then echo "usage: $0 <token> [version] [--no-build]" >&2; exit 1; fi
+if [ -z "${VERSION:-}" ]; then echo "[release] cannot determine version" >&2; exit 1; fi
+OUT="dist/tagent-v$VERSION"
+
+echo "[release] tagent v$VERSION → $OUT"
+
+# ---------------------------------------------------------------- 1. build --
+if [ "$NO_BUILD" -eq 1 ]; then
+  echo "[release] --no-build: using existing binaries in $OUT"
+  ls -lh "$OUT"
+else
+  bash scripts/build-binaries.sh "$VERSION"
+fi
+
+# ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
 ## v__VER__ — Agent test mode: `tagent test`, the QA agent
 
