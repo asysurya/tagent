@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import type { AgentMode } from './types'
 import { GLOBAL_DIR } from './config'
 import { parseFrontMatter } from './util'
 
@@ -27,7 +28,7 @@ export interface SubagentDef {
   model?: string
   /** tool-name whitelist — undefined inherits the full toolset */
   tools?: string[]
-  mode: 'build' | 'plan'
+  mode: AgentMode
   maxTurns: number
   systemPrompt: string
   source: 'workspace' | 'global'

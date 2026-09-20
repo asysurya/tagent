@@ -25,7 +25,7 @@ export interface NativeToolCall {
 }
 
 export interface CompletionRequest {
-  messages: { role: Role; content: string }[]
+  messages: WireMessage[]
   model: string
   signal?: AbortSignal
   maxTokens?: number
@@ -37,6 +37,14 @@ export interface CompletionRequest {
    * consumer can replace state idempotently. Called ~every few tokens.
    */
   onText?: (fullSoFar: string) => void
+}
+
+/** Wire-level message — text plus optional image parts (base64, no data URLs). */
+export interface WireMessage {
+  role: Role
+  content: string
+  /** base64 image parts — sent to models that accept image input, dropped otherwise */
+  images?: { data: string; mediaType: string }[]
 }
 
 export interface CompletionResult {
@@ -57,6 +65,27 @@ export interface ProviderAdapter {
   complete(req: CompletionRequest): Promise<string>
   /** streaming completion; returns final text + any native tool calls */
   completeStream(req: CompletionRequest): Promise<CompletionResult>
+}
+
+/* ------------------------------------------------------------------ */
+/* image input (screenshots) — visual test verification                  */
+/* ------------------------------------------------------------------ */
+
+/** Model ids that accept image input — best-effort heuristic for discovery-cached models. */
+const MULTIMODAL_RE =
+  /gpt-4o|gpt-4\.1|gpt-4-turbo|gpt-5|\bo3\b|o4-|chatgpt|claude-3|claude-4|claude-5|claude-opus|claude-sonnet|claude-haiku|gemini|glm-4v|glm-4\.\dv|qwen[^ ]*vl|qwen2-vl|-vl-|vision|pixtral|grok-4|grok[^ ]*vision|llama[^ ]*vision|step-1v|internvl|minicpm-v|moondream|llava|granite-vision|mistral-small-latest/i
+
+/** Does this adapter+model accept image parts? (registry seed flag, or id heuristic) */
+export function acceptsImages(adapter: ProviderAdapter, model: string): boolean {
+  const seed = adapter.models.find((m) => m.id === model)
+  if (seed?.vision === true) return true
+  if (seed?.vision === false) return false
+  return MULTIMODAL_RE.test(model)
+}
+
+/** Strip image parts from a request (for adapters that cannot send them). */
+export function withoutImages(req: CompletionRequest): CompletionRequest {
+  return { ...req, messages: req.messages.map((m) => ({ role: m.role, content: m.content })) }
 }
 
 /* ------------------------------------------------------------------ */
@@ -96,6 +125,48 @@ function truncBody(s: string): string {
 }
 
 /* ------------------------------------------------------------------ */
+/* message → wire mapping per protocol (text-only or with image parts)  */
+/* ------------------------------------------------------------------ */
+
+/** OpenAI chat-completions content blocks (image_url with base64 data URL). */
+function openaiMessage(m: WireMessage): { role: Role; content: unknown } {
+  if (!m.images?.length) return { role: m.role, content: m.content }
+  return {
+    role: m.role,
+    content: [
+      { type: 'text', text: m.content },
+      ...m.images.map((i) => ({
+        type: 'image_url',
+        image_url: { url: `data:${i.mediaType};base64,${i.data}` },
+      })),
+    ],
+  }
+}
+
+/** Anthropic Messages API — image blocks must come BEFORE the text block. */
+function anthropicMessage(m: WireMessage): { role: 'user' | 'assistant'; content: unknown } {
+  if (!m.images?.length) return { role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }
+  return {
+    role: m.role === 'assistant' ? 'assistant' : 'user',
+    content: [
+      ...m.images.map((i) => ({
+        type: 'image',
+        source: { type: 'base64', media_type: i.mediaType, data: i.data },
+      })),
+      { type: 'text', text: m.content },
+    ],
+  }
+}
+
+/** Google Gemini — inlineData parts before the text part. */
+function googleMessage(m: WireMessage): { role: 'model' | 'user'; parts: unknown[] } {
+  const parts: unknown[] = []
+  for (const i of m.images ?? []) parts.push({ inlineData: { mimeType: i.mediaType, data: i.data } })
+  parts.push({ text: m.content })
+  return { role: m.role === 'assistant' ? 'model' : 'user', parts }
+}
+
+/* ------------------------------------------------------------------ */
 /* OpenAI-compatible — OpenAI, OpenRouter, Groq, Ollama, LM Studio, …     */
 /* ------------------------------------------------------------------ */
 
@@ -124,7 +195,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     }
     const base = (tools?: NativeToolDef[], usage?: boolean) => ({
       model: req.model,
-      messages: req.messages,
+      messages: req.messages.map(openaiMessage),
       max_tokens: req.maxTokens ?? 8192,
       temperature: req.temperature ?? 0.2,
       stream: true,
@@ -217,7 +288,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     const system = req.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n')
     const rest = req.messages
       .filter((m) => m.role !== 'system')
-      .map((m) => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }))
+      .map(anthropicMessage)
     return {
       model: req.model,
       // prompt caching: mark the system block ephemeral-cacheable → the big
@@ -338,7 +409,7 @@ export class GoogleAdapter implements ProviderAdapter {
     const system = req.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n')
     const rest = req.messages
       .filter((m) => m.role !== 'system')
-      .map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }))
+      .map(googleMessage)
     const body = {
       systemInstruction: system ? { parts: [{ text: system }] } : undefined,
       contents: rest,
@@ -439,6 +510,19 @@ export class ZaiAdapter implements ProviderAdapter {
     return this.zai
   }
 
+  /** sandbox endpoints rate-limit bursts — back off and retry (8s, 16s). */
+  private async with429Retry<T>(fn: () => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await fn()
+      } catch (e) {
+        const msg = (e as Error).message ?? ''
+        if (attempt >= 2 || !/status 429|Too many requests/i.test(msg)) throw e
+        await new Promise((r) => setTimeout(r, 8_000 * (attempt + 1)))
+      }
+    }
+  }
+
   async complete(req: CompletionRequest): Promise<string> {
     const r = await this.completeStream(req)
     return r.text
@@ -452,11 +536,13 @@ export class ZaiAdapter implements ProviderAdapter {
     )
     // Try real token streaming first; some SDK builds may not support it.
     try {
-      const stream = await zai.chat.completions.create({
-        messages,
-        thinking: { type: 'disabled' },
-        stream: true,
-      })
+      const stream = await this.with429Retry(() =>
+        zai.chat.completions.create({
+          messages,
+          thinking: { type: 'disabled' },
+          stream: true,
+        }),
+      )
       let text = ''
       for await (const chunk of stream) {
         const delta: string | undefined = chunk?.choices?.[0]?.delta?.content ?? chunk?.choices?.[0]?.message?.content
@@ -469,10 +555,12 @@ export class ZaiAdapter implements ProviderAdapter {
     } catch {
       /* fall through to the non-streaming path */
     }
-    const completion = await zai.chat.completions.create({
-      messages,
-      thinking: { type: 'disabled' },
-    })
+    const completion = await this.with429Retry(() =>
+      zai.chat.completions.create({
+        messages,
+        thinking: { type: 'disabled' },
+      }),
+    )
     const text = completion?.choices?.[0]?.message?.content
     if (typeof text !== 'string' || !text) throw new Error('Z.ai: empty completion')
     req.onText?.(text)

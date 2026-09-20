@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import path from 'node:path'
 import type {
   AgentEvents,
   AgentMode,
@@ -13,13 +14,13 @@ import type {
   ToolContext,
   ToolDefinition,
 } from './types'
-import { getAdapter, type NativeToolDef } from './providers'
+import { getAdapter, acceptsImages, type NativeToolDef, type WireMessage } from './providers'
 import { parseModelRef } from './providers/registry'
 import { buildSystemPrompt } from './system-prompt'
 import { createCheckpoint, shouldCheckpoint } from './checkpoints'
 import { jailPath, trunc, uid } from './util'
 import { fileStateFor } from './cache'
-import { buildToolset } from './tools'
+import { buildToolset, TEST_MODE_TOOLS, ALL_TOOLS } from './tools'
 import { findSubagent, listSubagents } from './subagents'
 import { diagnosticsCommand, renderDiagnosticsBlock, runDiagnostics } from './diagnostics'
 import { completeWithFallback, fallbackTail, type ResolvedChainEntry } from './fallback'
@@ -97,7 +98,12 @@ export class AgentLoop {
 
   constructor(private opts: AgentLoopOptions) {
     this.tools = [
-      ...buildToolset({ readOnly: opts.readOnly, depth: opts.depth ?? 0, config: opts.config }),
+      ...buildToolset({
+        readOnly: opts.readOnly,
+        depth: opts.depth ?? 0,
+        config: opts.config,
+        ...(opts.mode === 'test' ? { mode: 'test' as const } : {}),
+      }),
       ...(opts.readOnly ? [] : (opts.extraTools ?? [])),
     ].filter((t) => !opts.toolsFilter || opts.toolsFilter.includes(t.name))
     this.chain = [
@@ -265,12 +271,25 @@ export class AgentLoop {
           try {
             const tool = this.tools.find((t) => t.name === action.tool)
             if (!tool) {
+              const known = ALL_TOOLS.some((t) => t.name === action.tool)
               throw new Error(
-                `Unknown tool "${action.tool}". Available: ${this.tools.map((t) => t.name).join(', ')}`,
+                known
+                  ? `Tool "${action.tool}" is not available in ${this.opts.mode} mode${
+                      this.opts.mode === 'test'
+                        ? ' — test mode verifies the project without modifying it. Switch to build mode to fix issues.'
+                        : '. Switch to build mode to use it.'
+                    }`
+                  : `Unknown tool "${action.tool}". Available: ${this.tools.map((t) => t.name).join(', ')}`,
               )
             }
             if (this.opts.mode === 'plan' && !isReadOnlyTool(tool.name)) {
               throw new Error('Plan mode is read-only — switch to build mode to modify files.')
+            }
+            if (this.opts.mode === 'test' && !TEST_MODE_TOOLS.has(tool.name)) {
+              throw new Error(
+                'Test mode is read-only — it verifies the project without modifying it (the only write is test_report). ' +
+                  'Switch to build mode to fix issues.',
+              )
             }
             // permission gate — ask the human when the rule says so
             this.opts.events.onStatus?.('waiting-permission', tool.name)
@@ -324,12 +343,13 @@ export class AgentLoop {
         }
 
         // feed results back as the next user turn
+        const { content: fedText, images } = this.collectImages(results.join('\n\n'), this.opts.session.workspaceId)
         const resultMsg: ChatMessage = {
           id: uid(),
           role: 'user',
-          content: `TOOL RESULTS:\n\n${results.join('\n\n')}\n\nContinue. If the task is complete, reply with a summary and NO action blocks.`,
+          content: `TOOL RESULTS:\n\n${fedText}\n\nContinue. If the task is complete, reply with a summary and NO action blocks.`,
           createdAt: Date.now(),
-          meta: { toolResults: true },
+          meta: { toolResults: true, ...(images.length ? { images } : {}) },
         }
         session.messages.push(resultMsg)
       }
@@ -459,8 +479,40 @@ export class AgentLoop {
     return report
   }
 
-  private renderMessages(system: string): { role: 'system' | 'user' | 'assistant'; content: string }[] {
-    const out: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
+  /**
+   * Screenshot wiring — [IMAGE:<path>] markers from tool output become image
+   * parts on the tool-results message (when the model can see images) or a
+   * plain path reference (when it cannot). Session stores only the paths;
+   * base64 is read lazily at request time.
+   */
+  private collectImages(
+    text: string,
+    workspaceRoot: string,
+  ): { content: string; images: string[] } {
+    const markerRe = /\[IMAGE:([^\]]+)\]/g
+    const paths = [...new Set([...text.matchAll(markerRe)].map((m) => m[1]))].slice(0, 4)
+    if (!paths.length) return { content: text, images: [] }
+
+    const canSee = acceptsImages(this.opts.provider, this.opts.model)
+    if (!canSee) {
+      // keep the reference readable — the model can still cite the path
+      return { content: text.replace(markerRe, (_m, p) => `(screenshot at ${path.relative(workspaceRoot, p)})`), images: [] }
+    }
+    const keep: string[] = []
+    for (const p of paths) {
+      try {
+        if (fs.statSync(p).size > 2_500_000) continue // ~1.9MB binary cap — skip monsters
+        keep.push(p)
+      } catch { /* deleted — skip */ }
+    }
+    if (!keep.length) {
+      return { content: text.replace(markerRe, (_m, p) => `(screenshot at ${p})`), images: [] }
+    }
+    return { content: text.replace(markerRe, ''), images: keep }
+  }
+
+  private renderMessages(system: string): WireMessage[] {
+    const out: WireMessage[] = [
       { role: 'system', content: system },
     ]
     for (const m of this.opts.session.messages) {
@@ -473,6 +525,33 @@ export class AgentLoop {
         out.push({ role: 'user', content: m.content })
       } else {
         out.push({ role: 'user', content: m.content })
+      }
+    }
+
+    // ---- visual context: attach screenshots to the newest tool results -----
+    // base64 is read at request time (session files only store paths); keep
+    // the last 2 image-bearing messages, max 4 images total — older ones
+    // degrade to text references. Positional: out[i + 1] ↔ session.messages[i].
+    if (acceptsImages(this.opts.provider, this.opts.model)) {
+      let budget = 4
+      let msgsUsed = 0
+      for (let i = this.opts.session.messages.length - 1; i >= 0 && budget > 0 && msgsUsed < 2; i--) {
+        const m = this.opts.session.messages[i]
+        if (m.role !== 'user' || !Array.isArray(m.meta?.images) || !(m.meta.images as string[]).length) continue
+        msgsUsed++
+        const wireIdx = i + 1 // +1 — out[0] is the system message
+        if (wireIdx >= out.length) continue
+        const parts: { data: string; mediaType: string }[] = []
+        for (const p of m.meta.images as string[]) {
+          if (budget <= 0) break
+          try {
+            const buf = fs.readFileSync(p)
+            if (buf.byteLength > 1_900_000) continue
+            parts.push({ data: buf.toString('base64'), mediaType: 'image/png' })
+            budget--
+          } catch { /* unreadable — skip */ }
+        }
+        if (parts.length) out[wireIdx] = { ...out[wireIdx], images: parts }
       }
     }
 

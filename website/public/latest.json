@@ -1,6 +1,6 @@
 {
-  "version": "0.14.0",
+  "version": "0.15.0",
   "date": "2026-09-20",
-  "notes": "The TUI is rebuilt on the Claude Code / opencode model: an INLINE app — no alternate screen — so the transcript lives in your terminal’s own scrollback and scrolling works everywhere (mouse wheel, touch on a phone, shift+pgup, tmux copy mode). A small sticky region redraws at the bottom: live stream tail, status, the rounded editor box, and a hint row with model · tokens · ⎇ repo. Plus: `tagent auth` gets web connect (login in the browser, nothing typed in the terminal), and `tagent sync` becomes multi-device safe (fetch + rebase before push). The Go native edition is retired — the main binaries are the only build now.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.14.0"
+  "notes": "A third agent mode joins build and plan: TEST. `tagent test` (or `/test` in the TUI, or the Test button in the GUI) turns the agent into a QA engineer for your project — it boots the app itself, clicks through it with a real browser, checks responsiveness and typography, and writes TEST-REPORT.md with a pass/warn/fail verdict. Screenshots are attached to the model’s context when the model can see images, so the agent JUDGES the UI instead of guessing. Also fixes a real bug in the old browser tool (it could never launch a page at all).",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.15.0"
 }

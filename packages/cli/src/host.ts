@@ -65,6 +65,7 @@ import {
   type TagentConfig,
   type ToolCallRecord,
   type CustomProviderConfig,
+  type AgentMode,
 } from '@tagent/core'
 
 import { walkTree, readWorkspaceFile, saveWorkspaceFile } from './files'
@@ -230,7 +231,7 @@ export class AgentHost {
   /* sessions                                                            */
   /* ------------------------------------------------------------------ */
 
-  async ensureSession(mode: 'build' | 'plan' = 'build'): Promise<SessionData> {
+  async ensureSession(mode: AgentMode = 'build'): Promise<SessionData> {
     if (this.session) return this.session
     this.session = this.sessions.create('New session', this.cfg.defaultModel, mode)
     this.bus.emit('session:active', this.session)
@@ -238,7 +239,7 @@ export class AgentHost {
     return this.session
   }
 
-  newSession(mode: 'build' | 'plan' = 'build'): SessionData {
+  newSession(mode: AgentMode = 'build'): SessionData {
     this.session = this.sessions.create('New session', this.cfg.defaultModel, mode)
     this.bus.emit('session:active', this.session)
     this.bus.emit('session:list', this.sessions.list())
@@ -270,7 +271,7 @@ export class AgentHost {
     return s
   }
 
-  setSessionMode(mode: 'build' | 'plan') {
+  setSessionMode(mode: AgentMode) {
     if (this.session) {
       this.session.mode = mode ?? 'build'
       this.sessions.save(this.session)
@@ -294,7 +295,7 @@ export class AgentHost {
   /* ------------------------------------------------------------------ */
 
   /** send a message to the agent; resolves when the run finishes */
-  async chatSend(text: string, mode?: 'build' | 'plan'): Promise<LoopSummary> {
+  async chatSend(text: string, mode?: AgentMode): Promise<LoopSummary> {
     let body = String(text ?? '').trim()
     if (!body) throw new Error('empty message')
     const s = await this.ensureSession(mode ?? this.session?.mode ?? 'build')

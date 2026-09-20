@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import type { SessionData, SessionMeta } from './types'
+import type { AgentMode, SessionData, SessionMeta } from './types'
 import { ensureDir, uid } from './util'
 
 /**
@@ -21,7 +21,7 @@ export class SessionStore {
     return path.join(this.dir, `${safe}.json`)
   }
 
-  create(title: string, model: string, mode: 'build' | 'plan'): SessionData {
+  create(title: string, model: string, mode: AgentMode): SessionData {
     const session: SessionData = {
       id: uid(),
       workspaceId: this.workspaceId,

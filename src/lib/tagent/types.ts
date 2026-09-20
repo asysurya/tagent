@@ -57,7 +57,7 @@ export interface RelayEntry {
   viewers?: number
 }
 
-export type AgentMode = 'build' | 'plan'
+export type AgentMode = 'build' | 'plan' | 'test'
 
 export interface ModelInfo {
   id: string
@@ -95,7 +95,7 @@ export interface SanitizedConfig {
   defaultModel: string
   providers: ProviderInfo[]
   permissions: { defaultMode: 'ask' | 'allow'; tools: Record<string, 'ask' | 'allow' | 'deny'> }
-  tools: { bash: boolean; browser: boolean }
+  tools: { bash: boolean; browser: boolean; serve?: boolean }
   github: { connected: boolean; login: string | null; repo: string | null }
   mega: { enabled: boolean; email: string | null }
   autoCheckpoint: boolean

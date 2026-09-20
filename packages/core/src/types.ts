@@ -54,7 +54,7 @@ export interface SessionData extends SessionMeta {
   todos: TodoItem[]
 }
 
-export type AgentMode = 'build' | 'plan'
+export type AgentMode = 'build' | 'plan' | 'test'
 
 /** MCP server definition (stdio transport) — see core/src/mcp.ts */
 export interface McpServerConfig {
@@ -76,6 +76,8 @@ export interface ModelInfo {
   label: string
   provider: string
   description?: string
+  /** accepts image input (screenshots) — enables visual test verification */
+  vision?: boolean
 }
 
 export interface CustomProviderConfig {
@@ -235,6 +237,8 @@ export interface TagentConfig {
   tools: {
     bash: boolean
     browser: boolean
+    /** background dev-server manager (`tagent test` core) — default true */
+    serve?: boolean
   }
   github?: {
     clientId?: string

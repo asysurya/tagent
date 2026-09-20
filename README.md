@@ -56,7 +56,8 @@ process when you want a browser. Same engine, same sessions, same permissions.
 | 💾 **Checkpoints** | Auto-snapshot before writes; one-click `/undo` |
 | 🧠 **Memory** | `AGENTS.md` (global + workspace) + durable facts, injected into every system prompt |
 | 📚 **Skills** | `SKILL.md` playbooks with progressive disclosure (name+description in prompt, full body on demand) |
-| 🌐 **Web tools** | `web_fetch`, `ddg_search` (no API key), `browser` (Playwright-based e2e signal — optional) |
+| 🌐 **Web tools** | `web_fetch`, `ddg_search` (no API key), `browser` (Playwright — full e2e signal: click/type/screenshot/audit) |
+| 🧪 **Test mode** | `tagent test` — QA agent: serves the project, clicks through it with a real browser, screenshots + audits responsive/typography/contrast, writes `TEST-REPORT.md` (vision models see the screenshots) |
 | 🗄️ **Storage adapters** | Local today, MEGA.nz (E2E-encrypted snapshots & memory) implemented as an experimental adapter |
 | 🐙 **GitHub** | PAT, web-connect or device-flow auth (`tagent auth`) → auto private repo + one-click workspace push · multi-device safe (fetch+rebase before push) |
 | 📋 **Worklog + todos** | Live todo list + timestamped WORKLOG.md journal the agent keeps as it works |
@@ -143,6 +144,8 @@ tagent start [path]        # the TUI — primary interface
            --port --host --no-open --gui <dir>
 tagent web [path]          # daemon + web GUI only (no TUI) — phone/remote
 tagent run [path] "msg"    # one-shot run, prints the result (--json too)
+tagent test [path]         # TEST MODE — the QA agent (serve + browse + report)
+           --url http://…  # verify an already-running app instead
 tagent auth                # GitHub login wizard (web connect / PAT)
            --web           # browser page login — no typing in the terminal
 tagent sync [message]      # project → GitHub (commit + push, multi-device safe)
@@ -162,6 +165,37 @@ tagent version · --check-update · help
 Inside the TUI everything is a slash command — `/help` lists them all (sessions,
 model switching, caveman, worklog, share, relay, timeline, permissions, files,
 grep, auth, push, checkpoints, memory, skills…). Plain text talks to the agent.
+
+### 🧪 Test mode — the QA agent
+
+`tagent test` (or `/test` in the TUI, or the Test button in the GUI) turns the
+agent into a QA engineer for the project in the workspace:
+
+1. **serve** — auto-detects the dev command (`package.json` scripts, package
+   manager from the lockfile) and boots it in the background, then waits for
+   the port to answer. Pass `--url` (or `/test <url>`) to test an app that is
+   already running.
+2. **browser** — drives a real Chromium via Playwright: opens pages, clicks
+   buttons, fills inputs, submits forms. Every interaction returns the new page
+   state (ARIA snapshot) plus any console/network errors — the agent SEES the
+   result of what it did.
+3. **responsiveness + visuals** — screenshots at mobile (390×844), tablet
+   (768×1024) and desktop (1280×800), plus a deterministic audit: horizontal
+   overflow (with the offending elements), typography map and <12px text, tap
+   targets <24px, images without alt, missing viewport meta, WCAG contrast
+   sampling.
+4. **vision** — screenshots are attached to the model's context when the
+   current model accepts image input (GPT-4o/5, Claude, Gemini, GLM-4V, Qwen-VL,
+   …), so the agent can JUDGE the UI, not just measure it. Text-only models get
+   the DOM audit instead.
+5. **report** — one `test_report` call writes `TEST-REPORT.md` at the workspace
+   root (verdict pass / warn / fail, feature checklist with evidence, issues
+   with repro steps, per-viewport findings) plus a timestamped copy under
+   `.tagent/test/`.
+
+Test mode is read-only for source files — it verifies, build mode fixes. The
+only write it can do is its own report. Requires Playwright (one-time, in your
+project): `bun add playwright && bunx playwright install chromium`.
 
 ### 📡 Relay mode — share a session live
 

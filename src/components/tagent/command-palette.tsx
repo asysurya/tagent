@@ -4,7 +4,7 @@ import { useEffect } from 'react'
 import {
   CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator,
 } from '@/components/ui/command'
-import { Bone, Bot, Brain, Files, ListChecks, RotateCcw, ScrollText, Settings, Sparkles, Terminal, Plus, BookOpen } from 'lucide-react'
+import { Bone, Bot, Brain, Files, FlaskConical, ListChecks, RotateCcw, ScrollText, Settings, Sparkles, Terminal, Plus, BookOpen } from 'lucide-react'
 import { useTagent } from '@/lib/tagent/store'
 
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
@@ -45,6 +45,9 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           </CommandItem>
           <CommandItem className="text-zinc-300" onSelect={() => run(() => void st.setMode('build'))}>
             <Sparkles className="size-4" /> Switch to build mode
+          </CommandItem>
+          <CommandItem className="text-zinc-300" onSelect={() => run(() => void st.setMode('test'))}>
+            <FlaskConical className="size-4" /> Switch to test mode (QA agent)
           </CommandItem>
           <CommandItem className="text-zinc-300" onSelect={() => run(() => void st.undo())}>
             <RotateCcw className="size-4" /> Undo last checkpoint

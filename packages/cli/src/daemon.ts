@@ -11,6 +11,7 @@ import {
   workspaceHasWork, isLinkRefused, defaultRepoName, ensureRepoDetailed,
   getCredential, readGlobalConfig,
   type RelayEntry,
+  type AgentMode,
 } from '@tagent/core'
 
 import { AgentHost } from './host'
@@ -275,7 +276,7 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     })
 
     /* ----------------------------- sessions ---------------------------- */
-    socket.on('session:new', (p: { mode?: 'build' | 'plan' }, cb?: (s: unknown) => void) => {
+    socket.on('session:new', (p: { mode?: AgentMode }, cb?: (s: unknown) => void) => {
       cb?.(host.newSession(p?.mode ?? 'build'))
     })
 
@@ -292,7 +293,7 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       cb?.(host.renameSession(p?.id ?? '', p?.title ?? '') ?? null)
     })
 
-    socket.on('session:mode', (p: { mode: 'build' | 'plan' }) => {
+    socket.on('session:mode', (p: { mode: AgentMode }) => {
       host.setSessionMode(p?.mode ?? 'build')
     })
 
@@ -341,7 +342,7 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     })
 
     /* ------------------------------- chat ------------------------------ */
-    socket.on('chat:send', (p: { text: string; mode?: 'build' | 'plan' }, cb?: (ok: boolean) => void) => {
+    socket.on('chat:send', (p: { text: string; mode?: AgentMode }, cb?: (ok: boolean) => void) => {
       const text = String(p?.text ?? '').trim()
       if (!text) return cb?.(false)
       cb?.(true)

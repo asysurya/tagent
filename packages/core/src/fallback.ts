@@ -1,5 +1,12 @@
 import type { FallbackEntry, TagentConfig } from './types'
-import { getAdapter, type CompletionRequest, type CompletionResult, type ProviderAdapter } from './providers'
+import {
+  acceptsImages,
+  getAdapter,
+  withoutImages,
+  type CompletionRequest,
+  type CompletionResult,
+  type ProviderAdapter,
+} from './providers'
 
 /**
  * Provider fallback — an ordered failover chain.
@@ -73,7 +80,12 @@ export async function completeWithFallback(
   for (let i = 0; i < chain.length; i++) {
     const entry = chain[i]
     try {
-      return await entry.adapter.completeStream({ ...req, model: entry.model })
+      // a fallback model without image input must not receive screenshot
+      // parts — strip them so failover stays alive
+      const effective = req.messages.some((m) => m.images?.length) && !acceptsImages(entry.adapter, entry.model)
+        ? withoutImages({ ...req, model: entry.model })
+        : { ...req, model: entry.model }
+      return await entry.adapter.completeStream(effective)
     } catch (err) {
       if (req.signal?.aborted) throw err
       lastErr = err

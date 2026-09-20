@@ -211,6 +211,13 @@ function printHelp() {
             daemon + web GUI only (no TUI) — phone / remote use
     tagent run [path] "prompt" [--json]
             one-shot: run the agent on a prompt, print the result, exit
+    tagent test [path] [--url http://localhost:3000]
+            QA mode — the agent serves the project, clicks through it
+            with a real browser (buttons, inputs, forms), screenshots +
+            audits responsive (mobile/tablet/desktop), typography and
+            contrast, then writes TEST-REPORT.md. --url skips the serve
+            step and tests a running app instead. needs playwright:
+            bun add playwright && bunx playwright install chromium
     tagent auth [--web]
             GitHub login — in a terminal you get a picker:
             web connect (a browser page opens, paste the token there)
@@ -280,6 +287,7 @@ async function init(): Promise<void> {
   switch (command) {
     case 'uninstall': await mainUninstall(); break // before start — it may delete the repo the TUI would run in
     case 'start': await mainStart(); break
+    case 'test': await mainStart(plain[1], { mode: 'test', url: flag<string>('url') }); break
     case 'web': await mainWeb(); break
     case 'run': await mainRun(); break
     case 'auth': await mainAuth(); break
@@ -313,8 +321,8 @@ async function init(): Promise<void> {
 /* tagent start — the TUI                                              */
 /* ------------------------------------------------------------------ */
 
-async function mainStart(dirArg?: string) {
-  const root = resolveWorkspace(dirArg ?? (command === 'start' ? plain[1] : plain[0]))
+async function mainStart(dirArg?: string, boot?: { mode?: 'test'; url?: string | true }) {
+  const root = resolveWorkspace(dirArg ?? (command === 'start' ? plain[1] : command === 'test' ? plain[1] : plain[0]))
   fs.mkdirSync(GLOBAL_DIR, { recursive: true })
 
   const cfg = loadConfig(root)
@@ -353,10 +361,27 @@ async function mainStart(dirArg?: string) {
   try {
     if (!process.stdin.isTTY) {
       // piped input: `echo "fix X" | tagent start`
+      if (boot?.mode === 'test') host.ensureSession('test')
       await runPiped(host)
     } else if (appCapable() && !has('--classic')) {
       // full-screen app TUI (opencode-style) — default on capable terminals
-      await runApp(host, { workspaceRoot: root, webUrl })
+      const target = typeof boot?.url === 'string' ? boot.url : undefined
+      await runApp(host, {
+        workspaceRoot: root,
+        webUrl,
+        ...(boot?.mode === 'test'
+          ? {
+              initialMode: 'test' as const,
+              ...(target
+                ? {
+                    autoSend:
+                      `Verify the app running at ${target} — test every feature you can reach, check ` +
+                      'responsiveness (mobile/tablet/desktop) and visuals, then write the report.',
+                  }
+                : {}),
+            }
+          : {}),
+      })
     } else {
       // classic readline TUI — small terminals or --classic
       const tui = new Tui(host, { workspaceRoot: root, webUrl })
@@ -847,6 +872,7 @@ const CONFIG_KEYS: Record<string, { path: string[]; type: CfgType; global?: bool
   model: { path: ['defaultModel'], type: 'string', desc: 'default model id' },
   bash: { path: ['tools', 'bash'], type: 'bool', desc: 'bash tool available to the agent' },
   browser: { path: ['tools', 'browser'], type: 'bool', desc: 'browser tool available to the agent' },
+  serve: { path: ['tools', 'serve'], type: 'bool', desc: 'dev-server tool available to the agent (test mode)' },
   autoCheckpoint: { path: ['autoCheckpoint'], type: 'bool', desc: 'snapshot before risky writes' },
 }
 

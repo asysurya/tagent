@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Check, ChevronDown, ChevronUp, CloudUpload, ExternalLink, Eye, EyeOff, Github, Key, Loader2, LogOut, Plus, RefreshCw, Search, ShieldAlert, Terminal, Globe, Bot, Bone, ScrollText, Coins, MonitorSmartphone, Trash2, Plug, Puzzle, Power, FileCode2, Waypoints, Zap } from 'lucide-react'
+import { Check, ChevronDown, ChevronUp, CloudUpload, ExternalLink, Eye, EyeOff, Github, Key, Loader2, LogOut, Play, Plus, RefreshCw, Search, ShieldAlert, Terminal, Globe, Bot, Bone, ScrollText, Coins, MonitorSmartphone, Trash2, Plug, Puzzle, Power, FileCode2, Waypoints, Zap } from 'lucide-react'
 import { useTagent } from '@/lib/tagent/store'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -709,6 +709,12 @@ function PermissionsTab() {
             <Globe className="size-4 text-orange-400" /> browser tool <span className="text-[10px] text-zinc-600">(needs playwright)</span>
           </div>
           <Switch checked={config.tools.browser} onCheckedChange={(v) => void setToolEnabled('browser', v)} />
+        </div>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sm text-zinc-200">
+            <Play className="size-4 text-orange-400" /> serve tool <span className="text-[10px] text-zinc-600">(dev server for test mode)</span>
+          </div>
+          <Switch checked={config.tools.serve !== false} onCheckedChange={(v) => void setToolEnabled('serve', v)} />
         </div>
       </div>
     </div>

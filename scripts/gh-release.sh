@@ -1,109 +1,63 @@
-#!/usr/bin/env bash
-# Creates the GitHub release for the current version, cross-compiles the
-# single-file binaries and uploads them (plus SHA256SUMS) as release assets.
-#
-# Usage: scripts/gh-release.sh <token> [version] [--no-build]
-#   token    GitHub PAT with repo scope
-#   version  defaults to the version in packages/core/src/version.ts
-#   --no-build  skip compilation (use existing dist/tagent-v<version>/ binaries)
-set -euo pipefail
-cd "$(dirname "$0")/.."
-TOKEN=""
-VERSION_ARG=""
-NO_BUILD=0
-for a in "$@"; do
-  case "$a" in
-    --no-build) NO_BUILD=1 ;;
-    --*) ;;
-    *) if [ -z "$TOKEN" ]; then TOKEN="$a"; else VERSION_ARG="$a"; fi ;;
-  esac
-done
-REPO="asysurya/tagent"
-VERSION="${VERSION_ARG:-$(grep -oP "(?<=CURRENT_VERSION = ')[0-9][0-9a-zA-Z.]*" packages/core/src/version.ts)}"
-if [ -z "${TOKEN:-}" ]; then echo "usage: $0 <token> [version] [--no-build]" >&2; exit 1; fi
-if [ -z "${VERSION:-}" ]; then echo "[release] cannot determine version" >&2; exit 1; fi
-OUT="dist/tagent-v$VERSION"
-
-echo "[release] tagent v$VERSION → $OUT"
-
-# ---------------------------------------------------------------- 1. build --
-if [ "$NO_BUILD" -eq 1 ]; then
-  echo "[release] --no-build: using existing binaries in $OUT"
-  ls -lh "$OUT"
-else
-  bash scripts/build-binaries.sh "$VERSION"
-fi
-
-# ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — TUI rebuilt Claude Code-style, web connect login & multi-device sync
+## v__VER__ — Agent test mode: `tagent test`, the QA agent
 
-The TUI is rebuilt on the Claude Code / opencode model: an **inline app — no
-alternate screen**. The transcript lives in your terminal's own scrollback,
-so scrolling works everywhere (mouse wheel, touch on a phone, shift+pgup,
-tmux copy mode), and a small sticky region redraws at the bottom: live
-stream tail → status row → the rounded editor box → a hint row with
-model · tokens · ⎇ repo.
+A third agent mode joins build and plan: **TEST**. `tagent test` (or `/test`
+in the TUI, or the Test button in the GUI) turns the agent into a QA engineer
+for the project in your workspace — it boots the app itself, clicks through
+it with a real browser, checks responsiveness and typography, and writes
+`TEST-REPORT.md` with a pass/warn/fail verdict. And when your model accepts
+image input, the screenshots ride along in its context — the agent JUDGES
+the UI instead of guessing.
 
-### The new TUI
+### The QA pipeline
 
-- **inline rendering** (Claude Code's model, Ink-style): completed lines
-  flow into the scrollback and are never redrawn — native scrolling on every
-  device, including Termux/UserLAnd where there is no PageUp
-- the old full-screen alt-buffer app is gone: it killed native scrollback,
-  which is exactly why scrolling broke
-- Claude Code visual language: ✻ banner, bold ❯ user echo, ● assistant
-  bullets, ⎿ tree connectors for tool lines and results
-- streaming stays in the sticky region while the message arrives; the final
-  markdown render is flushed into the scrollback exactly once
-- `?` on an empty editor opens the shortcuts overlay (Claude Code parity);
-  ↑/↓ walk the input history; esc interrupts / clears; ctrl+x menu unchanged
-- fixed a real history bug: ↑ recalled the same entry forever
+- **serve** (new tool) — auto-detects the dev command from `package.json`
+  (dev > start > serve, package manager from the lockfile; a bare
+  `index.html` falls back to a static server), runs it in the background,
+  waits for the port to answer, and cleans it up when the session ends —
+  restart, status and logs included
+- **browser** (rebuilt) — drives real Chromium via Playwright: open pages,
+  click buttons, fill inputs, submit forms. Every interaction returns the
+  new page state as an ARIA snapshot plus any console/network errors, so the
+  agent SEES what its click did
+- **responsiveness** — viewport switching to mobile (390x844), tablet
+  (768x1024) and desktop (1280x800) with screenshots at each size
+- **deterministic UI audit** — horizontal overflow (offending elements
+  named), typography map with <12px text, skipped heading levels, tap
+  targets <24px on mobile, images without alt, missing viewport meta, WCAG
+  contrast sampling
+- **vision** — screenshots are attached to the model's context when the
+  model accepts image input (GPT-4o/5, Claude, Gemini, GLM-4V, Qwen-VL...);
+  text-only models get the audit data and readable screenshot paths instead
+- **test_report** — the one write test mode can do: `TEST-REPORT.md` at the
+  workspace root (verdict, feature checklist with evidence, reproducible
+  issues, per-viewport findings) plus a timestamped copy under
+  `.tagent/test/`
 
-### Web connect login
+### How you use it
 
-`tagent auth` now offers **web connect** — a one-time page opens in your
-browser, you create a token (the `repo` scope is pre-selected by the link)
-and paste it there; the CLI validates it against the GitHub API and prints
-your login. `tagent auth --web` jumps straight to it; pasting a PAT in the
-terminal and the device flow remain, and scripted pipes
-(`echo "$GH_TOKEN" | tagent auth`) are unchanged.
+- `tagent test` boots the TUI straight into QA mode
+- `tagent test --url http://localhost:3000` (or `/test <url>`) verifies an
+  already-running app — no serve step
+- one-time setup per project:
+  `bun add playwright && bunx playwright install chromium`
+- test mode is read-only for source files — it verifies and reports; switch
+  to build mode to fix what it found
 
-- a tiny HTTP server binds **127.0.0.1** (loopback only) and the browser
-  opens on a one-time secret URL
-- the CLI validates the token against the GitHub API and stores it exactly
-  like the paste flow (`~/.tagent/credentials.json`, chmod 600, never in
-  config.json and never in your repos)
-- loopback-only bind, random port, one-time 128-bit secret in the URL path,
-  Origin/Referer checked on submit, page served `no-store`, one-shot
-  endpoint — and the server dies right after the login
-- no `xdg-open`? The URL is printed — on UserLAnd the phone's own browser
-  reaches it (proot shares 127.0.0.1 with Android)
+### Fixes under the hood
 
-### Multi-device sync
-
-Clone a project on a second machine (`tagent clone <name>`), keep working
-on both, and `tagent sync` now **converges instead of colliding**:
-
-- every sync fetches and rebases the remote's main *before* pushing — the
-  raw git "fetch first" rejection is gone
-- edits to different files, or different regions of the same file, merge
-  automatically; history stays linear (no merge commits)
-- a sync with no local changes doubles as a pull
-- both devices change the same lines? The sync stops with a clear
-  "nothing was lost" error and names the recovery: `git pull --rebase`,
-  resolve, `tagent sync` again
-- two devices pushing at the same moment: the loser re-integrates the
-  winner and retries instead of failing
-- fixed a 0.13.x latent bug: syncing silently deleted the clone's upstream
-  tracking, which broke `git pull` in any project that had synced once
-
-### Native edition retired
-
-The Go port (`tagent-native-*`) is removed — the release ships the six
-Bun-compiled binaries only: one engine, one feature set, one set of release
-notes. It had fallen behind the main CLI (no MCP, plugins, relay, subagents
-or web GUI), and the repo loses `native/` and the Go 1.21 toolchain pin.
+- the old browser tool stored its page handle as a never-awaited promise —
+  `page.goto` was literally undefined; the state is now awaited once and
+  every action works (found by actually running it)
+- multi-image context discipline: max 4 screenshots on the 2 newest
+  tool-result messages, base64 read at request time (sessions store only
+  paths), oversized images degrade to text references
+- Z.ai adapter retries 429 rate-limits with backoff instead of dying mid-run
+- the fallback chain strips image parts per-adapter, so failover to a
+  text-only model survives
+- browser tool default flips to ON (it was dead weight before — now the
+  error message IS the install instruction; risk high + permission ask
+  still gate every action)
 
 ---
 
@@ -156,7 +110,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — TUI rebuilt Claude Code-style, web connect login & multi-device sync" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — Agent test mode: tagent test, the QA agent" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")

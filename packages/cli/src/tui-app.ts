@@ -64,6 +64,7 @@ import {
   type TodoItem,
   type ToolCallRecord,
   type UpdateInfo,
+  type AgentMode,
 } from '@tagent/core'
 
 import type { AgentHost } from './host'
@@ -571,14 +572,15 @@ type Overlay =
 
 const SLASH_COMMANDS: { name: string; desc: string }[] = [
   { name: 'help', desc: 'list every command' },
-  { name: 'new', desc: 'new session [plan|build]' },
+  { name: 'new', desc: 'new session [plan|build|test]' },
   { name: 'sessions', desc: 'list sessions' },
   { name: 'open', desc: 'open a session' },
   { name: 'delete', desc: 'delete session <id-prefix>' },
   { name: 'share', desc: 'export a session as HTML' },
   { name: 'relay', desc: 'live share [id|list|stop <code>]' },
   { name: 'timeline', desc: 'subagent runs of this session' },
-  { name: 'mode', desc: 'build ↔ plan' },
+  { name: 'mode', desc: 'build ↔ plan ↔ test' },
+  { name: 'test', desc: 'run test mode [url]' },
   { name: 'model', desc: 'pick a model [custom]' },
   { name: 'caveman', desc: 'terse replies [on|off]' },
   { name: 'worklog', desc: 'journal + todos [on|off]' },
@@ -618,7 +620,7 @@ const SLASH_COMMANDS: { name: string; desc: string }[] = [
 const HELP_ROWS: [string, string][] = [
   ['sessions · new [plan] · open <id> · delete <id>', 'session management'],
   ['share [id] · relay [id|list|stop <code>] · timeline', 'HTML export · live share · subagent runs'],
-  ['mode [plan|build] · model [p[:m]|custom]', 'planning vs build · pick llm · add your own endpoint'],
+  ['mode [plan|build|test] · test [url] · model [p[:m]|custom]', 'planning vs build vs QA · pick llm · add your own endpoint'],
   ['agents · mcp · plugins', 'custom subagents · MCP servers · plugin manager'],
   ['fallback [add <p> <m> [key]|rm <n>|clear]', 'provider failover chain'],
   ['diag [cmd|off|test]', 'auto-diagnostics gate (lint/typecheck loop)'],
@@ -662,6 +664,10 @@ export interface TuiAppOptions {
   updateCheck?: boolean
   /** injected streams (tests). defaults to process.stdin/stdout */
   io?: AppIO
+  /** boot mode override — `tagent test` boots straight into QA mode */
+  initialMode?: AgentMode
+  /** first message auto-sent after boot (e.g. the test target from --url) */
+  autoSend?: string
 }
 
 const EDITOR_PLACEHOLDER = 'Message tagent… (/ commands, @ files, ? shortcuts)'
@@ -752,7 +758,7 @@ export class TuiApp {
 
   /* header */
   private sessionTitle = 'New session'
-  private mode: 'build' | 'plan' = 'build'
+  private mode: AgentMode = 'build'
   private tokensIn = 0
   private tokensOut = 0
 
@@ -801,7 +807,16 @@ export class TuiApp {
       // the most recent session is one /open away — keep its todos loaded
       const sessions = this.host.listSessions()
       if (sessions.length > 0) this.host.loadSession(sessions[0].id)
+      // `tagent test` — boot straight into QA mode (optionally with a target)
+      if (this.opts.initialMode === 'test') {
+        this.host.setSessionMode('test')
+        this.printModeBanner('test')
+      }
       this.renderNow()
+      if (this.opts.autoSend) {
+        const text = this.opts.autoSend
+        setTimeout(() => void this.send(text), 120)
+      }
     } catch (e) {
       this.destroy()
       throw e
@@ -1927,7 +1942,7 @@ export class TuiApp {
         return
       }
       case 'mode': {
-        const next = this.mode === 'plan' ? 'build' : 'plan'
+        const next: AgentMode = this.mode === 'build' ? 'plan' : this.mode === 'plan' ? 'test' : 'build'
         this.host.setSessionMode(next)
         this.printModeBanner(next)
         return
@@ -1987,12 +2002,14 @@ export class TuiApp {
       [
         { label: 'build', hint: 'the agent can write files & run commands', value: 'build' as const },
         { label: 'plan', hint: 'read-only — interview → plan → PRD approval', value: 'plan' as const },
+        { label: 'test', hint: 'QA — run the app, click through it, report', value: 'test' as const },
       ],
       'new session — mode',
     )
     if (!pick) return this.println(dim('  cancelled'))
     const s = this.host.newSession(pick)
     this.println(green(`  ✔ new ${pick} session · ${s.id}`))
+    if (pick === 'test') this.printModeBanner('test')
   }
 
   private async openSessionPicker(): Promise<void> {
@@ -2319,22 +2336,39 @@ export class TuiApp {
       }
 
       case 'mode': {
-        if (arg === 'plan' || arg === 'build') {
+        if (arg === 'plan' || arg === 'build' || arg === 'test') {
           host.setSessionMode(arg)
           this.printModeBanner(arg)
           return
         }
+        const cur = host.session?.mode ?? 'build'
         const pick = await this.pick(
           [
             { label: 'build', hint: 'write files, run commands, finish the job', value: 'build' as const },
             { label: 'plan', hint: 'read-only — interview → PRD → approval', value: 'plan' as const },
+            { label: 'test', hint: 'QA — run the app, click through, report', value: 'test' as const },
           ],
           'mode',
-          { selected: (host.session?.mode ?? 'build') === 'build' ? 0 : 1 },
+          { selected: cur === 'build' ? 0 : cur === 'plan' ? 1 : 2 },
         )
         if (!pick) return this.println(dim('  cancelled'))
         host.setSessionMode(pick)
         this.printModeBanner(pick)
+        return
+      }
+
+      case 'test': {
+        // switch to test mode + optionally verify a running URL immediately
+        const url = arg.trim()
+        host.setSessionMode('test')
+        this.printModeBanner('test')
+        if (url && /^(https?:\/\/|\w+([.:-]\w+)+:\d+)/.test(url)) {
+          this.sendViaQueue(`Verify the app running at ${url} — test every feature you can reach, check responsiveness (mobile/tablet/desktop) and visuals, then write the report.`)
+        } else if (url) {
+          this.println(yellow(`  ⚠ "${url}" does not look like a URL — mode switched, send a target manually`))
+        } else {
+          this.println(dim('    the agent will serve the project itself — or send it a URL / feature list to test'))
+        }
         return
       }
 
@@ -2930,12 +2964,17 @@ export class TuiApp {
   }
 
   /** mode switch banner — tells the user (and the next prompt run) what the job is */
-  private printModeBanner(mode: 'build' | 'plan'): void {
+  private printModeBanner(mode: AgentMode): void {
     this.mode = mode
     if (mode === 'plan') {
       this.println(green('  ✔ mode: plan — read-only'))
       this.println(dim('    the agent investigates, INTERVIEWS you for missing detail, then delivers a plan'))
       this.println(dim('    approving the plan writes PRD.md and switches to build automatically'))
+    } else if (mode === 'test') {
+      this.println(green('  ✔ mode: test — QA agent'))
+      this.println(dim('    the agent runs the project (serve), clicks through it (browser), screenshots + audits'))
+      this.println(dim('    responsive (mobile/tablet/desktop) and visuals — then writes TEST-REPORT.md'))
+      this.println(dim('    read-only for source files · playwright needed: bun add playwright && bunx playwright install chromium'))
     } else {
       this.println(green('  ✔ mode: build — full write access'))
       this.println(dim('    the agent reads PRD.md first when present, implements, and verifies its work'))
@@ -3754,7 +3793,10 @@ export function appCapable(): boolean {
  * Run the inline TUI. Mirrors `new Tui(host, opts).start()` — resolves
  * when the user exits (ctrl+c twice, /exit). Always restores the terminal.
  */
-export async function runApp(host: AgentHost, opts: { workspaceRoot: string; webUrl?: string }): Promise<void> {
+export async function runApp(
+  host: AgentHost,
+  opts: { workspaceRoot: string; webUrl?: string; initialMode?: AgentMode; autoSend?: string },
+): Promise<void> {
   const app = new TuiApp(host, opts)
   try {
     await app.start()

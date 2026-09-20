@@ -23,7 +23,7 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
-  Bone, Check, ChevronDown, Cpu, FolderInput, FolderOpen, Github, History, ListTodo,
+  Bone, Check, ChevronDown, Cpu, FlaskConical, FolderInput, FolderOpen, Github, History, ListTodo,
   PanelRightClose, PanelRightOpen, Search, Settings, Zap,
 } from 'lucide-react'
 import { useTagent } from '@/lib/tagent/store'
@@ -86,6 +86,16 @@ export function TopBar() {
           title="Plan mode — read-only investigation"
         >
           <ListTodo className="size-3.5" /> <span className="hidden md:inline">Plan</span>
+        </button>
+        <button
+          type="button"
+          aria-pressed={mode === 'test'}
+          onClick={() => void setMode('test')}
+          className={cn('px-2.5 py-1 rounded flex items-center gap-1 transition-colors',
+            mode === 'test' ? 'bg-emerald-500/15 text-emerald-400' : 'text-zinc-500 hover:text-zinc-300')}
+          title="Test mode — QA agent: runs the app, clicks through it, writes TEST-REPORT.md"
+        >
+          <FlaskConical className="size-3.5" /> <span className="hidden md:inline">Test</span>
         </button>
       </div>
 

@@ -37,9 +37,10 @@ export {
 } from './skills'
 export {
   getAdapter, listProviderInfos,
+  acceptsImages, withoutImages,
   ZaiAdapter, OpenAICompatibleAdapter, AnthropicAdapter, GoogleAdapter,
   type ProviderAdapter, type CompletionRequest, type CompletionResult,
-  type NativeToolDef, type NativeToolCall,
+  type NativeToolDef, type NativeToolCall, type WireMessage,
 } from './providers'
 export {
   CATALOG, catalogById, parseModelRef, resolveApiKey,

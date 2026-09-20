@@ -28,9 +28,49 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.14.0'
+export const LATEST = '0.15.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.15.0',
+    date: '2026-09-20',
+    title: 'Agent test mode — `tagent test`: the QA agent',
+    summary:
+      'A third agent mode joins build and plan: TEST. `tagent test` (or `/test` in the TUI, or the Test button in the GUI) turns the agent into a QA engineer for your project — it boots the app itself, clicks through it with a real browser, checks responsiveness and typography, and writes TEST-REPORT.md with a pass/warn/fail verdict. Screenshots are attached to the model\u2019s context when the model can see images, so the agent JUDGES the UI instead of guessing. Also fixes a real bug in the old browser tool (it could never launch a page at all).',
+    stable: true,
+    sections: [
+      {
+        name: 'The QA pipeline',
+        items: [
+          'serve (new tool) — auto-detects the dev command from package.json (dev > start > serve, package manager from the lockfile; a bare index.html falls back to a static server), runs it in the background, waits for the port to answer, and cleans it up when the session ends — restart, status and logs included',
+          'browser (rebuilt) — drives real Chromium via Playwright: open pages, click buttons, fill inputs, submit forms; every interaction returns the new page state as an ARIA snapshot plus any console/network errors, so the agent sees WHAT its click did',
+          'responsiveness — viewport switching to mobile (390×844), tablet (768×1024) and desktop (1280×800) with screenshots at each size',
+          'deterministic UI audit — horizontal overflow (with the offending elements named), typography map with <12px text, skipped heading levels, tap targets <24px on mobile, images without alt, missing viewport meta, WCAG contrast sampling',
+          'vision — screenshots ride along in the model\u2019s context when the model accepts image input (GPT-4o/5, Claude, Gemini, GLM-4V, Qwen-VL…); text-only models get the audit data and readable screenshot paths instead',
+          'test_report — the one write test mode can do: TEST-REPORT.md at the workspace root (verdict, feature checklist with evidence, reproducible issues, per-viewport findings) plus a timestamped copy under .tagent/test/',
+        ],
+      },
+      {
+        name: 'How you use it',
+        items: [
+          '`tagent test` boots the TUI straight into QA mode; the agent serves the project and tests everything it can reach',
+          '`tagent test --url http://localhost:3000` (or `/test http://localhost:3000`) verifies an already-running app — no serve step',
+          'one-time setup per project: `bun add playwright && bunx playwright install chromium` (the tool says exactly this when it\u2019s missing)',
+          'test mode is read-only for source files — it verifies and reports; switch to build mode to fix what it found, the report is written for that hand-off',
+        ],
+      },
+      {
+        name: 'Fixes under the hood',
+        items: [
+          'the old browser tool stored its page handle as a never-awaited promise — `page.goto` was literally undefined; the state is now awaited once and every action works (found by actually running it)',
+          'multi-image context discipline: max 4 screenshots on the 2 newest tool-result messages, base64 read at request time (sessions store only paths), oversized images degrade to text references',
+          'Z.ai adapter retries 429 rate-limits with backoff (8s, 16s) instead of dying mid-run',
+          'fallback chain strips image parts per-adapter, so failover to a text-only model survives',
+          'browser tool default flips to ON (it was dead weight before — now the error message IS the install instruction; risk high + permission ask still gate every action)',
+        ],
+      },
+    ],
+  },
   {
     version: '0.14.0',
     date: '2026-09-20',

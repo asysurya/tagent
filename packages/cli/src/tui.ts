@@ -16,6 +16,7 @@ import {
   type SubagentInfo,
   type TodoItem,
   type ToolCallRecord,
+  type AgentMode,
 } from '@tagent/core'
 
 import { AgentHost } from './host'
@@ -297,11 +298,16 @@ export class Tui {
   }
 
   /** mode switch banner — tells the user (and the next prompt run) what the job is */
-  private printModeBanner(mode: 'build' | 'plan') {
+  private printModeBanner(mode: AgentMode) {
     if (mode === 'plan') {
       this.println(green('  ✔ mode: plan — read-only'))
       this.println(dim('    the agent investigates, INTERVIEWS you for missing detail, then delivers a plan'))
       this.println(dim('    approving the plan writes PRD.md and switches to build automatically'))
+    } else if (mode === 'test') {
+      this.println(green('  ✔ mode: test — QA agent'))
+      this.println(dim('    the agent runs the project (serve), clicks through it (browser), screenshots + audits'))
+      this.println(dim('    responsive (mobile/tablet/desktop) and visuals — then writes TEST-REPORT.md'))
+      this.println(dim('    read-only for source files · playwright needed: bun add playwright && bunx playwright install chromium'))
     } else {
       this.println(green('  ✔ mode: build — full write access'))
       this.println(dim('    the agent reads PRD.md first when present, implements, and verifies its work'))
@@ -622,12 +628,14 @@ export class Tui {
       }
 
       case 'new': {
-        let mode = arg === 'plan' ? 'plan' : arg === 'build' ? 'build' : undefined
+        let mode: AgentMode | undefined =
+          arg === 'plan' || arg === 'build' || arg === 'test' ? arg : undefined
         if (!mode) {
           const pick = await this.pick(
             [
-              { label: 'build', hint: 'the agent can write files & run commands', value: 'build' },
-              { label: 'plan', hint: 'read-only — interview → plan → PRD approval', value: 'plan' },
+              { label: 'build', hint: 'the agent can write files & run commands', value: 'build' as const },
+              { label: 'plan', hint: 'read-only — interview → plan → PRD approval', value: 'plan' as const },
+              { label: 'test', hint: 'QA — run the app, click through it, report', value: 'test' as const },
             ],
             'new session — mode',
           )
@@ -636,6 +644,7 @@ export class Tui {
         }
         const s = host.newSession(mode)
         this.println(green(`  ✔ new ${mode} session · ${s.id}`))
+        if (mode === 'test') this.printModeBanner('test')
         return
       }
 
@@ -746,18 +755,19 @@ export class Tui {
       }
 
       case 'mode': {
-        if (arg === 'plan' || arg === 'build') {
+        if (arg === 'plan' || arg === 'build' || arg === 'test') {
           host.setSessionMode(arg)
           this.printModeBanner(arg)
           return
         }
         const pick = await this.pick(
           [
-            { label: 'build', hint: 'write files, run commands, finish the job', value: 'build' },
-            { label: 'plan', hint: 'read-only — interview → PRD → approval', value: 'plan' },
+            { label: 'build', hint: 'write files, run commands, finish the job', value: 'build' as const },
+            { label: 'plan', hint: 'read-only — interview → PRD → approval', value: 'plan' as const },
+            { label: 'test', hint: 'QA — run the app, click through, report', value: 'test' as const },
           ],
           'mode',
-          { selected: (host.session?.mode ?? 'build') === 'build' ? 0 : 1 },
+          { selected: host.session?.mode === 'plan' ? 1 : host.session?.mode === 'test' ? 2 : 0 },
         )
         if (!pick) return this.println(dim('  cancelled'))
         host.setSessionMode(pick)
