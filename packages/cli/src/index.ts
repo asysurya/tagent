@@ -364,11 +364,14 @@ async function mainStart(dirArg?: string, boot?: { mode?: 'test'; url?: string |
       if (boot?.mode === 'test') host.ensureSession('test')
       await runPiped(host)
     } else if (appCapable() && !has('--classic')) {
-      // full-screen app TUI (opencode-style) — default on capable terminals
+      // the app TUI — opencode-style FULL-SCREEN by default (alternate
+      // screen, mouse wheel, built-in scrollback viewer); `--inline` keeps
+      // the scrollback-native inline app
       const target = typeof boot?.url === 'string' ? boot.url : undefined
       await runApp(host, {
         workspaceRoot: root,
         webUrl,
+        fullscreen: !has('--inline'),
         ...(boot?.mode === 'test'
           ? {
               initialMode: 'test' as const,

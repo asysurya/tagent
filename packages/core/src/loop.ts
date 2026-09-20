@@ -181,6 +181,9 @@ export class AgentLoop {
 
   async run(userText: string): Promise<LoopSummary> {
     const { session } = this.opts
+    // the last provider-failure message — lets the catch avoid echoing the
+    // same provider JSON a second time as "Agent error"
+    let lastProviderFail = ''
     // @-mentions → inline file attachments: zero tool turns for known files
     const expanded = this.expandFileMentions(userText)
     const userMsg: ChatMessage = { id: uid(), role: 'user', content: expanded, createdAt: Date.now() }
@@ -244,11 +247,15 @@ export class AgentLoop {
             tools: nativeTools,
             onText: (full) => emitStream(full),
           },
-          (info) =>
+          (info) => {
+            lastProviderFail = info.error
+            // one short line — the full story lands in the error card when the
+            // run ends (a multi-line provider error must not wrap mid-word here)
             this.opts.events.onNotify?.(
               'warn',
-              `provider ${info.failed} failed — ${info.error.slice(0, 140)}${info.next ? ` · switching to ${info.next}` : ' · no fallback left'}`,
-            ),
+              `provider ${info.failed} failed — ${info.error.split('\n')[0].slice(0, 140)}${info.next ? ` · switching to ${info.next}` : ' · no fallback left'}`,
+            )
+          },
         )
 
         if (this.abort.signal.aborted) return { turns, toolCalls, finished: 'aborted', usage: usageTotal }
@@ -416,7 +423,13 @@ export class AgentLoop {
     } catch (e) {
       const err = (e as Error).message
       this.opts.events.onStatus?.('error', err)
-      this.opts.events.onNotify?.('error', `Agent error: ${err}`)
+      // the provider-failure line above already told this story — printing it
+      // again as "Agent error: …" was the triple-JSON-dump users complained
+      // about. Only notify when this is a DIFFERENT failure (abort mid-flight,
+      // tool explosion, session write, …)
+      if (err !== lastProviderFail) {
+        this.opts.events.onNotify?.('error', `Agent error: ${err.split('\n')[0]}`)
+      }
       return { turns, toolCalls, finished: 'error', error: err, usage: usageTotal }
     }
   }
@@ -688,7 +701,7 @@ export class AgentLoop {
 }
 
 const READ_ONLY_TOOLS = new Set([
-  'read_file', 'read_files', 'list_files', 'grep', 'web_fetch', 'ddg_search', 'task', 'todowrite', 'memory', 'load_skill',
+  'read_file', 'read_files', 'list_files', 'grep', 'web_fetch', 'ddg_search', 'task', 'todowrite', 'memory', 'load_skill', 'ask_user',
 ])
 
 export function isReadOnlyTool(name: string): boolean {

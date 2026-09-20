@@ -82,6 +82,9 @@ class McpConnection {
   private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>()
   tools: RemoteTool[] = []
   serverInfo?: { name?: string; version?: string }
+  /** live handshake state — 'connecting' until initialize + tools/list land */
+  state: 'connecting' | 'ready' | 'error' = 'connecting'
+  error?: string
 
   constructor(
     public name: string,
@@ -159,7 +162,7 @@ class McpConnection {
     })
   }
 
-  async initialize(): Promise<void> {
+  async initialize(timeoutMs = initTimeoutMs()): Promise<void> {
     const result = (await this.request(
       'initialize',
       {
@@ -167,7 +170,7 @@ class McpConnection {
         capabilities: { tools: {} },
         clientInfo: { name: 'tagent', version: CURRENT_VERSION },
       },
-      initTimeoutMs(),
+      timeoutMs,
     )) as { serverInfo?: { name?: string; version?: string } }
     this.serverInfo = result?.serverInfo
     // initialized notification (no response expected)
@@ -224,7 +227,10 @@ export class McpManager {
     return Object.entries(this.mcp?.servers ?? {})
   }
 
-  /** spawn + initialize + tools/list for every enabled server (idempotent) */
+  /** spawn + initialize + tools/list for every enabled server (idempotent).
+   *  A timeout gets ONE automatic retry — npx cold-starts (Codespace, CI,
+   *  Termux) regularly blow past the first budget while the download warms
+   *  the cache; the second attempt then completes in seconds. */
   async ensureStarted(force = false): Promise<void> {
     if (this.started && !force) return
     this.started = true
@@ -232,17 +238,29 @@ export class McpManager {
     await Promise.all(
       enabled.map(async ([name, cfg]) => {
         if (this.conns.has(name)) return
-        const conn = new McpConnection(name, cfg)
-        this.conns.set(name, conn) // registered even on failure so status shows it
+        let conn = new McpConnection(name, cfg)
+        this.conns.set(name, conn) // registered immediately — status shows 'connecting'
         try {
           await conn.initialize()
           await conn.loadTools()
+          conn.state = 'ready'
         } catch (e) {
-          // keep the dead entry for status(); tools stay empty
-          if (conn === this.conns.get(name)) {
-            // mark: leave in map with zero tools — callTool will fail cleanly
+          conn.state = 'error'
+          conn.error = (e as Error).message
+          if (/timed out/.test(conn.error)) {
+            // one fresh spawn with a doubled budget — see the doc comment
+            conn.kill()
+            conn = new McpConnection(name, cfg)
+            this.conns.set(name, conn)
+            try {
+              await conn.initialize(initTimeoutMs() * 2)
+              await conn.loadTools()
+              conn.state = 'ready'
+            } catch (e2) {
+              conn.state = 'error'
+              conn.error = (e2 as Error).message
+            }
           }
-          ;(conn as unknown as { error?: string }).error = (e as Error).message
         }
       }),
     )
@@ -260,8 +278,10 @@ export class McpManager {
     try {
       await conn.initialize()
       await conn.loadTools()
+      conn.state = 'ready'
     } catch (e) {
-      ;(conn as unknown as { error?: string }).error = (e as Error).message
+      conn.state = 'error'
+      conn.error = (e as Error).message
     }
   }
 
@@ -278,7 +298,7 @@ export class McpManager {
   toolDefinitions(): ToolDefinition[] {
     const defs: ToolDefinition[] = []
     for (const [name, conn] of this.conns) {
-      if ((conn as unknown as { error?: string }).error) continue
+      if (conn.state !== 'ready') continue
       for (const t of conn.tools) {
         const tn = toolName(name, t.name)
         defs.push({
@@ -297,14 +317,13 @@ export class McpManager {
   status(): McpServerStatus[] {
     return this.servers().map(([name, cfg]) => {
       const conn = this.conns.get(name)
-      const err = conn ? (conn as unknown as { error?: string }).error : undefined
       return {
         name,
         command: [cfg.command, ...(cfg.args ?? [])].join(' '),
         enabled: cfg.enabled !== false,
-        state: cfg.enabled === false ? 'disabled' : err ? 'error' : conn ? 'ready' : 'connecting',
+        state: cfg.enabled === false ? 'disabled' : conn ? conn.state : 'connecting',
         tools: conn?.tools.length ?? 0,
-        error: err,
+        error: conn?.state === 'error' ? conn.error : undefined,
       }
     })
   }

@@ -125,6 +125,37 @@ function truncBody(s: string): string {
   return s.slice(0, 400).replace(/\s+/g, ' ')
 }
 
+/** turn a provider's HTTP error body into something a human can read.
+ *
+ * OpenRouter / OpenAI / Anthropic / Google all answer with
+ * `{"error":{"message":…,"code":…,"metadata":{"remedy_hint":…}}}`
+ * (± nesting) — extract the message and the remedy instead of dumping
+ * raw JSON three times into the transcript. Non-JSON bodies keep the
+ * old truncated form. */
+export function prettyHttpError(label: string, status: number, body: string): string {
+  const raw = truncBody(body)
+  const j = safeJson(body) as {
+    error?: { message?: unknown; metadata?: { remedy_hint?: unknown; remedy?: unknown } } | string
+    message?: unknown
+  } | undefined
+  if (!j || typeof j !== 'object') return `${label} HTTP ${status}: ${raw}`
+  let msg = ''
+  let remedy = ''
+  if (typeof j.error === 'string') msg = j.error
+  else if (j.error && typeof j.error === 'object') {
+    if (typeof j.error.message === 'string') msg = j.error.message
+    const meta = j.error.metadata
+    if (meta && typeof meta === 'object') {
+      const r = (meta as { remedy_hint?: unknown; remedy?: unknown }).remedy_hint ?? (meta as { remedy?: unknown }).remedy
+      if (typeof r === 'string' && r.trim()) remedy = r.trim()
+    }
+  }
+  if (!msg && typeof j.message === 'string') msg = j.message
+  if (!msg) return `${label} HTTP ${status}: ${raw}`
+  const head = `${label} HTTP ${status} — ${msg.replace(/\s+/g, ' ').trim()}`
+  return remedy ? `${head}\n→ ${remedy}` : head
+}
+
 /* ------------------------------------------------------------------ */
 /* message → wire mapping per protocol (text-only or with image parts)  */
 /* ------------------------------------------------------------------ */
@@ -215,7 +246,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     if (!res.ok && res.status >= 400 && res.status < 500 && req.tools?.length) {
       res = await fetch(url, { method: 'POST', signal: req.signal, headers, body: JSON.stringify(base(undefined, false)) })
     }
-    if (!res.ok) throw new Error(`${this.label} HTTP ${res.status}: ${truncBody(await res.text())}`)
+    if (!res.ok) throw new Error(prettyHttpError(this.label, res.status, await res.text()))
 
     let text = ''
     let usage: TokenUsage | undefined
@@ -336,7 +367,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     if (!res.ok && res.status >= 400 && res.status < 500 && req.tools?.length) {
       res = await call(false, false) // fall back to the markdown action protocol
     }
-    if (!res.ok) throw new Error(`Anthropic HTTP ${res.status}: ${truncBody(await res.text())}`)
+    if (!res.ok) throw new Error(prettyHttpError(`Anthropic`, res.status, await res.text()))
 
     let text = ''
     let usage: TokenUsage | undefined
@@ -438,7 +469,7 @@ export class GoogleAdapter implements ProviderAdapter {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     })
-    if (!res.ok) throw new Error(`Google HTTP ${res.status}: ${truncBody(await res.text())}`)
+    if (!res.ok) throw new Error(prettyHttpError(`Google`, res.status, await res.text()))
 
     let text = ''
     let usage: TokenUsage | undefined

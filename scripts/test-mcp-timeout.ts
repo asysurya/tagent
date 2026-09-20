@@ -3,15 +3,18 @@
  *
  * Live report from the owner (Codespace): all four npx-based MCP servers
  * timed out at the old 25s default — npx cold-start downloads on a fresh
- * Codespace easily blow past that. v0.16.1 raises the default to 60s and
- * makes it overridable via TAGENT_MCP_INIT_TIMEOUT_MS.
+ * Codespace easily blow past that. v0.16.1 raised the default to 60s with
+ * TAGENT_MCP_INIT_TIMEOUT_MS; v0.19.0 adds ONE automatic retry with a
+ * doubled budget (npx spends the first budget warming the download cache,
+ * then finishes in seconds on the second attempt).
  *
- * Uses a fake MCP server (plain script that speaks JSON-RPC over stdio) —
- * no npx, no network:
- *   1. slow server (answers initialize after 2.5s) + 1s override → clean
- *      "timed out after 1s" error, never a hang
- *   2. same server, restart with a 30s budget → handshake completes
- *   3. instant server, default budget → ready, tools visible
+ * Fake MCP server (plain JSON-RPC over stdio) — no npx, no network:
+ *   1. very slow server (2.5s handshake) + 1s budget → both attempts
+ *      time out (1s + 2s) → clean error, never a hang
+ *   2. slow server (1.5s handshake) + 1s budget → first attempt times out,
+ *      the retry (2s budget) completes → READY — the cold-start rescue
+ *   3. same very-slow server restarted with a 30s budget → ready
+ *   4. instant server, default budget → ready, tools visible
  */
 import fs from 'node:fs'
 import os from 'node:os'
@@ -54,8 +57,8 @@ process.env.TAGENT_MCP_INIT_TIMEOUT_MS = BUDGET
 
 console.log(`fake MCP server: ${srv}\n`)
 
-/* ---------------- 1: slow server + 1s budget → timed out ---------------- */
-console.log('1 — slow server (2.5s handshake) with a 1s budget:')
+/* ---------------- 1: very slow server + 1s budget → both attempts time out ---------------- */
+console.log('1 — very slow server (2.5s handshake) with a 1s budget (retry doubles it):')
 const t0 = Date.now()
 const mgr = new McpManager({
   servers: { slow: { command: process.execPath, args: [srv, '2500'] } },
@@ -63,23 +66,41 @@ const mgr = new McpManager({
 await mgr.ensureStarted()
 const [st1] = mgr.status()
 const took = Date.now() - t0
-ok(st1.state === 'error', 'state = error', JSON.stringify(st1))
-ok(/timed out after 1s/.test(st1.error ?? ''), 'error says "timed out after 1s"', st1.error)
-ok(took < 2400, `gave up in ~1s (${took}ms), not the full 2.5s`)
+ok(st1.state === 'error', 'state = error after both attempts', JSON.stringify(st1))
+ok(/timed out after 2s/.test(st1.error ?? ''), 'final error reports the RETRY budget (2s)', st1.error)
+ok(took >= 2900 && took < 5000, `both attempts ran (~3s total: ${took}ms)`)
 ok(mgr.toolDefinitions().length === 0, 'a failed server contributes no tools')
-
-/* ---------------- 2: restart with a real budget → recovers ---------------- */
-console.log('\n2 — same server restarted with a 30s budget:')
-process.env.TAGENT_MCP_INIT_TIMEOUT_MS = '30000'
-await mgr.restart('slow')
-const [st2] = mgr.status()
-ok(st2.state === 'ready', 'state = ready after restart', JSON.stringify(st2))
-ok(st2.tools === 1, 'tools/list surfaced the tool', JSON.stringify(st2))
-ok(mgr.toolDefinitions().map((d) => d.name).includes('mcp_slow_ping'), 'tool is callable as mcp_slow_ping')
 mgr.close()
 
-/* ---------------- 3: default budget, instant server → ready ---------------- */
-console.log('\n3 — instant server, budget unset (default 60s):')
+/* ---------------- 2: slow server rescued by the retry ---------------- */
+console.log('\n2 — slow server (1.5s handshake) with a 1s budget — the retry rescues it:')
+process.env.TAGENT_MCP_INIT_TIMEOUT_MS = BUDGET
+const mgrRescue = new McpManager({
+  servers: { coldstart: { command: process.execPath, args: [srv, '1500'] } },
+})
+await mgrRescue.ensureStarted()
+const [stR] = mgrRescue.status()
+ok(stR.state === 'ready', 'state = ready on the second attempt', JSON.stringify(stR))
+ok(stR.tools === 1, 'tools/list surfaced after the rescue', JSON.stringify(stR))
+ok(mgrRescue.toolDefinitions().map((d) => d.name).includes('mcp_coldstart_ping'), 'rescued tool is callable')
+mgrRescue.close()
+
+/* ---------------- 3: restart with a real budget → recovers ---------------- */
+console.log('\n3 — same very-slow server restarted with a 30s budget:')
+process.env.TAGENT_MCP_INIT_TIMEOUT_MS = '30000'
+const mgrSlow = new McpManager({
+  servers: { slow: { command: process.execPath, args: [srv, '2500'] } },
+})
+await mgrSlow.ensureStarted()
+await mgrSlow.restart('slow')
+const [st2] = mgrSlow.status()
+ok(st2.state === 'ready', 'state = ready after restart', JSON.stringify(st2))
+ok(st2.tools === 1, 'tools/list surfaced the tool', JSON.stringify(st2))
+ok(mgrSlow.toolDefinitions().map((d) => d.name).includes('mcp_slow_ping'), 'tool is callable as mcp_slow_ping')
+mgrSlow.close()
+
+/* ---------------- 4: default budget, instant server → ready ---------------- */
+console.log('\n4 — instant server, budget unset (default 60s):')
 delete process.env.TAGENT_MCP_INIT_TIMEOUT_MS
 const mgr2 = new McpManager({
   servers: { fast: { command: process.execPath, args: [srv, '0'] } },

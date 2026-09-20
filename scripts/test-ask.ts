@@ -192,5 +192,14 @@ console.log('\n6) host wiring — bus event + askRespond')
   ok('unknown id is a no-op', host.askRespond('nope', null) === false)
 }
 
+// ---- v0.19.0: ask_user works in PLAN mode (the loop gate used to reject it) ----
+{
+  const { isReadOnlyTool, buildToolset } = await import('../packages/core/src/index')
+  ok('isReadOnlyTool(ask_user) — plan-mode gate lets the interview through', isReadOnlyTool('ask_user'))
+  const ro = buildToolset({ readOnly: true }).map((t) => t.name)
+  ok('plan-mode toolset includes ask_user', ro.includes('ask_user'))
+  ok('plan-mode toolset has no write tools', !ro.includes('write_file') && !ro.includes('edit_file') && !ro.includes('bash'))
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

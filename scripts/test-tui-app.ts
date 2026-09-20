@@ -176,6 +176,14 @@ class FakeHost {
   contextInfo(): { used: number; limit: number; pct: number; bar: string; estimated: boolean } {
     return { used: 0, limit: 131_072, pct: 0, bar: '0/131k [░░░░░░░░░░] 0%', estimated: true }
   }
+  /** navbar reads this every frame */
+  mcpState: { state: string; tools: number }[] = []
+  mcpStatus(): { state: string; tools: number }[] {
+    return this.mcpState
+  }
+  async mcpEnsure(): Promise<{ state: string; tools: number }[]> {
+    return this.mcpState
+  }
   compactThreshold(): number {
     return 80
   }
@@ -197,18 +205,18 @@ const test = (name: string, fn: () => Promise<void> | void) => tests.push({ name
 
 let tmp = ''
 
-function mkApp(host: FakeHost, opts: { columns?: number; rows?: number } = {}): { app: TuiApp; out: FakeOut; input: FakeIn; done: Promise<void> } {
+function mkApp(host: FakeHost, opts: { columns?: number; rows?: number; fullscreen?: boolean } = {}): { app: TuiApp; out: FakeOut; input: FakeIn; done: Promise<void> } {
   const out = new FakeOut()
   out.columns = opts.columns ?? 80
   out.rows = opts.rows ?? 24
   const input = new FakeIn()
   const io: AppIO = { input: input as never, output: out as never }
-  const app = new TuiApp(host as unknown as AgentHost, { workspaceRoot: host.root, updateCheck: false, io })
+  const app = new TuiApp(host as unknown as AgentHost, { workspaceRoot: host.root, updateCheck: false, io, fullscreen: opts.fullscreen })
   const done = app.start()
   return { app, out, input, done }
 }
 
-async function started(host: FakeHost, opts: { columns?: number; rows?: number } = {}) {
+async function started(host: FakeHost, opts: { columns?: number; rows?: number; fullscreen?: boolean } = {}) {
   const ctx = mkApp(host, opts)
   await sleep(60) // let init() + the first frame land
   return ctx
@@ -995,6 +1003,162 @@ test('ask form: required fields block submit and flag the row', async () => {
   const r = host.askResponses[0]?.response
   if (r?.answers.f1 !== 'yes') throw new Error(`required answer missing: ${JSON.stringify(r)}`)
   if (r?.notes !== undefined) throw new Error('notes should be absent when allowNotes=false')
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+// ---------------- v0.19.0: fullscreen + navbar + history viewer + 'e' edit ----------------
+
+test('fullscreen: alternate screen + mouse on, navbar sticky, transcript visible', async () => {
+  const host = new FakeHost(tmp)
+  const { app, out } = await started(host, { fullscreen: true })
+  if (!out.text().includes('\x1b[?1049h')) throw new Error('alternate screen (1049) not entered')
+  if (!out.text().includes('\x1b[?1006h')) throw new Error('mouse tracking (1006) not enabled')
+  app.renderNow()
+  const rows = app.lastFrame.map(stripAnsi)
+  if (!rows[0].includes('╭─') || !rows[0].includes('Tagent')) throw new Error('navbar top row missing')
+  if (!rows[1].includes('build') || !rows[1].includes('glm-4.7')) throw new Error('navbar facts row missing')
+  if (!rows.some((r) => r.includes('terminal-native coding agent'))) throw new Error('boot intro missing from the transcript viewport')
+  if (!rows.some((r) => r.includes('Message tagent'))) throw new Error('editor missing')
+  if (rows.length > 24) throw new Error(`frame taller than the screen: ${rows.length}`)
+  app.exit()
+  await sleep(10)
+  app.destroy()
+  if (!out.text().includes('\x1b[?1049l')) throw new Error('alternate screen not restored')
+  if (!out.text().includes('\x1b[?1002l')) throw new Error('mouse tracking not disabled')
+})
+
+test('fullscreen: transcript lines live in the viewport, not the scrollback stream', async () => {
+  const host = new FakeHost(tmp)
+  const { app } = await started(host, { fullscreen: true })
+  for (let i = 0; i < 40; i++) app.println(`line ${i} of the transcript`)
+  app.renderNow()
+  const rows = app.lastFrame.map(stripAnsi)
+  if (!rows.some((r) => r.includes('line 39 of the transcript'))) throw new Error('newest line not visible')
+  if (rows.some((r) => r.includes('line 5 of the transcript'))) throw new Error('old line should be outside the viewport')
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+test('viewer: ctrl+u on empty editor scrolls back, pgdn snaps to live', async () => {
+  const host = new FakeHost(tmp)
+  const { app } = await started(host, { fullscreen: true })
+  for (let i = 0; i < 40; i++) app.println(`line ${i} of the transcript`)
+  app.renderNow()
+  for (let i = 0; i < 8; i++) app.feed('\x15') // ctrl+u ×8 — climb well into the history
+  await sleep(40)
+  app.renderNow()
+  let rows = app.lastFrame.map(stripAnsi)
+  if (!rows.some((r) => r.includes('history') && r.includes('of '))) throw new Error('viewer status row missing')
+  if (!rows.some((r) => r.includes('line 0 of the transcript') || r.includes('line 1 of the transcript'))) throw new Error('viewer should show the oldest lines')
+  if (rows.some((r) => r.includes('line 39 of the transcript'))) throw new Error('newest line should be out of view while reading history')
+  app.feed('\x1b[6~') // pgdn → a full page down
+  await sleep(30)
+  app.renderNow()
+  app.feed('\x1b[6~')
+  app.feed('\x1b[6~')
+  await sleep(30)
+  app.renderNow()
+  rows = app.lastFrame.map(stripAnsi)
+  if (!rows.some((r) => r.includes('line 39 of the transcript'))) throw new Error('pgdn should land back on live')
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+test('viewer: mouse wheel up opens it, wheel down closes it', async () => {
+  const host = new FakeHost(tmp)
+  const { app } = await started(host, { fullscreen: true })
+  for (let i = 0; i < 40; i++) app.println(`line ${i} of the transcript`)
+  app.renderNow()
+  app.feed('\x1b[<64;1;1M') // SGR wheel up
+  await sleep(30)
+  app.renderNow()
+  let rows = app.lastFrame.map(stripAnsi)
+  if (!rows.some((r) => r.includes('history'))) throw new Error('wheel up should open the viewer')
+  app.feed('\x1b[<65;1;1M') // SGR wheel down
+  app.feed('\x1b[<65;1;1M')
+  app.feed('\x1b[<65;1;1M')
+  await sleep(30)
+  app.renderNow()
+  rows = app.lastFrame.map(stripAnsi)
+  if (!rows.some((r) => r.includes('line 39 of the transcript'))) throw new Error('wheel down should return to live')
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+test('list overlay: e on a provider row opens the key editor (item hint refreshes)', async () => {
+  const host = new FakeHost(tmp)
+  host.cfg.customProviders = [{ id: 'my-ollama', label: 'My Ollama', baseUrl: 'http://x/v1', apiKey: 'old', models: ['llama3.1'] }]
+  const { app } = await started(host)
+  let edited = false
+  void (app as unknown as { modelPickerFlow: () => Promise<void> }).modelPickerFlow()
+  await sleep(40)
+  const items = (app as unknown as { overlayStack: { items: { value: string; onEdit?: () => Promise<void> }[] }[] }).overlayStack[0].items
+  const row = items.find((it) => it.value === 'my-ollama')
+  if (!row?.onEdit) throw new Error('provider row lacks an onEdit hook')
+  void row.onEdit().then(() => { edited = true })
+  await sleep(40)
+  app.renderNow()
+  if (!app.lastFrame.map(stripAnsi).some((r) => r.includes('api key for my-ollama'))) throw new Error('key editor overlay did not open')
+  app.feed('sk-new-key\r')
+  await sleep(50)
+  if (!edited) throw new Error('onEdit promise did not resolve')
+  const saved = host.saved.find((p) => (p as { apiKey?: { provider: string } }).apiKey?.provider === 'my-ollama')
+  if (!saved) throw new Error('edited key was not saved')
+  app.feed('\x1b\x1b')
+  await sleep(120)
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+test('list overlay: e with a filter active types into the filter instead', async () => {
+  const host = new FakeHost(tmp)
+  const { app } = await started(host)
+  void (app as unknown as { modelPickerFlow: () => Promise<void> }).modelPickerFlow()
+  await sleep(40)
+  app.feed('o') // start a filter — 'e' must append, not edit
+  await sleep(20)
+  app.feed('e')
+  await sleep(20)
+  app.renderNow()
+  const ov = (app as unknown as { overlayStack: { kind: string; filter: string }[] }).overlayStack[0]
+  if (ov.filter !== 'oe') throw new Error(`filter should be "oe", got "${ov.filter}"`)
+  if (!app.lastFrame.map(stripAnsi).some((r) => r.includes('/oe'))) throw new Error('filter row not rendered')
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+test('list overlay: e keypress on the cursor row invokes onEdit (non-filterable list)', async () => {
+  const host = new FakeHost(tmp)
+  const { app } = await started(host)
+  let calls = 0
+  const row: { label: string; value: string; hint?: string; onEdit?: (it: { hint?: string }) => Promise<void> } = {
+    label: 'Provider X',
+    value: 'prov',
+    hint: 'needs key',
+    onEdit: async (it) => {
+      calls++
+      it.hint = 'key ✓'
+    },
+  }
+  const p = (app as unknown as { pick: (items: unknown[], title: string, opts?: Record<string, unknown>) => Promise<string | undefined> }).pick(
+    [row],
+    'test picker',
+  )
+  await sleep(40)
+  app.feed('e') // 'e' on the cursor row — must edit, not filter (non-filterable)
+  await sleep(40)
+  if (calls !== 1) throw new Error(`onEdit calls: ${calls}, expected 1`)
+  if (row.hint !== 'key ✓') throw new Error('onEdit should be able to refresh the row hint')
+  app.feed('\x1b')
+  const v = await p
+  if (v !== undefined) throw new Error('esc after edit should still cancel the picker')
   app.exit()
   await sleep(10)
   app.destroy()

@@ -310,6 +310,7 @@ export type Key =
   | { t: 'end' }
   | { t: 'pgup' }
   | { t: 'pgdn' }
+  | { t: 'wheel'; dy: number }
   | { t: 'ctrl'; ch: string }
 
 interface Parsed {
@@ -502,6 +503,9 @@ export interface PickItem<T> {
   group?: string
   /** pinned — always visible even when the filter matches nothing ("+ add custom…" CTAs) */
   keep?: boolean
+  /** 'e' on this row opens an inline editor (provider API keys) — the item
+   * is passed so the hint can be refreshed after the edit */
+  onEdit?: (item: PickItem<T>) => void | Promise<void>
 }
 
 type Overlay =
@@ -680,6 +684,10 @@ export interface TuiAppOptions {
   initialMode?: AgentMode
   /** first message auto-sent after boot (e.g. the test target from --url) */
   autoSend?: string
+  /** opencode-style full-screen mode (alternate screen + mouse wheel +
+   *  built-in scrollback viewer). index.ts defaults this on for capable
+   *  terminals; `tagent start --inline` keeps the classic inline app. */
+  fullscreen?: boolean
 }
 
 const EDITOR_PLACEHOLDER = 'Message tagent… (/ commands, @ files, ? shortcuts)'
@@ -779,6 +787,17 @@ export class TuiApp {
   /** crossed the compact threshold this run — offer /compact when it ends */
   private ctxOfferPending = false
 
+  /* fullscreen mode + the built-in scrollback viewer */
+  private fullscreen: boolean
+  /** history view is open (ctrl+u / pgup / wheel up) — false = live */
+  private viewing = false
+  /** first flat line shown by the viewer (0 = oldest) */
+  private viewOffset = 0
+  /** flat-cache of the lines already flushed — rebuilt incrementally */
+  private flatCache: { upto: number; lines: string[] } = { upto: 0, lines: [] }
+  /** 1s navbar ticker — model/mcp/context/time facts refresh without a keypress */
+  private navTimer: ReturnType<typeof setInterval> | undefined
+
   /* relay endpoint (/relay without a running web gui) */
   private relayServer?: DaemonHandle
   private relayBase?: string
@@ -793,6 +812,7 @@ export class TuiApp {
     this.opts = opts
     this.io = opts.io ?? { input: process.stdin as unknown as AppInputStream, output: process.stdout as unknown as AppOutputStream }
     this.webUrl = opts.webUrl
+    this.fullscreen = opts.fullscreen === true
     this.color = this.io.output.isTTY !== false && process.env.NO_COLOR === undefined
     USE_COLOR = this.color
     this.mode = host.session?.mode ?? 'build'
@@ -819,7 +839,13 @@ export class TuiApp {
       this.preloadMarkdown()
       this.refreshSyncBadge()
       this.startStatsTicker()
+      this.startNavTicker()
       this.banner()
+      // MCP servers connect at BOOT now (they used to wait for the first
+      // chat — the navbar reads their live state every second, so "connecting"
+      // actually means connecting, and ready servers show their tool count
+      // the moment the handshake lands)
+      void this.host.mcpEnsure().catch(() => undefined)
       if (this.opts.updateCheck !== false) await this.startupUpdate()
       // the most recent session is one /open away — keep its todos loaded
       const sessions = this.host.listSessions()
@@ -846,6 +872,12 @@ export class TuiApp {
       this.io.input.setRawMode?.(true)
     } catch { /* not a tty — appCapable() gates this */ }
     this.io.input.resume?.()
+    if (this.fullscreen) {
+      // opencode-style app: a clean alternate screen + mouse-wheel tracking
+      // (the built-in viewer scrolls; shift+wheel still reaches the terminal's
+      // own scrollback where supported)
+      this.writeOut('\x1b[?1049h\x1b[H\x1b[2J\x1b[?1006h\x1b[?1002h')
+    }
     // hide the terminal cursor — the editor draws its own block cursor, and
     // the sticky rewrite would make a real cursor dance around otherwise
     this.writeOut('\x1b[?25l')
@@ -859,6 +891,10 @@ export class TuiApp {
     if (this.frameTimer) {
       clearTimeout(this.frameTimer)
       this.frameTimer = undefined
+    }
+    if (this.navTimer) {
+      clearInterval(this.navTimer)
+      this.navTimer = undefined
     }
     if (this.statsTimer) {
       clearInterval(this.statsTimer)
@@ -887,11 +923,17 @@ export class TuiApp {
       this.resizeBound = false
     }
     // clear the sticky region — the transcript stays in the scrollback
-    if (this.stickyDrawn > 0) {
+    // (fullscreen mode never used one: the whole screen IS the app)
+    if (!this.fullscreen && this.stickyDrawn > 0) {
       try {
         this.io.output.write(`\x1b[${this.stickyDrawn - 1}A\x1b[J`)
       } catch { /* EPIPE */ }
       this.stickyDrawn = 0
+    }
+    if (this.fullscreen) {
+      // mouse off, then hand the screen back — the terminal restores the
+      // pre-app scrollback from its own buffer
+      this.writeOut('\x1b[?1002l\x1b[?1006l\x1b[?1049l')
     }
     this.writeOut('\x1b[?25h')
     try {
@@ -1251,6 +1293,9 @@ export class TuiApp {
       const cut = this.log.length - 4000
       this.log.splice(0, this.log.length - 4000)
       this.flushed = Math.max(0, this.flushed - cut)
+      // the viewer cache indexes into the flat line list — drop it and let
+      // flatLines() rebuild from the wrapped caches (cheap, they persist)
+      this.flatCache = { upto: 0, lines: [] }
     }
     this.requestRender()
   }
@@ -1262,55 +1307,19 @@ export class TuiApp {
   }
 
   private banner(): void {
-    const cfg = this.host.sanitizeConfig() as {
-      defaultModel: string
-      defaultProvider: string
-      caveman: boolean
-      mcpStatus?: { state: string; tools: number }[]
-    }
-    const mcpReady = (cfg.mcpStatus ?? []).filter((s) => s.state === 'ready')
-    const ci = this.host.contextInfo()
-
-    // the boot card: a rounded box, one emoji row per fact, value column
-    // aligned via the ui kit (string-width — CJK/emoji proof)
+    // the boot intro — two border rows of a rounded card. The live facts
+    // (model · mcp · context · mode · time) moved to the sticky navbar
+    // (headerRows) which refreshes every second instead of scrolling away.
     const boxW = Math.max(44, Math.min(this.transcriptW() - 2, 78))
-    const labelW = 9 // 'workspace' is the longest label
-    const cellW = boxW - 4
-    const valueW = cellW - (2 + 1 + labelW + 1)
-
-    const rows: string[] = []
-    const factRow = (icon: string, label: string, value: string): void => {
-      const parts = wrapV(value, Math.max(8, valueW))
-      rows.push(`${icon} ${dim(padCol(label, labelW))} ${parts[0]}`)
-      for (const cont of parts.slice(1)) rows.push(`  ${' '.repeat(labelW)} ${cont}`)
-    }
-    factRow('📂', 'workspace', this.host.root)
-    factRow(
-      '🤖',
-      'model',
-      ci.limit > 0
-        ? `${cfg.defaultModel} ${dim(`(${cfg.defaultProvider}) · ctx ${ci.bar} · mode ${this.mode}`)}`
-        : `${cfg.defaultModel} ${dim(`(${cfg.defaultProvider}) · mode ${this.mode}`)}`,
-    )
-    factRow(
-      '🔌',
-      'mcp',
-      mcpReady.length
-        ? dim(`${mcpReady.length} server(s) · ${mcpReady.reduce((n, s) => n + s.tools, 0)} tools — /mcp`)
-        : dim('none — /mcp adds Model Context Protocol servers'),
-    )
-    factRow(
-      '🌐',
-      'web gui',
-      this.webUrl
-        ? `${this.webUrl} ${dim('(sharing this session)')}`
-        : dim('off — /webgui on or start with --web-gui'),
-    )
-
+    const web = this.webUrl
+      ? `🌐 ${this.webUrl} ${dim('(sharing this session)')}`
+      : `🌐 web gui off — ${dim('/webgui on · start with --web-gui')}`
+    const foot = truncateV(`📂 ${this.host.root} · ${web}`, Math.max(8, boxW - 4))
     this.println('')
     for (const r of roundBox({
       title: `${orange('✻')} ${bold('Tagent')} ${dim(`v${CURRENT_VERSION} · terminal-native coding agent`)}`,
-      rows,
+      footer: foot,
+      rows: [],
       width: boxW,
     })) this.println(r)
     this.println('')
@@ -1384,6 +1393,15 @@ export class TuiApp {
         return { skip: 3 }
       }
       if (n === '[') {
+        // SGR mouse (\x1b[?1006h): wheel = buttons 64/65, press = 0..2, release = m
+        if (s[2] === '<') {
+          const m = /^\x1b\[<([0-9;]*)([Mm])/.exec(s)
+          if (!m) return /^\x1b\[<[0-9;]*$/.test(s) ? { skip: 0, wait: true } : { skip: 3 }
+          const btn = Number(m[1].split(';')[0] ?? '0')
+          if (m[2] === 'M' && btn === 64) return { key: { t: 'wheel', dy: -1 }, skip: m[0].length }
+          if (m[2] === 'M' && btn === 65) return { key: { t: 'wheel', dy: 1 }, skip: m[0].length }
+          return { skip: m[0].length } // clicks/releases — the app is keyboard-first
+        }
         const m = /^\x1b\[([0-9;:<>?]*)([A-Za-z~])/.exec(s)
         if (!m) {
           if (/^\x1b\[[0-9;:<>?]*$/.test(s)) return { skip: 0, wait: true }
@@ -1495,6 +1513,12 @@ export class TuiApp {
         // Claude Code parity: `?` on an empty editor opens the shortcuts
         // overlay (so "what?" or URLs with ? still type normally)
         if (k.ch === '?' && this.editor.isEmpty && !pal && !file) return this.shortcutsOverlay()
+        // 'x' while reading history → back to live
+        if (this.viewing && k.ch === 'x' && this.editor.isEmpty) {
+          this.viewing = false
+          this.viewOffset = 0
+          return this.requestRender()
+        }
         this.editor.insert(k.ch)
         this.palDismissed = null
         this.fileDismissed = null
@@ -1560,10 +1584,17 @@ export class TuiApp {
       }
       case 'pgup':
       case 'pgdn':
-        // nothing to page — the transcript lives in the terminal's native
-        // scrollback (mouse wheel / touch / shift+pgup scroll it)
-        return
+        // fullscreen history viewer — one page at a time
+        return this.scrollBy(k.t === 'pgup' ? -this.viewerPage() : this.viewerPage())
+      case 'wheel':
+        return this.scrollBy(k.dy * 3)
       case 'esc': {
+        if (this.viewing) {
+          // the history viewer closes first — like every other overlay
+          this.viewing = false
+          this.viewOffset = 0
+          return
+        }
         if (file) {
           this.fileDismissed = '@' + file.token
           return
@@ -1585,6 +1616,11 @@ export class TuiApp {
         return
       }
       case 'ctrl': {
+        if (k.ch === 'u' && this.editor.isEmpty) {
+          // empty editor + ctrl+u → jump into the history viewer (half page);
+          // with text it stays the classic kill-to-start
+          return this.scrollBy(-Math.max(3, Math.floor(this.viewerPage() / 2)))
+        }
         if (k.ch === 'u') return this.editor.killToStart()
         if (k.ch === 'w') return this.editor.killWord()
         if (k.ch === 'a') return this.editor.home()
@@ -1943,6 +1979,18 @@ export class TuiApp {
         // quick-quit ONLY on non-searchable lists — 'q' is a search letter
         // (try typing "qwen" in a filterable picker otherwise…)
         if (k.ch === 'q' && !ov.filter && !ov.filterable) return this.settle(ov, undefined)
+        // 'e' edits the highlighted row (provider API keys) — only while no
+        // filter is active, so searching still works after other letters
+        if (k.ch === 'e' && !ov.filter) {
+          const cur = this.listVisible(ov)[ov.cursor]
+          if (cur?.onEdit) {
+            void Promise.resolve(cur.onEdit(cur)).then(
+              () => this.requestRender(),
+              (e) => this.println(red(`  ✗ ${(e as Error).message}`)),
+            )
+            return
+          }
+        }
         if (ov.filterable && k.ch.length > 0 && (k.ch.codePointAt(0) ?? 0) >= 0x20) {
           ov.filter += k.ch.toLowerCase()
           ov.cursor = 0
@@ -3150,10 +3198,17 @@ export class TuiApp {
       case 'clear': {
         // wipe the screen AND the scrollback (the transcript lives there now),
         // then drop the sticky region and start over with a fresh banner
-        this.writeOut(`\x1b[${Math.max(0, this.stickyDrawn - 1)}A\x1b[J\x1b[H\x1b[2J\x1b[3J`)
-        this.stickyDrawn = 0
+        this.writeOut(
+          this.fullscreen
+            ? '\x1b[H\x1b[2J\x1b[3J'
+            : `\x1b[${Math.max(0, this.stickyDrawn - 1)}A\x1b[J\x1b[H\x1b[2J\x1b[3J`,
+        )
+        if (!this.fullscreen) this.stickyDrawn = 0
         this.log = []
         this.flushed = 0
+        this.flatCache = { upto: 0, lines: [] }
+        this.viewing = false
+        this.viewOffset = 0
         this.streamText = ''
         this.lastDoneLabel = ''
         this.banner()
@@ -3181,6 +3236,20 @@ export class TuiApp {
     }
   }
 
+  /** 'e' on a provider row — add or replace its API key without leaving
+   *  the /model picker (the row hint refreshes when the save lands) */
+  private async editProviderKey(providerId: string): Promise<void> {
+    const info = listProviderInfos(this.host.cfg).find((p) => p.id === providerId)
+    const has = info ? info.needsKey && info.hasKey : false
+    const key = (await this.askHidden(`api key for ${providerId}${has ? ' — enter to keep, type to replace' : ''}`)).trim()
+    if (!key) {
+      this.println(dim('  — key unchanged'))
+      return
+    }
+    this.host.settingsSave({ apiKey: { provider: providerId, key } })
+    this.println(green(`  ✔ key saved for ${providerId}`))
+  }
+
   /** /model with no arg — provider picker → model picker (mirrors tui.ts) */
   private async modelPickerFlow(): Promise<void> {
     const host = this.host
@@ -3196,21 +3265,23 @@ export class TuiApp {
       ...ready.map((p) => ({
         label: p.label,
         hint: `${!p.needsKey ? 'free' : 'key ✓'} · ${p.models.length} models${p.custom ? ' · custom' : ''}`,
-        detail: `${p.id}${p.id === host.cfg.defaultProvider ? ' · current' : ''}`,
+        detail: `${p.id}${p.id === host.cfg.defaultProvider ? ' · current' : ''} · e edit key`,
         value: p.id,
+        onEdit: () => this.editProviderKey(p.id),
       })),
       ...locked.map((p) => ({
         label: p.label,
-        hint: 'needs key',
-        detail: `${p.id} — add a key to unlock`,
+        hint: 'needs key — e add it',
+        detail: `${p.id} — add a key to unlock · e edit key`,
         value: p.id,
+        onEdit: () => this.editProviderKey(p.id),
       })),
     ]
     const cur = provItems.findIndex((i) => i.value === host.cfg.defaultProvider)
     const provId = await this.pick(provItems, 'provider', {
       filterable: true,
       selected: Math.max(0, cur),
-      footer: 'type to search · esc cancel',
+      footer: 'e edit key · type to search · esc',
     })
     if (!provId) return this.println(dim('  cancelled'))
     if (provId === '__add_custom__') return this.customProviderWizard()
@@ -3652,12 +3723,12 @@ export class TuiApp {
 
   /** build + write one frame (also the test entry point)
    *
-   * The inline model in one place:
-   *   1. jump to the first sticky row and wipe the sticky region (\x1b[J)
-   *   2. flush pending transcript lines into the scrollback — wrapped once
-   *      at flush time, they are immutable from there on
-   *   3. rewrite the sticky region; the cursor parks on its last row, which
-   *      is exactly where the next render's cursor-up math starts from
+   * Two paint models share this code:
+   *  - INLINE: jump to the first sticky row, wipe, flush pending transcript
+   *    lines into the terminal's own scrollback, rewrite the sticky region
+   *  - FULLSCREEN: repaint from the top-left of the alternate screen —
+   *    navbar · transcript viewport · overlays · editor. Nothing ever
+   *    scrolls; the built-in viewer pages through the history instead.
    */
   renderNow(): void {
     if (this.frameTimer) {
@@ -3667,42 +3738,62 @@ export class TuiApp {
     const rows = this.buildFrame()
     this.lastFrame = rows
     let out = ''
-    if (this.stickyDrawn > 0) out += `\x1b[${this.stickyDrawn - 1}A`
-    out += '\x1b[J'
-    while (this.flushed < this.log.length) {
-      const e = this.log[this.flushed]
-      const wrapped = e.wrapped ?? (e.wrapped = wrapStyled(e.raw, this.transcriptW()))
-      for (const l of wrapped) out += '\r\x1b[2K' + truncateStyled(l, this.termW) + '\n'
-      this.flushed++
-    }
-    for (let i = 0; i < rows.length; i++) {
-      out += '\r\x1b[2K' + rows[i]
-      if (i < rows.length - 1) out += '\n'
+    if (this.fullscreen) {
+      out = '\x1b[H'
+      for (let i = 0; i < rows.length; i++) {
+        out += '\r\x1b[2K' + rows[i]
+        if (i < rows.length - 1) out += '\n'
+      }
+      out += '\x1b[J'
+    } else {
+      if (this.stickyDrawn > 0) out += `\x1b[${this.stickyDrawn - 1}A`
+      out += '\x1b[J'
+      while (this.flushed < this.log.length) {
+        const e = this.log[this.flushed]
+        const wrapped = e.wrapped ?? (e.wrapped = wrapStyled(e.raw, this.transcriptW()))
+        for (const l of wrapped) out += '\r\x1b[2K' + truncateStyled(l, this.termW) + '\n'
+        this.flushed++
+      }
+      for (let i = 0; i < rows.length; i++) {
+        out += '\r\x1b[2K' + rows[i]
+        if (i < rows.length - 1) out += '\n'
+      }
     }
     this.writeOut(out)
-    this.stickyDrawn = rows.length
+    this.stickyDrawn = this.fullscreen ? 0 : rows.length
     this.dirty = false
   }
 
   /** pure sticky-region builder — no writes (testable).
-   * Layout, top to bottom: live stream tail · overlay box · status row ·
-   * editor box · hint row. Never taller than the screen. */
+   * Layout, top to bottom: navbar · (fullscreen: transcript viewport | inline:
+   * live stream tail) · overlay box · status row · editor box · hint row.
+   * Never taller than the screen. */
   buildFrame(): string[] {
     const W = this.termW
+    const H = this.termH
     const rows: string[] = []
+    const head = this.headerRows(W)
     const edRows = this.editorRows(W)
     const statusRow = safeRow(this.statusRow(W))
     const hintRow = safeRow(this.hintRow(W))
     // how many rows overlays may take without pushing the editor off-screen
-    const avail = Math.max(0, this.termH - edRows.length - 2)
+    const avail = Math.max(0, H - head.length - edRows.length - 2)
     const ovRows = this.overlayRows(W, avail)
-    for (const r of this.streamTailRows(W, Math.max(0, avail - ovRows.length))) rows.push(safeRow(r))
+    const transAvail = Math.max(0, avail - ovRows.length)
+    for (const r of head) rows.push(safeRow(r))
+    if (this.fullscreen) {
+      for (const r of this.transcriptRows(W, transAvail)) rows.push(safeRow(r))
+    } else {
+      // inline: the transcript lives in the terminal's native scrollback —
+      // only the live stream tail rides the sticky region
+      for (const r of this.streamTailRows(W, Math.max(0, transAvail))) rows.push(safeRow(r))
+    }
     for (const r of ovRows) rows.push(safeRow(r))
     rows.push(statusRow)
     for (const r of edRows) rows.push(safeRow(r))
     rows.push(hintRow)
     // last-resort clamp — dropping the top-most rows keeps the editor visible
-    return rows.length > this.termH ? rows.slice(rows.length - this.termH) : rows
+    return rows.length > H ? rows.slice(rows.length - H) : rows
   }
 
   /** sanitized config with a 1s cache — the hint row reads it every frame */
@@ -3712,6 +3803,100 @@ export class TuiApp {
     const val = this.host.sanitizeConfig()
     this.cfgCache = { at: now, val }
     return val
+  }
+
+  /** the sticky navbar — the old boot banner, promoted: it never scrolls
+   * away and refreshes every second (startNavTicker). Model, MCP servers,
+   * context bar, mode and session clock live here now.
+   *
+   *   ╭─ ✻ Tagent v0.19.0 ── 💬 <session title> ──────────────╮
+   *   ╰─ 🤖 build · glm-4.7 · 🔌 2✓ 31 · [██░░] 9% · 4m ────╯ */
+  private headerRows(W: number): string[] {
+    const boxW = Math.max(34, Math.min(W - 2, 78))
+    const cfg = this.cfgFast() as { defaultModel: string }
+    const st = this.host.mcpStatus()
+    const ready = st.filter((s) => s.state === 'ready')
+    const connecting = st.filter((s) => s.state === 'connecting')
+    const errored = st.filter((s) => s.state === 'error')
+    let mcp: string
+    if (connecting.length) mcp = yellow(`connecting ${connecting.length}…`)
+    else if (errored.length && ready.length) mcp = `${green(`${ready.length}✓`)} ${red(`${errored.length}✗`)}`
+    else if (errored.length) mcp = red('error')
+    else if (ready.length) mcp = green(`${ready.length}✓ ${ready.reduce((n, s) => n + s.tools, 0)}t`)
+    else mcp = dim('off')
+    const ci = this.host.contextInfo()
+    let ctx = ''
+    if (ci.limit > 0) {
+      const raw = renderContextBar(ci.used, ci.limit, 8)
+      const pct = contextPct(ci.used, ci.limit)
+      ctx = ` · ${pct >= 80 ? red(raw) : pct >= 60 ? yellow(raw) : green(raw)}`
+    }
+    const title = `${orange('✻')} ${bold('Tagent')} ${dim(`v${CURRENT_VERSION}`)} · ${dim('💬')} ${truncateStyled(this.sessionTitle, Math.max(6, boxW - 34))}`
+    const foot = `🤖 ${this.mode} · ${shortModelName(cfg.defaultModel)} · 🔌 ${mcp}${ctx} · ${fmtElapsed(Date.now() - this.startedAt)}`
+    return roundBox({ title, footer: foot, rows: [], width: boxW })
+  }
+
+  /** 1s refresh — the navbar's facts (mcp handshakes landing, the context
+   *  bar, the session clock) change with time, not just with keystrokes */
+  private startNavTicker(): void {
+    if (this.navTimer) return
+    this.navTimer = setInterval(() => {
+      if (this.exited || this.destroyed) return
+      this.requestRender()
+    }, 1000)
+  }
+
+  /** flat list of every transcript line — the fullscreen viewer pages through
+   *  it. Incrementally cached; wrapped caches live on the log entries. */
+  private flatLines(): string[] {
+    for (let i = this.flatCache.upto; i < this.log.length; i++) {
+      const e = this.log[i]
+      const wrapped = e.wrapped ?? (e.wrapped = wrapStyled(e.raw, this.transcriptW()))
+      for (const l of wrapped) this.flatCache.lines.push(l)
+    }
+    this.flatCache.upto = this.log.length
+    this.flushed = this.log.length
+    return this.flatCache.lines
+  }
+
+  /** the fullscreen transcript viewport: the newest h lines while live, or a
+   *  window into the history while the viewer is open */
+  private transcriptRows(W: number, h: number): string[] {
+    if (h <= 0) return []
+    const lines = this.flatLines()
+    const tail = this.streamTailRows(W, h)
+    if (this.viewing) {
+      const bottom = Math.max(0, lines.length - 2)
+      const start = Math.min(Math.max(0, this.viewOffset), bottom)
+      return lines.slice(start, start + h).map((l) => truncateStyled(l, W))
+    }
+    const body = lines.slice(Math.max(0, lines.length - h))
+    return [...body.map((l) => truncateStyled(l, W)), ...tail].slice(-h)
+  }
+
+  /** page size of the history viewer (keeps navbar + editor visible) */
+  private viewerPage(): number {
+    return Math.max(3, this.termH - 10)
+  }
+
+  /** scroll the fullscreen history viewer. Negative = older, positive =
+   *  newer; landing on the bottom snaps back to live mode. */
+  private scrollBy(delta: number): void {
+    const lines = this.flatLines()
+    const n = lines.length
+    if (n === 0) return
+    const bottom = Math.max(0, n - 2)
+    if (!this.viewing) {
+      if (delta >= 0) return // already live at the bottom — nothing older
+      this.viewing = true
+      this.viewOffset = Math.max(0, bottom - Math.max(3, Math.floor(this.termH / 3)))
+    }
+    this.viewOffset = Math.max(0, Math.min(this.viewOffset + delta, bottom))
+    if (this.viewOffset >= bottom) {
+      this.viewing = false
+      this.viewOffset = 0
+    }
+    this.requestRender()
   }
 
   /** the live message tail while streaming — the last few wrapped lines of
@@ -3727,6 +3912,12 @@ export class TuiApp {
   }
 
   private statusRow(W: number): string {
+    if (this.viewing) {
+      const lines = this.flatLines()
+      const h = Math.max(1, this.termH - 10)
+      const shown = Math.min(this.viewOffset + h, lines.length)
+      return truncateStyled(yellow(`↑ history ${Math.min(this.viewOffset + 1, lines.length)}–${shown} of ${lines.length} · pgdn/x end → live`), W)
+    }
     let s = ''
     if (this.notice) {
       s = red(this.notice)
@@ -4248,12 +4439,14 @@ export function appCapable(): boolean {
 }
 
 /**
- * Run the inline TUI. Mirrors `new Tui(host, opts).start()` — resolves
- * when the user exits (ctrl+c twice, /exit). Always restores the terminal.
+ * Run the TUI. Mirrors `new Tui(host, opts).start()` — resolves when the
+ * user exits (ctrl+c twice, /exit). Always restores the terminal.
+ * Fullscreen (opencode-style) is the default; `tagent start --inline`
+ * passes fullscreen:false for the scrollback-native inline app.
  */
 export async function runApp(
   host: AgentHost,
-  opts: { workspaceRoot: string; webUrl?: string; initialMode?: AgentMode; autoSend?: string },
+  opts: { workspaceRoot: string; webUrl?: string; initialMode?: AgentMode; autoSend?: string; fullscreen?: boolean },
 ): Promise<void> {
   const app = new TuiApp(host, opts)
   try {
