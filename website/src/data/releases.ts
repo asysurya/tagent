@@ -28,9 +28,61 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.18.0'
+export const LATEST = '0.19.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.19.0',
+    date: '2026-09-20',
+    title: 'Background tools, modes that know their job, and a true multi-line input',
+    summary:
+      'The agent can now run long processes in the background and check on them while it keeps working (bg_run / bg_logs / bg_stop). Build/plan/test modes each ship exactly the tools their job needs — plan and test keep MCP. The input editor is genuinely multi-line: Enter inserts a newline, shift+enter sends, and multi-line pastes land as text instead of an Enter-submit per line. The agent also sets its own tool timeouts, provider errors read like errors, and markdown code renders as chips.',
+    stable: true,
+    sections: [
+      {
+        name: 'New: background processes (bg_run · bg_logs · bg_stop)',
+        items: [
+          'bg_run spawns any long-running command in its own process group and returns immediately — dev servers, file watchers, soak tests, slow installs keep running across turns while the agent works',
+          'bg_logs polls the process: status, uptime, output line count, and the tail — a growing line count between checks is the "still working" signal; bg_stop kills the whole tree',
+          'one handle per name per session, early-crash detection returns the output when a command dies instantly, and everything is killed on exit — no leaked processes',
+        ],
+      },
+      {
+        name: 'Modes that know their job',
+        items: [
+          'build mode ships only project-affecting tools — the QA report (test_report) is test mode\u2019s deliverable, not the builder\u2019s',
+          'plan mode: investigate + interview — read/search/web/ask_user plus explore subagents (task is back in plan)',
+          'test mode (QA) knows the workflow: PRD.md is the spec, WORKLOG.md is what actually shipped; it teaches bg_run for non-web processes and how to budget its own timeouts',
+          'MCP and plugin tools stay available in plan AND test mode (the permission gate still asks the human for every risky call)',
+        ],
+      },
+      {
+        name: 'Multi-line input, paste that behaves',
+        items: [
+          'Enter inserts a newline; shift+enter (also alt/ctrl+enter) submits — kitty keyboards report shift+enter natively, legacy terminals can always use alt+enter',
+          'bracketed paste mode: multi-line pastes land as text in the editor — never an Enter-submit per line; pastes route into whatever editor owns focus (main editor, dialogs, ask-form fields), and a single trailing newline is dropped',
+          'the editor box grows to 8 rows with cursor-following scroll, and its placeholder teaches the new keys',
+        ],
+      },
+      {
+        name: 'Agent-set timeouts + readable errors',
+        items: [
+          'bash timeout ceiling 5min → 60min, serve ready-wait likewise — the agent budgets long builds/installs itself instead of watching them die at the default',
+          'TAGENT_MCP_CALL_TIMEOUT_MS env for MCP tool calls (default 2min) — scrapers and pipeline tools are slow by nature',
+          'provider HTTP errors render for humans: an OpenRouter 402 now reads "add credits at …" instead of a triple raw-JSON dump (prettyHttpError covers OpenAI/Anthropic/Google shapes too)',
+        ],
+      },
+      {
+        name: 'Also',
+        items: [
+          'markdown: inline `code` renders as a padded chip (dark bg + light gold), fenced blocks get a cyan [lang] tag and the correct ╮ top corner',
+          'banner and user cards clamp to the transcript width — the hard 44-column floor wrapped box rails mid-line on narrow terminals (odd widths, split panes, phone terms)',
+          'the history viewer renders inside the inline app too, and arrow keys scroll it while it is open; the boot MCP handshake with its retry-once logic lands in the sticky navbar',
+          'full test battery green: v0.19.0 suite 70/70, tui-app ALL, markdown 95/95, testmode 56, app-pty 42/42 (rewritten for the fullscreen default)',
+        ],
+      },
+    ],
+  },
   {
     version: '0.18.0',
     date: '2026-09-20',

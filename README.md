@@ -60,6 +60,10 @@ process when you want a browser. Same engine, same sessions, same permissions.
 | 🧪 **Test mode** | `tagent test` — QA agent: serves the project, clicks through it with a real browser, screenshots + audits responsive/typography/contrast, writes `TEST-REPORT.md` (vision models see the screenshots) |
 | 📊 **Context window** | Live usage bar under the chat input (`12.3k/131.1k [██████░░░░] 9%`, color-coded, opencode-style) tracks the model's window every turn; at 80% you get a one-key prompt to compact |
 | ✨ **Real TUI libraries** | The interface is built on string-width · figures · cli-boxes · picocolors · wrap-ansi: rounded cards (`╭─ ❯ you ─╮`), emoji tool icons with aligned columns, full box markdown tables (`╭┬╮ ├┼┤ ╰┴╯`), and width that counts CJK/emoji/combining marks correctly — the lines finally RATA (v0.18.0) |
+| 🔼 **Multi-line input** | Enter inserts a newline, shift/alt/ctrl+enter sends; bracketed paste — multi-line pastes land as text, never an Enter-submit per line (v0.19.0) |
+| 🔺 **Background processes** | `bg_run` / `bg_logs` / `bg_stop` — the agent spawns long-running commands (dev servers, watchers, soak tests) in their own process group, keeps working, polls the output, and kills the tree when done (v0.19.0) |
+| 🧰 **Mode toolsets** | build = project-affecting tools, plan = investigate + interview (with explore subagents), test = QA — and MCP/plugin tools stay available in every mode (v0.19.0) |
+| ⏱️ **Agent-set timeouts** | bash/serve budgets go up to 60 minutes, `TAGENT_MCP_CALL_TIMEOUT_MS` for slow MCP tools — the agent decides how long to wait (v0.19.0) |
 | 🧹 **Deterministic compaction** | `/compact` summarizes old turns into a structured digest (a 100k-token history lands ≈10k) — 100% local code, NO AI call, nothing invented: facts, paths, tool outcomes and decisions are copied, never generated. Re-compaction folds the prior digest in |
 | 📝 **AI ask forms** | `ask_user` tool — the agent interviews you through interactive forms: option / multi-option / input fields, add your own options, optional notes box; answers flow back into the run (TUI overlay · GUI dialog · headless-safe) |
 | 🛠 **Z.ai models config** | The built-in provider's model list is data: edit `~/.tagent/zai-models.json` (or `<workspace>/.tagent/zai-models.json`) to add/relabel/flag models — no release wait |
@@ -522,6 +526,8 @@ export const hooks = {
 - [x] Deterministic compaction — `/compact` summarizes old turns with zero AI calls (v0.17.0)
 - [x] Update never blocks / never loses data — conflict-state recovery + `~/.tagent` snapshots (v0.17.0)
 - [x] Real TUI libraries — string-width/figures/cli-boxes/picocolors/wrap-ansi; rounded cards, emoji tool icons, box tables, aligned everything (v0.18.0)
+- [x] Background processes — bg_run/bg_logs/bg_stop, the agent runs and watches long commands (v0.19.0)
+- [x] Multi-line input — enter=newline, shift+enter=send, paste-safe; mode toolsets; agent-set timeouts (v0.19.0)
 
 Ideas for the next versions (unordered, unpromised):
 

@@ -36,62 +36,64 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — the glow-up: real TUI libraries
+## v__VER__ — background tools, mode toolsets, multi-line input
 
-The TUI now runs on real terminal libraries instead of hand-rolled width
-math, and it shows: **rounded cards**, **emoji tool icons**, **box markdown
-tables**, and — the actual point — **lines that finally align**.
+The agent can now RUN things in the background and keep working. Modes
+ship exactly the tools their job needs. And the input editor finally
+writes real multi-line messages.
 
 ```
-╭─ ✻ Tagent v__VER__ ──────────────────────────────────────────╮
-│ 📂 workspace /home/z/my-project/demo-workspace               │
-│ 🤖 model     glm-4.7 (zai) · ctx 0/131.1k [░░░░░░░░░░] 0%    │
-│ 🔌 mcp       none — /mcp adds Model Context Protocol servers │
-│ 🌐 web gui   off — /webgui on or start with --web-gui        │
-╰──────────────────────────────────────────────────────────────╯
+╭─ ✻ Tagent v__VER__ ── 💬 running the dev server ──────────╮
+╰─ 🤖 build · glm-4.7 · 🔌 2✓ 31 · [██░░░░░░] 9% · 4m ────╯
 
-╭─ ❯ you ─────────────────────────────────────────────────────╮
-│ halo 你好 ✅ cek alignment bawah ini ya                     │
-╰──────────────────────────────────────────────────────────────╯
+  💻 bg_run      dev — bun run dev
+    ⎿ ✓ running (pid 4821, 12s, 38 output lines)
 
-  💻 bash        git status
-    ⎿ ✓ 2.1s — 3 lines
+  💻 bg_logs     dev
+    ⎿ ✓ tick 14 · compiled successfully
 ```
 
-### New: shared UI kit (`ui.ts`)
+### New: background processes (bg_run · bg_logs · bg_stop)
 
-- **string-width + strip-ansi** — true Unicode display width: CJK extension
-  blocks, emoji presentation (✅ ⚡ …), ZWJ families, combining marks. The
-  old hand-rolled table missed whole ranges — that is why columns wobbled
-- **figures** — cross-platform symbols (✔ ✘ ❯ ↑↓) with automatic ASCII
-  fallback on legacy terminals
-- **cli-boxes** — the `╭─╮ ╰─╯` round border preset; **picocolors** for
-  color; **wrap-ansi** for hard word wrap
-- one kit, four consumers: the inline TUI, the classic TUI, the markdown
-  renderer and the select menus all measure with the same functions
+- `bg_run` spawns ANY long-running command in its own process group and
+  returns immediately — dev servers, watchers, soak tests, slow installs
+  keep running across turns while the agent keeps working
+- `bg_logs` polls the process: status, uptime, output line count and the
+  tail — a growing line count is the "still working" signal; `bg_stop`
+  kills the whole tree. Early-crash detection returns the output when a
+  command dies instantly. Nothing leaks past exit.
 
-### The glow-up
+### Modes that know their job
 
-- boot banner is a rounded card with an emoji row per fact and a value
-  column that is ALWAYS aligned (the old hardcoded padding was off by one
-  column on two rows — `mcp` and `web gui`)
-- your messages echo as opencode-style rounded cards (`╭─ ❯ you ──╮`) —
-  CJK and emoji in the text can no longer break the right rail
-- tool lines carry emoji icons (📖 read · 💻 bash · 🔍 search · 🌐 fetch ·
-  💬 ask · 🧠 memory · 🤖 subagent …) on a fixed tool-name column, so
-  durations and summaries line up; results keep the `⎿` connector
-- markdown pipe tables render as full box tables (`╭┬╮ ├──┼──┤ ╰┴╯`) with
-  left/center/right alignment preserved
-- assistant messages get Claude Code's orange ● bullet; the status row has
-  a moon-phase spinner (🌑🌒🌓) with 🤔/⚡/🌊 phase emoji
-- `/help`, `/tools`, `/models`, `/mcp`, `/sessions` menus pad with true
-  width — emoji or CJK in names no longer shear the columns
+- build mode ships only project-affecting tools — the QA report
+  (test_report) is test mode's deliverable, not the builder's
+- plan mode: investigate + interview — read/search/web/ask_user plus
+  explore subagents (task is back in plan)
+- test mode (QA) knows the workflow: PRD.md is the spec, WORKLOG.md is
+  what actually shipped; it teaches bg_run for non-web processes
+- MCP and plugin tools stay available in plan AND test mode — the
+  permission gate still asks the human for every risky call
 
-### Also
+### Multi-line input, paste that behaves
 
-- full test coverage: 46 ui-kit unit tests plus the whole regression battery
-  re-run green (tui-app, tui-md, markdown 95, compact 49, context-loop 30,
-  ask 38, cache 38, features, select, host, PTY suites)
+- **Enter inserts a newline; shift+enter sends** (alt+enter and
+  ctrl+enter too — works on legacy terminals, kitty keyboards report
+  shift+enter natively)
+- bracketed paste: multi-line pastes land as text in the editor — never
+  an Enter-submit per line; pastes route into whatever editor owns
+  focus, and a single trailing newline is dropped
+- the editor box grows to 8 rows with cursor-following scroll
+
+### Agent-set timeouts + readable errors
+
+- bash timeout ceiling 5min → 60min, serve ready-wait likewise — the
+  agent budgets long builds/installs itself instead of watching them die
+  at the default; `TAGENT_MCP_CALL_TIMEOUT_MS` for slow MCP tools
+- provider HTTP errors render for humans: an OpenRouter 402 now reads
+  "add credits at …" instead of a triple raw-JSON dump
+- markdown: inline `code` renders as a padded chip, fenced blocks get a
+  cyan [lang] tag; banner/user cards clamp to the transcript width so
+  narrow terminals (odd widths, split panes) never wrap box rails
 
 ---
 
@@ -138,13 +140,14 @@ sha256sum --check SHA256SUMS.txt   # certutil -hashfile <file> SHA256 on Windows
 ```
 EOF
 )
+
 BODY=${BODY//__VER__/$VERSION}
 echo "[release] creating GitHub release v$VERSION …"
 RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — context window bar + deterministic memory compaction" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — background tools, mode toolsets, multi-line input" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")
