@@ -44,7 +44,14 @@ function initTimeoutMs(): number {
   const v = Math.floor(Number(process.env.TAGENT_MCP_INIT_TIMEOUT_MS ?? ''))
   return Number.isFinite(v) && v >= 1000 ? v : 60_000
 }
-const CALL_TIMEOUT_MS = 60_000
+/** per-CALL budget — some MCP tools are slow by nature (scrapers, agents,
+ *  build pipelines). Override with TAGENT_MCP_CALL_TIMEOUT_MS=<millis>
+ *  (values under 1s are ignored). */
+function callTimeoutMs(): number {
+  const v = Math.floor(Number(process.env.TAGENT_MCP_CALL_TIMEOUT_MS ?? ''))
+  return Number.isFinite(v) && v >= 1000 ? v : 120_000
+}
+const CALL_TIMEOUT_MS = callTimeoutMs()
 const LIST_TIMEOUT_MS = 10_000
 const MAX_OUTPUT = 24_000
 

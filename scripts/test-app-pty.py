@@ -123,21 +123,24 @@ class App:
         return rows
 
     def editor_box(self):
-        """the editor frame rows (top border → bottom border, inclusive)"""
+        """the editor frame rows — the LAST ╭..╰ box in the frame (the editor
+        sits at the bottom; the navbar/banner boxes render above it, so
+        scanning top-down grabs the wrong box)"""
         rows = self.screen()
-        for i, r in enumerate(rows):
-            if r.startswith('╭'):
-                for j in range(i + 1, len(rows)):
-                    if rows[j].startswith('╰'):
+        for j in range(len(rows) - 1, -1, -1):
+            if rows[j].startswith('╰'):
+                for i in range(j - 1, -1, -1):
+                    if rows[i].startswith('╭'):
                         return rows[i:j + 1]
+                return []
         return []
 
     def transcript_rows(self):
-        """rows between the header and the status row above the editor box
-        (no overlay is open when this is used)"""
+        """history rows on screen while the viewer is open — between the
+        navbar (rows 0-1, itself a box) and the viewer status row"""
         rows = self.screen()
-        box_top = next((i for i, r in enumerate(rows) if r.startswith('╭')), len(rows))
-        return rows[1:max(1, box_top - 1)]
+        box_top = next((i for i in range(2, len(rows)) if rows[i].startswith('╭')), len(rows))
+        return rows[2:max(2, box_top - 1)]
 
     def close(self):
         try:
@@ -169,12 +172,13 @@ app.pump(1.0)  # let the startup update check land before interacting
 if b'update now?' in app.buf:  # esc = skip — never let it eat the interactions
     app.send('\x1b', 0.5)
     check('update prompt dismissed (skipped)', True)
-check('alt screen entered', b'\x1b[?1049h' in app.buf)
+check('alt screen entered', b'?1049h' in app.buf)
 rows = app.screen()
-check('header renders (workspace)', bool(rows) and 'demo-workspace' in rows[0])
-check('footer keys (esc stop/clear)', any('esc stop/clear' in r for r in rows))
-check('stats row renders (model · mode · … · ws)',
-      any(r.rstrip().endswith('demo-workspace') and (' · build · ' in r or ' · plan · ' in r) for r in rows))
+buf_text = strip_ansi(app.buf.decode('utf8', 'replace'))
+check('banner workspace flushed to the scrollback', 'demo-workspace' in buf_text)
+check('hint row keys', any('? shortcuts' in r for r in rows))
+check('hint row stats (mode · model)',
+      any('build ·' in r for r in rows))
 
 box = app.editor_box()
 widths = [dwidth(r) for r in box]
@@ -225,7 +229,7 @@ check('README.md offered', any('README.md' in r for r in app.screen()))
 app.send('\r', 0.5)
 scr = app.screen()
 check('file completion Enter inserts the path',
-      any('README.md' in r for r in app.editor_box()) and not any('@ files' in r for r in scr))
+      any('README.md' in r for r in app.editor_box()) and not any('↑↓ select' in r for r in scr))
 app.send('\x1b', 0.5)
 check('esc clears the editor text', any('Message tagent' in r for r in app.editor_box())
       and not any('README.md' in r for r in app.editor_box()))
@@ -239,7 +243,7 @@ app.send('/settings\r', 1.2)
 check('settings dumped to the transcript',
       any('autoCheckpoint' in r for r in app.screen()) and any('maxTurns' in r for r in app.screen()))
 app.send('\x1b[5~', 0.6)  # pgup
-check('pgup scrolls (scrolled indicator)', any('scrolled' in r for r in app.screen()))
+check('pgup opens the history viewer', any('history' in r and 'of ' in r for r in app.screen()))
 t0 = app.transcript_rows()
 app.send('\x1b[A', 0.4)  # up — must scroll ONE line
 t1 = app.transcript_rows()
@@ -250,8 +254,11 @@ check('down-arrow steps back one line', t2 == t0)
 check('arrows did not recall history into the editor',
       not any('/settings' in r for r in app.editor_box()))
 app.send('x', 0.5)
-check('typing jumps back to the bottom', not any('scrolled' in r for r in app.screen()))
-check('typed key landed in the editor', not any('Message tagent' in r for r in app.editor_box()))
+check('typing jumps back to the bottom (viewer closed)', 'history' not in ' '.join(app.screen()))
+app.send('x', 0.4)  # the first x only dismissed the viewer; this one types
+check('typed key landed in the editor',
+      not any('Message tagent' in r for r in app.editor_box())
+      and 'x' in (app.editor_box()[1] if len(app.editor_box()) > 1 else ''))
 
 # ---- 7. ESC detection (timer) + idle notice -----------------------------------
 app.send('\x1b\x1b', 0.7)  # double-tap: both escs fire, nothing is swallowed
@@ -279,7 +286,7 @@ app.send('\x1b', 0.5)
 
 # ---- 9. exit -------------------------------------------------------------------
 app.send('/exit\r', 3.0)
-check('alt screen restored', b'\x1b[?1049l' in app.buf)
+check('alt screen restored', b'?1049l' in app.buf)
 app.close()
 check('app exited cleanly (status 0)', app.status == 0)
 

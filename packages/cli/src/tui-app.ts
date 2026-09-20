@@ -297,7 +297,7 @@ function nextLen(s: string, col: number): number {
 
 export type Key =
   | { t: 'print'; ch: string }
-  | { t: 'enter'; mod?: 'shift' | 'alt' }
+  | { t: 'enter'; mod?: 'shift' | 'alt' | 'ctrl' }
   | { t: 'tab' }
   | { t: 'esc' }
   | { t: 'backspace' }
@@ -365,7 +365,12 @@ class Editor {
     this.histPos = null
   }
   insertText(t: string): void {
-    for (const ch of t) this.insert(ch)
+    // multi-line aware: each \n splits into a real editor line (pastes!)
+    const parts = t.split('\n')
+    for (let i = 0; i < parts.length; i++) {
+      if (i > 0) this.newline()
+      if (parts[i] !== '') this.insert(parts[i])
+    }
   }
   newline(): void {
     const l = this.lines[this.row]
@@ -690,7 +695,7 @@ export interface TuiAppOptions {
   fullscreen?: boolean
 }
 
-const EDITOR_PLACEHOLDER = 'Message tagent… (/ commands, @ files, ? shortcuts)'
+const EDITOR_PLACEHOLDER = 'Message tagent… (enter newline · shift+enter send · / @ ?)'
 const HINT_KEYS = `? shortcuts · / commands · @ files`
 
 /* ------------------------------------------------------------------ */
@@ -798,6 +803,10 @@ export class TuiApp {
   /** 1s navbar ticker — model/mcp/context/time facts refresh without a keypress */
   private navTimer: ReturnType<typeof setInterval> | undefined
 
+  /* bracketed paste state — feed() switches on \x1b[200~ / \x1b[201~ */
+  private pasting = false
+  private pasteBuf = ''
+
   /* relay endpoint (/relay without a running web gui) */
   private relayServer?: DaemonHandle
   private relayBase?: string
@@ -872,6 +881,8 @@ export class TuiApp {
       this.io.input.setRawMode?.(true)
     } catch { /* not a tty — appCapable() gates this */ }
     this.io.input.resume?.()
+    // bracketed paste on: multi-line pastes arrive as text, not Enter-key spam
+    this.writeOut('\x1b[?2004h')
     if (this.fullscreen) {
       // opencode-style app: a clean alternate screen + mouse-wheel tracking
       // (the built-in viewer scrolls; shift+wheel still reaches the terminal's
@@ -935,7 +946,7 @@ export class TuiApp {
       // pre-app scrollback from its own buffer
       this.writeOut('\x1b[?1002l\x1b[?1006l\x1b[?1049l')
     }
-    this.writeOut('\x1b[?25h')
+    this.writeOut('\x1b[?2004l\x1b[?25h')
     try {
       if (this.prevRaw === undefined) this.io.input.setRawMode?.(false)
       else this.io.input.setRawMode?.(this.prevRaw)
@@ -1310,7 +1321,10 @@ export class TuiApp {
     // the boot intro — two border rows of a rounded card. The live facts
     // (model · mcp · context · mode · time) moved to the sticky navbar
     // (headerRows) which refreshes every second instead of scrolling away.
-    const boxW = Math.max(44, Math.min(this.transcriptW() - 2, 78))
+    // never wider than the transcript — a hard 44-col floor overflows narrow
+    // terminals (phone terms, split panes) and the viewport then wraps the
+    // box mid-rail. roundBox truncates the title itself when tight.
+    const boxW = Math.min(this.transcriptW() - 2, 78)
     const web = this.webUrl
       ? `🌐 ${this.webUrl} ${dim('(sharing this session)')}`
       : `🌐 web gui off — ${dim('/webgui on · start with --web-gui')}`
@@ -1339,11 +1353,65 @@ export class TuiApp {
     }
   }
 
-  /** test hook + stdin data handler: parse keys from a raw string */
+  /** test hook + stdin data handler: parse keys from a raw string.
+   *  Bracketed paste (\x1b[?2004h is enabled in enterScreen) is intercepted
+   *  here: pasted bytes NEVER become keypresses — a multi-line paste lands
+   *  as text with its newlines intact instead of an Enter-submit per line. */
   feed(data: string): void {
-    this.inBuf += data
+    if (this.pasting) {
+      // inside a paste: everything is literal until the end marker
+      const combined = this.pasteBuf + data
+      const end = combined.indexOf('\x1b[201~')
+      if (end === -1) {
+        this.pasteBuf = combined
+        return
+      }
+      const body = combined.slice(0, end)
+      this.pasting = false
+      this.pasteBuf = ''
+      this.pasteText(body)
+      const rest = combined.slice(end + 6)
+      if (rest.length > 0) this.feed(rest)
+      this.requestRender()
+      return
+    }
+    const combined = this.inBuf + data
+    const start = combined.indexOf('\x1b[200~')
+    if (start === -1) {
+      this.inBuf = combined
+      this.pump()
+      this.requestRender()
+      return
+    }
+    // keys typed before the paste flush first; a partial-escape residue at
+    // the cut can only be the marker's own split half — drop it
+    this.inBuf = combined.slice(0, start)
     this.pump()
-    this.requestRender()
+    this.inBuf = ''
+    this.pasting = true
+    this.pasteBuf = ''
+    const rest = combined.slice(start + 6)
+    if (rest.length > 0) this.feed(rest)
+  }
+
+  /** a paste body lands in whatever editor currently owns input — the main
+   *  editor or an open dialog's — as text, never as a submit. A single
+   *  trailing newline is dropped: terminals add it on every select-copy. */
+  private pasteText(body: string): void {
+    let text = body.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+    if (text.endsWith('\n')) text = text.slice(0, -1)
+    if (text === '') return
+    // resolve the focused editor the same way askFormKey does
+    let ed: Editor | undefined
+    const top = this.overlayStack[this.overlayStack.length - 1]
+    if (top?.kind === 'input') ed = top.editor
+    else if (top?.kind === 'askform') {
+      const row = top.rows[Math.min(top.cursor, top.rows.length - 1)]
+      ed = row.kind === 'input' ? top.editors[row.fieldIndex] : row.kind === 'notes' ? top.notes : undefined
+    }
+    ;(ed ?? this.editor).insertText(text)
+    this.palDismissed = null
+    this.fileDismissed = null
   }
 
   private pump(): void {
@@ -1439,7 +1507,10 @@ export class TuiApp {
       // alt + other → unsupported combo, drop
       return { skip: 2 }
     }
-    if (ch === '\r' || ch === '\n') return { key: { t: 'enter' }, skip: 1 }
+    if (ch === '\r') return { key: { t: 'enter' }, skip: 1 }
+    // \n is what many terminals send for ctrl+enter — under the
+    // enter=newline convention it must submit, not make another newline
+    if (ch === '\n') return { key: { t: 'enter', mod: 'ctrl' }, skip: 1 }
     if (ch === '\t') return { key: { t: 'tab' }, skip: 1 }
     if (ch === '\x7f' || ch === '\b') return { key: { t: 'backspace' }, skip: 1 }
     const cp = ch.codePointAt(0) ?? 32
@@ -1525,13 +1596,16 @@ export class TuiApp {
         return
       }
       case 'enter': {
-        if (k.mod === 'shift' || k.mod === 'alt') return this.editor.newline()
+        // the inverted convention: bare enter makes a NEWLINE (pastes and
+        // long messages flow naturally); modified enters (shift/alt/ctrl)
+        // SUBMIT. Completion menus keep bare-enter accept — menu muscle memory.
         if (file) {
           this.insertFileCandidate()
           return
         }
         if (pal) return this.paletteEnter()
-        return this.submit()
+        if (k.mod === 'shift' || k.mod === 'alt' || k.mod === 'ctrl') return this.submit()
+        return this.editor.newline()
       }
       case 'tab': {
         if (file) return this.insertFileCandidate()
@@ -1566,6 +1640,8 @@ export class TuiApp {
           this.fileCursor = Math.max(0, this.fileCursor - 1)
           return
         }
+        // reading history: arrows scroll the viewer (opencode-style)
+        if (this.viewing) return this.scrollBy(-1)
         // single-line editor: ↑ walks the input history (Claude Code / shell)
         if (!this.editor.up()) this.editor.histPrev()
         return
@@ -1579,6 +1655,7 @@ export class TuiApp {
           this.fileCursor = Math.min(file.items.length - 1, this.fileCursor + 1)
           return
         }
+        if (this.viewing) return this.scrollBy(1)
         if (!this.editor.down()) this.editor.histNext()
         return
       }
@@ -1661,7 +1738,7 @@ export class TuiApp {
    *  the text is bold-wrapped inside, widths handled by the ui kit so the
    *  right rail stays RATA even with CJK/emoji in the message */
   private logUser(text: string): void {
-    const boxW = Math.max(30, Math.min(this.transcriptW() - 2, 78))
+    const boxW = Math.min(this.transcriptW() - 2, 78)
     const cellW = boxW - 4
     const rows: string[] = []
     for (const l of text.split('\n')) {
@@ -2532,7 +2609,7 @@ export class TuiApp {
     const lines: string[] = ['', bold('  Tagent commands'), '']
     for (const [k, v] of HELP_ROWS) lines.push(`    ${'/' + padCol(k, 46)} ${dim(v)}`)
     lines.push('')
-    lines.push(dim('    keys: ? shortcuts · enter send · alt+enter newline · ctrl+x menu'))
+    lines.push(dim('    type to talk · enter newline · shift+enter send · ctrl+x menu'))
     this.overlayStack.push({ kind: 'text', title: 'help', lines, scroll: 0, resolve: () => undefined })
     this.requestRender()
   }
@@ -2547,10 +2624,12 @@ export class TuiApp {
       k('/', 'command palette'),
       k('@', 'file mention + completion'),
       k('↑ / ↓', 'input history (single line)'),
-      k('alt+enter', 'newline inside the editor'),
+      k('enter', 'newline — write multi-line messages'),
+      k('shift+enter', 'send (alt+enter / ctrl+enter too)'),
+      k('paste', 'multi-line paste — lands as text, never submits'),
       k('ctrl+a/e/u/k/w', 'line editing (home/end/kill)'),
       k('ctrl+x', 'main menu'),
-      k('enter', 'send · tab complete'),
+      k('tab', 'complete the / command or @ file'),
       '',
       bold('  while running'), '',
       k('esc', 'interrupt the run'),
@@ -3785,8 +3864,12 @@ export class TuiApp {
       for (const r of this.transcriptRows(W, transAvail)) rows.push(safeRow(r))
     } else {
       // inline: the transcript lives in the terminal's native scrollback —
-      // only the live stream tail rides the sticky region
-      for (const r of this.streamTailRows(W, Math.max(0, transAvail))) rows.push(safeRow(r))
+      // the sticky region carries the live stream tail, and swaps to the
+      // history window while the viewer is open (pgup / wheel up)
+      const src = this.viewing
+        ? this.transcriptRows(W, Math.max(0, transAvail))
+        : this.streamTailRows(W, Math.max(0, transAvail))
+      for (const r of src) rows.push(safeRow(r))
     }
     for (const r of ovRows) rows.push(safeRow(r))
     rows.push(statusRow)

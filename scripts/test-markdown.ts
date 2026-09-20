@@ -103,13 +103,13 @@ console.log('renderMarkdown — inline styles')
 {
   const l = renderMarkdown('plain **bold** and *ital* and `code` end')
   eq('bold+italic+code single line', l.length, 1)
-  eq('bold+italic+code text kept', stripAnsi(l[0]), 'plain bold and ital and code end')
+  eq('bold+italic+code text kept (chip padded)', stripAnsi(l[0]), 'plain bold and ital and  code  end')
   ok('**bold** → SGR 1', l[0].includes('\x1b[1mbold\x1b[0m'))
   ok('*ital* → SGR 3', l[0].includes('\x1b[3mital\x1b[0m'))
-  ok('`code` → SGR 33', l[0].includes('\x1b[33mcode\x1b[0m'))
+  ok('`code` → chip SGR + padding', l[0].includes('\x1b[48;5;237;38;5;222m code '))
 
   const c = renderMarkdown('`a **b** c`')
-  eq('inline code keeps content verbatim', stripAnsi(c[0]), 'a **b** c')
+  eq('inline code keeps content verbatim (chip-padded)', stripAnsi(c[0]), ' a **b** c ')
   ok('no bold inside inline code', !c[0].includes('\x1b[1m'))
 
   const u = renderMarkdown('_em_ and __strong__')
@@ -132,14 +132,14 @@ console.log('renderMarkdown — fenced code blocks')
     [
       'para',
       '',
-      '╭─ ts ' + '─'.repeat(23) + '╯',
+      '╭─[ts]' + '─'.repeat(23) + '╮',
       '│ const x = 1',
       '╰' + '─'.repeat(28) + '╯',
       '',
       'after',
     ],
   )
-  ok('fence: top border dim', f[2].startsWith('\x1b[2m╭─ ts'))
+  ok('fence: top border dim + cyan [ts] tag', f[2].startsWith('\x1b[2m╭─') && f[2].includes('\x1b[36m[ts]'))
   ok('fence: content soft hue', f[3].includes('\x1b[38;5;152mconst x = 1\x1b[0m'))
   ok('fence: border is dim │ prefix', f[3].startsWith('\x1b[2m│ \x1b[0m'))
   ok('fence: width respected', allFit(f, 30))
@@ -162,7 +162,7 @@ console.log('renderMarkdown — fenced code blocks')
   const unclosed = renderMarkdown('```js\nfoo()')
   // top border totals `width` columns (2 + 4-char label + 73 + 1 = 80),
   // same as the bottom border — 72 was a hand-count slip
-  eq('unclosed fence: structure', stripped(unclosed), ['╭─ js ' + '─'.repeat(73) + '╯', '│ foo()', '╰' + '─'.repeat(78) + '╯'])
+  eq('unclosed fence: structure', stripped(unclosed), ['╭─[js]' + '─'.repeat(73) + '╮', '│ foo()', '╰' + '─'.repeat(78) + '╯'])
 
   // raw ESC in code content is stripped (escape safety)
   const inj = renderMarkdown('```\n\x1b[31mred\x1b[0m\n```', 20)

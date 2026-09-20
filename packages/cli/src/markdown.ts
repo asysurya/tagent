@@ -33,10 +33,13 @@ const sty = (code: string, s: string): string =>
 
 const S_BOLD = '1'
 const S_DIM = '2'
-const S_CODE = '33' // yellow — inline code
+/** inline code chip — soft dark bg + light gold text (reads as a chip on
+ *  both dark and light themes; degrades to plain text under NO_COLOR) */
+const S_CODE = '48;5;237;38;5;222'
 const S_URL = '2;4' // dim + underline — bare urls
 const S_LINK_URL = '2' // dim — the (url) part of [text](url)
 const S_SOFT = '38;5;152' // soft steel blue — fenced code content
+const S_FENCE_LANG = '36' // cyan — the fence's language label
 const S_MARK = '36' // cyan — list markers
 /** h1–h3 get a hue, h4+ are plain bold */
 const HEADING_STYLES = ['1;36', '1;35', '1;33', '1', '1', '1']
@@ -170,6 +173,9 @@ interface Piece {
   style: string
   /** url-ish piece: unbreakable, middle-truncated when too long */
   url?: boolean
+  /** inline-code chip: never split at inner spaces — the padding is part
+   *  of the look, and `git pull` must stay one unbreakable chip */
+  chip?: boolean
 }
 
 const MAX_INLINE_DEPTH = 3
@@ -222,7 +228,11 @@ function parseInline(src: string, budget: number, depth = 0): Piece[] {
       if (close > -1) {
         const code = src.slice(i + run, close).replace(/\n/g, ' ').trim()
         flushLit()
-        if (code !== '') out.push({ text: code, style: S_CODE })
+        // a chip: padded when colored, plain under NO_COLOR (text identical)
+        if (code !== '') {
+          const pad = colorOn() ? ' ' : ''
+          out.push({ text: `${pad}${code}${pad}`, style: S_CODE, chip: true })
+        }
         i = close + run
         continue
       }
@@ -349,6 +359,12 @@ function wordsOf(pieces: Piece[]): Piece[][] {
   }
   for (const p of pieces) {
     if (p.text === '') continue
+    // chips are single unbreakable words — their inner spaces are padding
+    if (p.chip) {
+      endWord()
+      if (p.text !== '') words.push([{ ...p }])
+      continue
+    }
     const parts = p.text.split(' ')
     for (let k = 0; k < parts.length; k++) {
       if (parts[k] === '') {
@@ -489,14 +505,15 @@ function headingBlock(text: string, level: number, width: number): string[] {
   return wrapRender(pieces, width, width)
 }
 
-/** fenced code block: dim border, soft-hue content, verbatim lines */
+/** fenced code block: dim border, cyan language tag, soft-hue content, verbatim lines */
 function fenceBlock(body: string[], lang: string, width: number): string[] {
   const out: string[] = []
   const inner = Math.max(4, width - 2)
-  let label = ''
-  if (lang !== '') label = ' ' + cutPlain(lang, Math.max(1, width - 8))[0] + ' '
-  const fill = Math.max(0, width - 3 - strWidth(label))
-  out.push(sty(S_DIM, `╭─${label}${'─'.repeat(fill)}╯`))
+  // [lang] tag in cyan when present — the ─ fill stays dim
+  const tag = lang !== '' ? `[${cutPlain(lang, Math.max(1, width - 10))[0]}]` : ''
+  const tagW = strWidth(tag)
+  const fill = Math.max(0, width - 3 - tagW)
+  out.push(sty(S_DIM, `╭─`) + (tag !== '' ? sty(S_FENCE_LANG, tag) : '') + sty(S_DIM, `${'─'.repeat(fill)}╮`))
   for (const bl of body) {
     if (bl.trim() === '') {
       out.push(sty(S_DIM, '│'))

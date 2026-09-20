@@ -278,10 +278,11 @@ test('editor: typing echoes in the boxed input', async () => {
   app.destroy()
 })
 
-test('enter sends: host.chatSend receives the text, user line + done line flush to the scrollback', async () => {
+test('shift+enter sends: host.chatSend receives the text, user line + done line flush to the scrollback', async () => {
   const host = new FakeHost(tmp)
   const { app, out } = await started(host)
-  app.feed('ping the agent\r')
+  // \n = ctrl+enter — one of the modified-enter submits; bare \r is a newline now
+  app.feed('ping the agent\n')
   await sleep(30)
   app.renderNow()
   if (host.sent.length !== 1 || host.sent[0].text !== 'ping the agent') throw new Error(`chatSend not called once: ${JSON.stringify(host.sent)}`)
@@ -299,18 +300,48 @@ test('enter sends: host.chatSend receives the text, user line + done line flush 
   app.destroy()
 })
 
-test('alt+enter inserts a newline; editor grows; submit sends both lines', async () => {
+test('enter inserts a newline; editor grows; shift+enter sends both lines', async () => {
   const host = new FakeHost(tmp)
   const { app } = await started(host)
-  app.feed('line one\x1b\rline two')
+  // bare enter = newline (the v0.19 flip); alt+enter submits here
+  app.feed('line one\rline two')
   app.renderNow()
   const rows = app.lastFrame.map(stripAnsi)
   const l1 = rows.findIndex((r) => r.includes('line one'))
   const l2 = rows.findIndex((r) => r.includes('line two'))
   if (l1 === -1 || l2 === -1 || l1 === l2) throw new Error('multiline not rendered on distinct rows')
-  app.feed('\r')
+  if (host.sent.length !== 0) throw new Error('bare enter must NOT submit')
+  app.feed('\x1b\r')
   await sleep(30)
   if (host.sent.length !== 1 || host.sent[0].text !== 'line one\nline two') throw new Error(`multiline send wrong: ${JSON.stringify(host.sent)}`)
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+test('bracketed paste: multi-line text lands in the editor, never submits', async () => {
+  const host = new FakeHost(tmp)
+  const { app } = await started(host)
+  app.feed('before ')
+  app.feed('\x1b[200~const a = 1\nconst b = 2\r\nconst c = 3\x1b[201~')
+  await sleep(10)
+  if (host.sent.length !== 0) throw new Error('a paste must never auto-submit')
+  const text = app.editor.text
+  if (text !== 'before const a = 1\nconst b = 2\nconst c = 3') throw new Error(`paste content wrong: ${JSON.stringify(text)}`)
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+test('bracketed paste: markers split across chunks still work, trailing newline dropped', async () => {
+  const host = new FakeHost(tmp)
+  const { app } = await started(host)
+  app.feed('\x1b[20')
+  app.feed('0~one\ntwo\n\x1b[20')
+  app.feed('1~')
+  await sleep(10)
+  const text = app.editor.text
+  if (text !== 'one\ntwo') throw new Error(`split-marker paste wrong: ${JSON.stringify(text)}`)
   app.exit()
   await sleep(10)
   app.destroy()
