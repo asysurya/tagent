@@ -1243,8 +1243,11 @@ async function mainDoctor() {
   const gui = await resolveGuiDir()
   check(!!gui, `gui bundle: ${gui ?? 'not found (bun run build:gui) — TUI works regardless'}`)
 
-  // github
-  check(!!cfg.github?.token, `github: ${cfg.github?.login ? `connected as ${cfg.github.login}` : 'not connected (tagent auth)'}`)
+  // github — the token lives in ~/.tagent/credentials.json (config.json keeps
+  // only the login since the auth rework); checking config alone made doctor
+  // report "✗ connected as <user>" on perfectly healthy installs.
+  const ghToken = getCredential('github') || cfg.github?.token
+  check(!!ghToken, `github: ${cfg.github?.login ? `connected as ${cfg.github.login}` : 'not connected (tagent auth)'}`)
 
   // mcp servers
   const mcpServers = Object.entries(cfg.mcp?.servers ?? {})
@@ -1254,9 +1257,13 @@ async function mainDoctor() {
     try {
       await mgr.ensureStarted()
       for (const st of mgr.status()) {
+        const timedOut = st.state !== 'ready' && /timed out/i.test(st.error ?? '')
         check(
           st.state === 'ready',
-          `mcp ${st.name}: ${st.state}${st.state === 'ready' ? ` · ${st.tools} tools` : st.error ? ` — ${st.error.slice(0, 60)}` : ''}`,
+          `mcp ${st.name}: ${st.state}${st.state === 'ready' ? ` · ${st.tools} tools` : st.error ? ` — ${st.error.slice(0, 60)}` : ''}` +
+            (timedOut
+              ? ' (first run downloads the server via npx — try doctor again once warm; raise it with TAGENT_MCP_INIT_TIMEOUT_MS)'
+              : ''),
         )
       }
     } finally {

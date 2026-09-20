@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import type { McpConfig, McpServerConfig, ToolDefinition } from './types'
+import { CURRENT_VERSION } from './version'
 
 export type { McpConfig, McpServerConfig } from './types'
 
@@ -35,7 +36,14 @@ interface RemoteTool {
   inputSchema?: Record<string, unknown>
 }
 
-const INIT_TIMEOUT_MS = 25_000 // npx/uvx may download on first run
+/** how long to wait for the MCP initialize handshake. npx/uvx download the
+ *  server package on first run — cold caches (Codespaces, CI boxes, Termux)
+ *  easily spend 30–50s there, so the default is generous. Override with
+ *  TAGENT_MCP_INIT_TIMEOUT_MS=<millis> (values under 1s are ignored). */
+function initTimeoutMs(): number {
+  const v = Math.floor(Number(process.env.TAGENT_MCP_INIT_TIMEOUT_MS ?? ''))
+  return Number.isFinite(v) && v >= 1000 ? v : 60_000
+}
 const CALL_TIMEOUT_MS = 60_000
 const LIST_TIMEOUT_MS = 10_000
 const MAX_OUTPUT = 24_000
@@ -157,9 +165,9 @@ class McpConnection {
       {
         protocolVersion: '2024-11-05',
         capabilities: { tools: {} },
-        clientInfo: { name: 'tagent', version: '0.8.0' },
+        clientInfo: { name: 'tagent', version: CURRENT_VERSION },
       },
-      INIT_TIMEOUT_MS,
+      initTimeoutMs(),
     )) as { serverInfo?: { name?: string; version?: string } }
     this.serverInfo = result?.serverInfo
     // initialized notification (no response expected)

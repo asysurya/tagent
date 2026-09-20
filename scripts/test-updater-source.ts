@@ -151,6 +151,32 @@ ok(B.code === 1, 'refuses (exit 1) when no checkout is found', `code=${B.code}\n
 ok(B.out.includes("can't locate your tagent source checkout"), 'prints the manual fix', B.out)
 ok(git(DECOY, 'rev-parse', 'HEAD') === DECOY_HEAD, 'decoy still untouched')
 
+/* ---------------- scenario C: dirty tree auto-stashes ---------------- */
+console.log('\nscenario C — dirty checkout (local edits + bun.lock churn) auto-stashes:')
+// the owner's exact live failure: local changes to bun.lock + a source file
+// made `git pull` abort with "would be overwritten by merge".
+const NEW2 = '0.14.0'
+setVersion(ORIGIN, NEW2)
+git(ORIGIN, 'add', '-A'); git(ORIGIN, 'commit', '-qm', 'chore: marker v0.14.0')
+fs.writeFileSync(FEED, JSON.stringify({ version: NEW2, date: '2026-09-20', notes: 'test feed 2', url: 'https://x' }))
+fs.appendFileSync(path.join(CLONE, 'bun.lock'), '# local churn\n')
+fs.appendFileSync(path.join(CLONE, 'packages/cli/src/index.ts'), '// local edit\n')
+const C = sh('tagent update --yes', { cwd: DECOY, env: CHILD_ENV })
+const cloneVer2 = /CURRENT_VERSION\s*=\s*'([^']+)'/.exec(
+  fs.readFileSync(path.join(CLONE, 'packages/core/src/version.ts'), 'utf8'),
+)?.[1]
+const stashList = git(CLONE, 'stash', 'list')
+const stashShow = sh(`git -C ${CLONE} stash show -p`, {}).out
+const cloneIndex = fs.readFileSync(path.join(CLONE, 'packages/cli/src/index.ts'), 'utf8')
+ok(C.code === 0, 'update exits 0 despite the dirty tree', `code=${C.code}\n${C.out}`)
+ok(C.out.includes('stashed'), 'tells the user the changes were stashed', C.out)
+ok(cloneVer2 === NEW2, `clone bumped ${NEW} → ${cloneVer2}`, `clone version.ts = ${cloneVer2}`)
+ok(/tagent update v0\.14\.0/.test(stashList), 'stash entry labelled for recovery', stashList)
+ok(stashShow.includes('# local churn'), 'bun.lock edits preserved in the stash', stashShow.slice(0, 300))
+ok(stashShow.includes('// local edit'), 'index.ts edits preserved in the stash', stashShow.slice(0, 300))
+ok(!cloneIndex.includes('// local edit'), 'working tree is the clean updated file')
+ok(git(DECOY, 'rev-parse', 'HEAD') === DECOY_HEAD, 'decoy untouched again')
+
 /* ---------------- report ---------------- */
 console.log(`\nupdater-source tests: ${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

@@ -131,11 +131,36 @@ export async function selfUpdate(info: UpdateInfo): Promise<boolean> {
     console.log(`    or download a binary: https://github.com/${REPO}/releases/latest`)
     return false
   }
+  // a dirty tree (bun.lock churn from a different bun version, local edits)
+  // is the #1 reason `git pull` refuses to run — stash it instead of failing.
+  // A stash is recoverable, so nothing is ever lost.
+  let stashed = false
+  const dirty = run('git', ['status', '--porcelain'], repoDir)
+  if (dirty.ok && dirty.output) {
+    const stash = run(
+      'git',
+      ['-c', 'user.name=tagent-update', '-c', 'user.email=update@tagent.local',
+        'stash', 'push', '-u', '-m', `tagent update v${info.latest} — backup of local changes`],
+      repoDir,
+    )
+    if (stash.ok) {
+      stashed = true
+      console.log(`  ⚠ checkout had local changes — stashed (kept safe): ${dirty.output.split('\n').length} file(s)`)
+    } else {
+      console.log(`  ✗ the checkout is dirty and stashing failed — ${stash.output || 'git stash error'}`)
+      console.log(`    manual: git -C "${repoDir}" stash && tagent update`)
+      return false
+    }
+  }
   const r = run('git', ['pull', '--ff-only'], repoDir)
   if (!r.ok) {
     console.log(`  ✗ ${r.output || 'git pull failed'} in ${repoDir}`)
+    if (stashed) console.log(`    your local changes are safe in the stash: git -C "${repoDir}" stash list`)
     console.log(`    fix conflicts/divergence manually, or re-clone from https://github.com/${REPO}`)
     return false
+  }
+  if (stashed) {
+    console.log(`  ⚠ your previous local changes sit in the stash — review: git -C "${repoDir}" stash show -p · restore: git -C "${repoDir}" stash pop`)
   }
   // UserLAnd/proot needs the hoisted linker or socket.io fails to load at runtime
   const proot = /android/i.test(os.release()) || fs.existsSync('/.proot') || !!process.env.USERLAND
