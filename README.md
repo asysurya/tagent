@@ -58,7 +58,7 @@ process when you want a browser. Same engine, same sessions, same permissions.
 | 📚 **Skills** | `SKILL.md` playbooks with progressive disclosure (name+description in prompt, full body on demand) |
 | 🌐 **Web tools** | `web_fetch`, `ddg_search` (no API key), `browser` (Playwright-based e2e signal — optional) |
 | 🗄️ **Storage adapters** | Local today, MEGA.nz (E2E-encrypted snapshots & memory) implemented as an experimental adapter |
-| 🐙 **GitHub** | PAT, web-connect or device-flow auth (`tagent auth`) → auto private repo + one-click workspace push |
+| 🐙 **GitHub** | PAT, web-connect or device-flow auth (`tagent auth`) → auto private repo + one-click workspace push · multi-device safe (fetch+rebase before push) |
 | 📋 **Worklog + todos** | Live todo list + timestamped WORKLOG.md journal the agent keeps as it works |
 | 🦴 **Caveman mode** | Omni-route style token saver — terse replies, compact prompts, tighter budgets |
 | 🔗 **Share links** | Export any session as a standalone read-only HTML file |
@@ -149,6 +149,10 @@ tagent web [path]          # daemon + web GUI only (no TUI) — phone/remote
 tagent run [path] "msg"    # one-shot run, prints the result (--json too)
 tagent auth                # GitHub login wizard (web connect / PAT)
            --web           # browser page login — no typing in the terminal
+tagent sync [message]      # project → GitHub (commit + push, multi-device safe)
+tagent clone <repo|name>   # restore a project on this machine — then `tagent start`
+tagent projects            # linked projects — name, repo, last sync
+tagent whoami · logout     # guest/login check · remove the local token
 tagent config list|get|set # settings from the shell (-g = global)
 tagent sessions [path]     # list a workspace's sessions
 tagent share [id] [path]   # export a session as standalone HTML

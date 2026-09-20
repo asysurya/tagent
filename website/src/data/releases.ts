@@ -34,9 +34,9 @@ export const RELEASES: Release[] = [
   {
     version: '0.14.0',
     date: '2026-09-20',
-    title: 'GitHub login via web connect — the browser, not the terminal',
+    title: 'Web-connect login & multi-device sync',
     summary:
-      '`tagent auth` in a terminal now offers web connect: a one-time page opens in your browser (loopback only, one-time secret URL), you create a GitHub token with the repo scope pre-selected and paste it there — the terminal handles the rest. Works on UserLAnd/Termux too, where the printed URL opens in the phone\u2019s own browser. The paste and device flows stay; scripted pipes are unchanged.',
+      '`tagent auth` in a terminal now offers web connect: a one-time page opens in your browser (loopback only, one-time secret URL), you create a GitHub token with the repo scope pre-selected and paste it there — the terminal handles the rest. Works on UserLAnd/Termux too, where the printed URL opens in the phone\u2019s own browser. And `tagent sync` is now multi-device safe: it fetches and rebases the remote\u2019s main before pushing, so one project edited on several devices converges instead of being rejected.',
     stable: true,
     sections: [
       {
@@ -46,6 +46,16 @@ export const RELEASES: Release[] = [
           'the flow: a tiny HTTP server binds 127.0.0.1, the browser opens on a one-time secret URL, you create a token (repo scope pre-selected via the link) and paste it on the page — the CLI validates it against the GitHub API and prints the login',
           'no typing in the terminal at all; nothing is sent anywhere except the GitHub API itself, and the server dies right after the login',
           'headless boxes / UserLAnd / Termux: no opener? the URL is printed — on UserLAnd the phone browser reaches it (proot shares 127.0.0.1 with Android)',
+        ],
+      },
+      {
+        name: 'Multi-device sync',
+        items: [
+          'editing a project from several devices converges: `tagent sync` fetches and rebases the remote\u2019s main BEFORE pushing, so the second device\u2019s sync no longer dies with a raw git "fetch first" rejection',
+          'edits to different files — or different regions of the same file — merge automatically, and the history stays linear (rebase, no merge commits)',
+          'both devices change the same lines? the sync stops with a clear "nothing was lost" error, leaves the repo clean, and names the exact recovery: `git pull --rebase`, resolve, `tagent sync` again',
+          'a sync with no local changes doubles as a pull — the other device\u2019s new files simply appear',
+          'two devices pushing at the same moment: the push that loses the race re-integrates the winner and retries instead of failing',
         ],
       },
       {
@@ -60,6 +70,8 @@ export const RELEASES: Release[] = [
         name: 'Under the hood',
         items: [
           'packages/cli/src/web-auth.ts — a UI-free module (injectable validator) so the whole flow is testable hermetically over real HTTP: routing, CSRF gates, retry, one-shot teardown, timeout',
+          'fixed a latent bug from 0.13.x: every sync cycled `git remote remove/add origin`, which silently deleted the clone\u2019s upstream tracking — `git pull` stopped working in any project that had synced once',
+          '29 hermetic multi-device tests in scripts/test-sync-conflict.ts — divergent devices, region merges, conflicts + the full manual-recovery path, a simulated simultaneous push (pre-push hook racing the sync), and token hygiene (FETCH_HEAD scrubbed, token never on disk)',
           '19 hermetic tests in scripts/test-web-auth.ts + the auth/sync RPC suites re-run green',
           'teardown choreography: close() stops new connections at once; lingering keep-alives are swept 2s later so a parked browser socket can never hold the CLI process hostage',
         ],

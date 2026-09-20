@@ -151,7 +151,14 @@ export interface PushOpts {
 
 /**
  * Commit the workspace and push to the git remote.
- * The token is used for the push URL only — it is never written to .git/config.
+ * The token is used for the push/fetch URLs only — it is never written to
+ * .git/config (and FETCH_HEAD, which records the fetch URL verbatim, is
+ * scrubbed after use).
+ *
+ * Multi-device safe: the remote's main is fetched and rebased in before the
+ * push, so a project synced from several devices converges instead of being
+ * rejected. Non-overlapping edits merge automatically; a true conflict
+ * throws a clear "nothing was lost" error and leaves the repo clean.
  */
 export async function pushWorkspace(
   root: string,
@@ -209,16 +216,97 @@ export async function pushWorkspace(
     else commit = await git(root, ...identity, 'commit', '--allow-empty', '-m', message)
   }
 
-  onLog?.('Pushing…')
   const cleanRemote = `${remoteBase}${repo}.git`
-  await git(root, 'remote', 'remove', 'origin').catch(() => undefined)
-  await git(root, 'remote', 'add', 'origin', cleanRemote)
-  // one-time authenticated push — token not persisted in config
-  await exec(
-    'git',
-    ['push', authUrl(cleanRemote, token), 'main'],
-    { cwd: root, timeout: 180_000 },
-  )
+
+  /* ---- multi-device: integrate the remote's main BEFORE pushing ----
+   * Two devices syncing the same project diverge, and a plain push from the
+   * second one would be rejected ("fetch first"). fetch + rebase keeps the
+   * history linear and never loses work: edits to different files (or
+   * different regions of one file) merge automatically; a true conflict
+   * aborts the rebase with a clear message — both versions stay safe, one
+   * on each device, and the user resolves manually. */
+  const fetchRemote = async (): Promise<boolean> => {
+    try {
+      await exec('git', ['fetch', authUrl(cleanRemote, token), 'main'], {
+        cwd: root,
+        timeout: 120_000,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      })
+      return true
+    } catch {
+      return false // empty / fresh remote — nothing to integrate
+    }
+  }
+  const integrateRemote = async (): Promise<void> => {
+    if (!(await fetchRemote())) return
+    try {
+      const remoteHead = await git(root, 'rev-parse', 'FETCH_HEAD').catch(() => '')
+      if (!remoteHead) return
+      const upToDate = await exec(
+        'git',
+        ['merge-base', '--is-ancestor', 'FETCH_HEAD', 'HEAD'],
+        { cwd: root, timeout: 30_000 },
+      ).then(() => true, () => false)
+      if (upToDate) return
+      onLog?.('Remote moved — rebasing your changes on top…')
+      await exec(
+        'git',
+        [...identity, '-c', 'commit.gpgsign=false', 'rebase', 'FETCH_HEAD'],
+        { cwd: root, timeout: 120_000 },
+      )
+    } catch (err) {
+      // leave no half-finished rebase behind — abort restores pre-rebase state
+      await exec('git', ['rebase', '--abort'], { cwd: root, timeout: 30_000 }).catch(() => undefined)
+      const stderr = String((err as { stderr?: string }).stderr ?? '')
+      const detail = stderr
+        .split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('hint:')).slice(-2).join(' · ').slice(0, 160)
+      throw new Error(
+        'conflict: GitHub has newer changes that overlap with yours — nothing was lost. ' +
+        'Run `git pull --rebase` in the project folder, resolve the conflicts, then `tagent sync` again.' +
+        (detail ? ` (${detail})` : ''),
+      )
+    } finally {
+      // FETCH_HEAD records the fetch URL verbatim — including the one-shot
+      // token. It is transient bookkeeping (every fetch rewrites it), so
+      // remove it to keep the "token never on disk" invariant.
+      try { fs.rmSync(path.join(root, '.git', 'FETCH_HEAD'), { force: true }) } catch { /* best-effort */ }
+    }
+  }
+
+  if (!created) await integrateRemote() // just-created repos are empty — nothing to fetch
+
+  onLog?.('Pushing…')
+  // keep origin's URL fresh WITHOUT remove/add — `git remote remove` also
+  // deletes the branch tracking config (branch.main.remote/.merge) and the
+  // refs/remotes/origin/* refs, which would leave every synced clone unable
+  // to `git pull` (the manual conflict-recovery path depends on it).
+  const curOrigin = await git(root, 'remote', 'get-url', 'origin').catch(() => '')
+  if (!curOrigin) await git(root, 'remote', 'add', 'origin', cleanRemote)
+  else if (curOrigin !== cleanRemote) await git(root, 'remote', 'set-url', 'origin', cleanRemote)
+  // one-time authenticated push — token not persisted in config. If another
+  // device pushed in the gap between our fetch and this push, integrate its
+  // work once and retry instead of failing.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await exec(
+        'git',
+        ['push', authUrl(cleanRemote, token), 'main'],
+        { cwd: root, timeout: 180_000 },
+      )
+      break
+    } catch (e) {
+      const se = String((e as { stderr?: string }).stderr ?? '')
+      // rejection shapes when the remote ref moved on us: the classic
+      // "(fetch first)" / "(non-fast-forward)", the push-race "stale info",
+      // and the CAS-level "failed to update ref" / "cannot lock ref" that
+      // surfaces when another push lands mid-negotiation
+      if (attempt === 0 && /fetch first|non-fast-forward|stale[- ]info|failed to update ref|cannot lock ref/i.test(se)) {
+        await integrateRemote() // a true conflict throws here — the message says nothing was lost
+        continue
+      }
+      throw e
+    }
+  }
   const sha = await git(root, 'rev-parse', '--short', 'HEAD').catch(() => '')
   return {
     repo,

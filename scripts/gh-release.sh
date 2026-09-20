@@ -49,37 +49,49 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — `tagent auth` via web connect
+## v__VER__ — web connect login & multi-device sync
 
-GitHub login without typing in the terminal: `tagent auth` now offers **web
-connect** — a one-time page opens in your browser, you create a token (the
-`repo` scope is pre-selected by the link) and paste it there; the CLI
-validates it against the GitHub API and prints your login. `tagent auth --web`
-jumps straight to it; pasting a PAT in the terminal and the device flow
-remain, and scripted pipes (`echo "$GH_TOKEN" | tagent auth`) are unchanged.
+Two things every machine-pair asked for: **logging in without typing in the
+terminal**, and **continuing one project on many devices without git
+yelling at you**.
 
-### How it works
+### Web connect login
+
+`tagent auth` now offers **web connect** — a one-time page opens in your
+browser, you create a token (the `repo` scope is pre-selected by the link)
+and paste it there; the CLI validates it against the GitHub API and prints
+your login. `tagent auth --web` jumps straight to it; pasting a PAT in the
+terminal and the device flow remain, and scripted pipes
+(`echo "$GH_TOKEN" | tagent auth`) are unchanged.
+
 - a tiny HTTP server binds **127.0.0.1** (loopback only) and the browser
   opens on a one-time secret URL
-- you create the token via the page's link — the `repo` scope is already
-  ticked, nothing to configure
 - the CLI validates the token against the GitHub API and stores it exactly
   like the paste flow (`~/.tagent/credentials.json`, chmod 600, never in
   config.json and never in your repos)
-- the server dies right after the login — it only ever existed for that page
+- loopback-only bind, random port, one-time 128-bit secret in the URL path,
+  Origin/Referer checked on submit, page served `no-store`, one-shot
+  endpoint — and the server dies right after the login
+- no `xdg-open`? The URL is printed — on UserLAnd the phone's own browser
+  reaches it (proot shares 127.0.0.1 with Android)
 
-### Security shape
-- loopback-only bind (never 0.0.0.0), random port, one-time 128-bit secret
-  in the URL path — a drive-by page on some website can't hit an endpoint
-  it can't name
-- Origin/Referer checked on submit (same host only); the page is served
-  `no-store`
-- one-shot endpoint — after a successful login it accepts nothing more
+### Multi-device sync
 
-### UserLAnd / Termux / headless boxes
-No `xdg-open`? The URL is simply printed — on UserLAnd the phone's own
-browser reaches it (proot shares 127.0.0.1 with Android), so logging in
-works there too.
+Clone a project on a second machine (`tagent clone <name>`), keep working
+on both, and `tagent sync` now **converges instead of colliding**:
+
+- every sync fetches and rebases the remote's main *before* pushing — the
+  raw git "fetch first" rejection is gone
+- edits to different files, or different regions of the same file, merge
+  automatically; history stays linear (no merge commits)
+- a sync with no local changes doubles as a pull
+- both devices change the same lines? The sync stops with a clear
+  "nothing was lost" error and names the recovery: `git pull --rebase`,
+  resolve, `tagent sync` again
+- two devices pushing at the same moment: the loser re-integrates the
+  winner and retries instead of failing
+- fixed a 0.13.x latent bug: syncing silently deleted the clone's upstream
+  tracking, which broke `git pull` in any project that had synced once
 
 ---
 
@@ -144,7 +156,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — GitHub login via web connect" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — web connect login & multi-device sync" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")
