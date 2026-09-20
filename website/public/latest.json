@@ -1,6 +1,6 @@
 {
-  "version": "0.17.0",
+  "version": "0.18.0",
   "date": "2026-09-20",
-  "notes": "The opencode-style context bar under the chat input (12.3k/131.1k [██████░░░░] 9%) shows how much of the model’s window your session eats — and at 80% you get a one-key prompt to compact. /compact summarizes old turns into a structured digest with ZERO AI calls: nothing invented, everything copied from the transcript. Updates also became bulletproof: stuck merge states self-recover, divergence never blocks, and ~/.tagent (auth · MCP · config) is snapshotted before every update.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.17.0"
+  "notes": "The TUI is now built on real terminal libraries (string-width, figures, cli-boxes, picocolors, wrap-ansi) instead of hand-rolled width math. Boot banner and user messages are rounded cards (╭─╮), tool lines carry emoji icons with aligned columns, markdown tables draw as full box tables, and every width now counts CJK, emoji and combining marks correctly — the \"garis gak rata\" era is over.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.18.0"
 }

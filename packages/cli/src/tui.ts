@@ -27,6 +27,7 @@ import { AgentHost } from './host'
 import type { DaemonHandle } from './daemon'
 import { select, confirm, type SelectItem } from './select'
 import { startupUpdatePrompt, selfUpdate } from './updater'
+import { padCol, roundBox, toolIcon, wrapV, SYM } from './ui'
 
 /**
  * The TUI — Tagent's primary interface.
@@ -168,21 +169,43 @@ export class Tui {
     const cfg = this.host.sanitizeConfig()
     const mcpStatus = cfg.mcpStatus as { state: string; tools: number }[] | undefined
     const mcpReady = (mcpStatus ?? []).filter((s) => s.state === 'ready')
-    const lines = [
-      '',
-      bold(cyan(`  Tagent v${CURRENT_VERSION}`)) + dim('  ·  terminal-native coding agent'),
-      dim(`  workspace  ${this.host.root}`),
-      dim(`  model      ${cfg.defaultModel} (${cfg.defaultProvider}) · mode: build · caveman: ${cfg.caveman ? 'on 🦴' : 'off'}`),
+    // the boot card: rounded box + emoji rows + aligned value column (ui kit)
+    const boxW = Math.max(44, Math.min(width() - 2, 78))
+    const labelW = 9
+    const valueW = boxW - 4 - (2 + 1 + labelW + 1)
+    const rows: string[] = []
+    const factRow = (icon: string, label: string, value: string): void => {
+      const parts = wrapV(value, Math.max(8, valueW))
+      rows.push(`${icon} ${dim(padCol(label, labelW))} ${parts[0]}`)
+      for (const cont of parts.slice(1)) rows.push(`  ${' '.repeat(labelW)} ${cont}`)
+    }
+    factRow('📂', 'workspace', this.host.root)
+    factRow(
+      '🤖',
+      'model',
+      `${cfg.defaultModel} ${dim(`(${cfg.defaultProvider}) · mode: ${cfg.caveman ? 'caveman 🦴' : 'build'}`)}`,
+    )
+    factRow(
+      '🔌',
+      'mcp',
       mcpReady.length
-        ? dim(`  mcp        ${mcpReady.length} server(s) connected · ${mcpReady.reduce((n, s) => n + s.tools, 0)} tools (/mcp)`)
-        : dim('  mcp        none — /mcp adds Model Context Protocol servers'),
-      this.webUrl
-        ? dim(`  web gui    ${this.webUrl} (sharing this session)`)
-        : dim('  web gui    off — /webgui on or start with --web-gui'),
-      dim(`  ${bold('/help')} lists every command · plain text talks to the agent · Ctrl+C interrupts`),
-      '',
-    ]
-    for (const l of lines) this.println(l)
+        ? dim(`${mcpReady.length} server(s) connected · ${mcpReady.reduce((n, s) => n + s.tools, 0)} tools (/mcp)`)
+        : dim('none — /mcp adds Model Context Protocol servers'),
+    )
+    factRow(
+      '🌐',
+      'web gui',
+      this.webUrl ? dim(`${this.webUrl} (sharing this session)`) : dim('off — /webgui on or start with --web-gui'),
+    )
+    this.println('')
+    for (const r of roundBox({
+      title: `${cyan('✻')} ${bold('Tagent')} ${dim(`v${CURRENT_VERSION} · terminal-native coding agent`)}`,
+      rows,
+      width: boxW,
+    })) this.println(r)
+    this.println('')
+    this.println(dim(`  ${bold('/help')} lists every command · plain text talks to the agent · Ctrl+C interrupts`))
+    this.println('')
   }
 
   /* ---------------- host events ---------------- */
@@ -261,16 +284,18 @@ export class Tui {
 
   private onToolStart(call: ToolCallRecord) {
     this.hideTicker()
-    this.println(`  ${dim(`⚙ ${call.tool} ${summarizeInput(call)}`)}`)
+    const name = bold(padCol(call.tool, 14))
+    this.println(`  ${toolIcon(call.tool)} ${name} ${dim(summarizeInput(call))}`)
   }
 
   private onToolEnd(call: ToolCallRecord) {
     this.hideTicker()
-    const icon = call.status === 'done' ? green('✓') : call.status === 'error' ? red('✗') : call.status === 'denied' ? yellow('⊘') : '·'
+    const icon =
+      call.status === 'done' ? green(SYM.tick) : call.status === 'error' ? red(SYM.cross) : call.status === 'denied' ? yellow('⊘') : '·'
     const dur = call.startedAt && call.endedAt ? ` ${dim(((call.endedAt - call.startedAt) / 1000).toFixed(1) + 's')}` : ''
     const out = (call.output ?? '').split('\n').find((l) => l.trim()) ?? ''
     const tail = out ? ` ${dim('— ' + out.slice(0, 100))}` : ''
-    this.println(`  ${icon} ${call.tool}${dur}${tail}`)
+    this.println(`    ${dim('⎿')} ${icon}${dur}${tail}`)
   }
 
   private onTodos(todos: TodoItem[]) {
@@ -750,7 +775,7 @@ export class Tui {
           ['stats · settings · update · webgui [on|off]', 'info · self-update'],
           ['stop · clear · exit', 'run control'],
         ]
-        for (const [k, v] of rows) this.println(`    ${bold('/' + k.padEnd(46))} ${dim(v)}`)
+        for (const [k, v] of rows) this.println(`    ${bold('/' + padCol(k, 46))} ${dim(v)}`)
         this.println('')
         return
       }
@@ -921,7 +946,7 @@ export class Tui {
           for (const p of ready) {
             const mark = p.id === host.cfg.defaultProvider ? green('▸') : ' '
             const key = !p.needsKey ? dim('free') : p.hasKey ? green('key✓') : red('no key')
-            this.println(`  ${mark} ${bold(p.id.padEnd(16))} ${key} ${dim(p.models.map((m) => m.id).slice(0, 4).join(', '))}${p.models.length > 4 ? dim(` +${p.models.length - 4}`) : ''}`)
+            this.println(`  ${mark} ${bold(padCol(p.id, 16))} ${key} ${dim(p.models.map((m) => m.id).slice(0, 4).join(', '))}${p.models.length > 4 ? dim(` +${p.models.length - 4}`) : ''}`)
           }
           if (locked.length) this.println(dim(`  ${locked.length} more in the catalog (add a key): ${locked.slice(0, 8).map((p) => p.id).join(', ')}${locked.length > 8 ? '…' : ''}`))
           this.println(dim('  interactive: /model · set: /model <provider>/<model> · search: /model <text>'))
@@ -1250,7 +1275,7 @@ export class Tui {
         this.println(bold('  permissions') + dim(` · default: ${host.cfg.permissions.defaultMode}`))
         for (const [tool, mode] of Object.entries(host.cfg.permissions.tools)) {
           const color = mode === 'allow' ? green(mode) : mode === 'deny' ? red(mode) : yellow(mode)
-          this.println(`    ${tool.padEnd(14)} ${color}`)
+          this.println(`    ${padCol(tool, 14)} ${color}`)
         }
         this.println(dim('    change: /allow <tool> · /ask <tool> · /deny <tool>'))
         return
@@ -1399,7 +1424,7 @@ export class Tui {
           JSON.stringify(host.sanitizeConfig(), (k, v) => (k === 'providers' ? undefined : v)),
         ) as Record<string, unknown>
         for (const [k, v] of Object.entries(s)) {
-          this.println(`  ${k.padEnd(18)} ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
+          this.println(`  ${padCol(k, 18)} ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
         }
         return
       }
@@ -1605,7 +1630,7 @@ export class Tui {
     this.println(bold(`  MCP servers (${status.length})`))
     for (const s of status) {
       const icon = s.state === 'ready' ? green('◉') : s.state === 'error' ? red('✗') : s.state === 'disabled' ? dim('○') : yellow('◌')
-      this.println(`   ${icon} ${bold(s.name.padEnd(16))} ${dim(s.state)} · ${s.tools} tools${s.enabled === false ? dim(' (disabled)') : ''}`)
+      this.println(`   ${icon} ${bold(padCol(s.name, 16))} ${dim(s.state)} · ${s.tools} tools${s.enabled === false ? dim(' (disabled)') : ''}`)
       if (s.error) this.println(`      ${red(s.error.slice(0, 90))}`)
     }
     this.println(dim('    tools: mcp_<server>_<tool> · permissions: /allow mcp_<server> · manage: /mcp'))

@@ -52,37 +52,14 @@ function joinStyle(a: string, b: string): string {
 }
 
 /* ================================================================== */
-/* width math — CJK-aware (wide = 2, combining/zero-width = 0)         */
+/* width math — routed through the shared ui kit (string-width):      */
+/* CJK ext, emoji presentation, ZWJ clusters all count correctly       */
 /* ================================================================== */
 
-/** display width of one code point */
-function cpWidth(cp: number): number {
-  if (cp === 0) return 0
-  if (cp < 0x20 || (cp >= 0x7f && cp < 0xa0)) return 0
-  if (
-    (cp >= 0x0300 && cp <= 0x036f) || // combining diacritics
-    (cp >= 0x1ab0 && cp <= 0x1aff) ||
-    (cp >= 0x1dc0 && cp <= 0x1dff) ||
-    (cp >= 0x20d0 && cp <= 0x20ff) ||
-    (cp >= 0xfe00 && cp <= 0xfe0f) || // variation selectors
-    (cp >= 0xfe20 && cp <= 0xfe2f) || // combining half marks
-    (cp >= 0x200b && cp <= 0x200f) || // zero-width + marks
-    cp === 0xfeff
-  )
-    return 0
-  return cp >= 0x1100 &&
-    (cp <= 0x115f ||
-      (cp >= 0x2e80 && cp <= 0xa4cf) ||
-      (cp >= 0xac00 && cp <= 0xd7a3) ||
-      (cp >= 0xf900 && cp <= 0xfaff) ||
-      (cp >= 0xfe30 && cp <= 0xfe4f) ||
-      (cp >= 0xff00 && cp <= 0xff60) ||
-      (cp >= 0xffe0 && cp <= 0xffe6) ||
-      (cp >= 0x1f300 && cp <= 0x1f9ff) ||
-      (cp >= 0x20000 && cp <= 0x3fffd))
-    ? 2
-    : 1
-}
+import { cpW } from './ui'
+
+/** display width of one code point (string-width backed) */
+const cpWidth = cpW
 
 /** visible width of a plain (unstyled) string */
 function strWidth(s: string): number {
@@ -622,7 +599,8 @@ function sepAligns(line: string): ('l' | 'c' | 'r')[] | null {
   return aligns.length > 0 ? aligns : null
 }
 
-/** pipe table: bold header, ─ separator, CJK-aware padding; null = malformed */
+/** pipe table → a rounded box table (╭┬╮ ├──┼──┤ ╰┴╯), emoji-safe padding;
+ * null = malformed */
 function tableBlock(tbl: string[], width: number): string[] | null {
   const header = splitRow(tbl[0])
   const alignsRaw = sepAligns(tbl[1]) ?? []
@@ -642,8 +620,9 @@ function tableBlock(tbl: string[], width: number): string[] | null {
     for (const r of rows) wmax = Math.max(wmax, strWidth(cellAt(r, c)))
     widths.push(wmax)
   }
-  // column area = width + 3 (" " + pad(w+1) + " ") + "│" joiners between
-  const overhead = 4 * ncols - 1
+  // each cell prints as " text " between rails: overhead = 2*ncols spaces
+  // + (ncols+1) rails
+  const overhead = 3 * ncols + 1
   // shrink to fit `width` (best-effort: cap every column equally)
   const total = widths.reduce((a, b) => a + b, 0) + overhead
   if (total > width) {
@@ -655,7 +634,7 @@ function tableBlock(tbl: string[], width: number): string[] | null {
     const parts: string[] = []
     for (let c = 0; c < ncols; c++) {
       let cell = cellAt(cells, c)
-      const area = widths[c] + 1
+      const area = widths[c]
       if (strWidth(cell) > area) cell = middleTrunc(cell, area)
       if (headerRow) {
         // SGR wraps ONLY the cell text — padding stays outside the escape
@@ -666,14 +645,20 @@ function tableBlock(tbl: string[], width: number): string[] | null {
         parts.push(' ' + padPlain(cell, area, aligns[c]) + ' ')
       }
     }
-    return parts.join('│')
+    return sty(S_DIM, '│') + parts.join(sty(S_DIM, '│')) + sty(S_DIM, '│')
   }
 
-  const out: string[] = [rowStr(header, true)]
-  const seps: string[] = []
-  for (let c = 0; c < ncols; c++) seps.push('─'.repeat(widths[c] + 2))
-  out.push(sty(S_DIM, ' ' + seps.join('┼') + ' '))
+  const edge = (l: string, mid: string, r: string): string => {
+    const parts = widths.map((w) => '─'.repeat(w + 2))
+    return sty(S_DIM, l + parts.join(mid) + r)
+  }
+
+  const out: string[] = []
+  out.push(edge('╭', '┬', '╮'))
+  out.push(rowStr(header, true))
+  out.push(edge('├', '┼', '┤'))
   for (const r of rows) out.push(rowStr(r, false))
+  out.push(edge('╰', '┴', '╯'))
   return out
 }
 

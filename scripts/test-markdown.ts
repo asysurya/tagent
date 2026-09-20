@@ -252,20 +252,22 @@ console.log('renderMarkdown — CJK width + wrapping')
 console.log('renderMarkdown — tables')
 {
   const t = renderMarkdown('| a | b |\n|---|---|\n| 1 | 22 |', 40)
-  eq('table: 3 rows', t.length, 3)
-  ok('table: header bold', t[0].includes('\x1b[1ma\x1b[0m') && t[0].includes('\x1b[1mb\x1b[0m'))
-  eq('table: separator', stripAnsi(t[1]), ' ───┼──── ')
-  eq('table: cells padded', stripAnsi(t[2]), ' 1  │ 22  ')
+  eq('table: 5 box rows', t.length, 5)
+  ok('table: header bold', t[1].includes('\x1b[1ma\x1b[0m') && t[1].includes('\x1b[1mb\x1b[0m'))
+  eq('table: top border', stripAnsi(t[0]), '╭───┬────╮')
+  eq('table: separator', stripAnsi(t[2]), '├───┼────┤')
+  eq('table: cells padded', stripAnsi(t[3]), '│ 1 │ 22 │')
+  ok('table: bottom border', stripAnsi(t[4]) === '╰───┴────╯')
   ok('table: all fit', allFit(t, 40))
-  // the expected separator/row strings above are each 10 visible columns
-  // (Σw=3 + 4·ncols−1 overhead = 10); 9 was a hand-count slip
-  eq('table: header/sep/row same width', [vis(t[0]), vis(t[1]), vis(t[2])], [10, 10, 10])
+  // the expected border/row strings above are each 10 visible columns
+  // (Σw=3 + 3·ncols+1 overhead = 10)
+  eq('table: every row same width', [vis(t[0]), vis(t[1]), vis(t[2]), vis(t[3]), vis(t[4])], [10, 10, 10, 10, 10])
 
   // CJK-aware padding: rows stay aligned
-  // (widths [4,2] → Σw=6 + 4·ncols−1 overhead = 13, same geometry as above)
+  // (widths [4,2] → Σw=6 + 3·ncols+1 overhead = 13, same geometry as above)
   const t2 = renderMarkdown('| 名前 | 値 |\n|---|---|\n| あ | い |', 40)
-  eq('CJK table: aligned widths', [vis(t2[0]), vis(t2[1]), vis(t2[2])], [13, 13, 13])
-  ok('CJK table: header bold', t2[0].includes('\x1b[1m'))
+  eq('CJK table: aligned widths', [vis(t2[1]), vis(t2[2]), vis(t2[3])], [13, 13, 13])
+  ok('CJK table: header bold', t2[1].includes('\x1b[1m'))
 
   // malformed: no separator under the pipe line → paragraph, not a table
   const mt = renderMarkdown('a | b\nnot a separator', 40)
@@ -274,7 +276,7 @@ console.log('renderMarkdown — tables')
 
   // ragged table: renders best-effort without crashing
   const rg = renderMarkdown('| a | b |\n|---|\n| 1 | 2 |', 40)
-  ok('ragged table: renders', rg.length >= 3 && rg[1].includes('┼'))
+  ok('ragged table: renders', rg.length >= 5 && rg[2].includes('┼'))
 }
 
 console.log('renderMarkdown — escape safety / NO_COLOR')

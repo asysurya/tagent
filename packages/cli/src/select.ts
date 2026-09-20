@@ -3,11 +3,13 @@
  *
  * Arrow keys / j·k move, Enter picks, Esc cancels, typing filters. Renders
  * inline in the chat stream (scroll windowed, prompt-safe) and restores the
- * readline state afterwards. Pure ANSI, zero dependencies — it works in
- * every terminal, over SSH and in Termux.
+ * readline state afterwards. Widths come from the shared ui kit
+ * (string-width) so emoji/CJK labels stay aligned.
  *
  *    const model = await select({ title: 'pick a model', items: [...] })
  */
+
+import { vw, truncateV } from './ui'
 
 export interface SelectItem<T = string> {
   label: string
@@ -49,26 +51,13 @@ const cyan = (s: string) => color('36', s)
 const red = (s: string) => color('31', s)
 const yellow = (s: string) => color('33', s)
 
-/** simple display width (CJK ≈ 2) — keeps columns aligned in the menu */
+/** true display width (string-width backed) — keeps columns aligned in the menu */
 function vwidth(s: string): number {
-  let w = 0
-  for (const ch of s) {
-    const cp = ch.codePointAt(0) ?? 0
-    w += cp >= 0x1100 && (cp <= 0x115f || (cp >= 0x2e80 && cp <= 0xa4cf) || (cp >= 0xac00 && cp <= 0xd7a3) || (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xfe30 && cp <= 0xfe4f) || (cp >= 0xff00 && cp <= 0xff60) || (cp >= 0xffe0 && cp <= 0xffe6) || (cp >= 0x1f300 && cp <= 0x1f9ff)) ? 2 : 1
-  }
-  return w
+  return vw(s)
 }
 
 function truncateToWidth(s: string, max: number): string {
-  let w = 0
-  let out = ''
-  for (const ch of s) {
-    const cw = vwidth(ch)
-    if (w + cw > max) break
-    out += ch
-    w += cw
-  }
-  return out
+  return truncateV(s, max)
 }
 
 /**

@@ -36,63 +36,62 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — context window bar + deterministic memory compaction
+## v__VER__ — the glow-up: real TUI libraries
 
-The context window is now a first-class citizen: a live opencode-style usage
-bar under the chat input, a 80% compact prompt, and a `/compact` that
-summarizes old turns with **zero AI calls** — nothing invented, everything
-copied from the transcript. Updates also became bulletproof: stuck merges
-self-recover and `~/.tagent` is snapshotted before every update.
-
-### The context bar
+The TUI now runs on real terminal libraries instead of hand-rolled width
+math, and it shows: **rounded cards**, **emoji tool icons**, **box markdown
+tables**, and — the actual point — **lines that finally align**.
 
 ```
-build · glm-4.7 · 12.3k/131.1k [██████░░░░] 9% · 14m
+╭─ ✻ Tagent v__VER__ ──────────────────────────────────────────╮
+│ 📂 workspace /home/z/my-project/demo-workspace               │
+│ 🤖 model     glm-4.7 (zai) · ctx 0/131.1k [░░░░░░░░░░] 0%    │
+│ 🔌 mcp       none — /mcp adds Model Context Protocol servers │
+│ 🌐 web gui   off — /webgui on or start with --web-gui        │
+╰──────────────────────────────────────────────────────────────╯
+
+╭─ ❯ you ─────────────────────────────────────────────────────╮
+│ halo 你好 ✅ cek alignment bawah ini ya                     │
+╰──────────────────────────────────────────────────────────────╯
+
+  💻 bash        git status
+    ⎿ ✓ 2.1s — 3 lines
 ```
 
-- live every turn — provider token usage when the API reports it, a local
-  CJK-aware estimate otherwise; color-coded green / yellow / red at 60% / 80%
-- model windows resolve from `~/.tagent/zai-models.json` (new `contextWindow`
-  field per model), provider seeds, or id heuristics — `TAGENT_CONTEXT_WINDOW`
-  overrides everything
-- `/stats` and the boot banner show it too
+### New: shared UI kit (`ui.ts`)
 
-### `/compact` — ringkas memory, tanpa AI
+- **string-width + strip-ansi** — true Unicode display width: CJK extension
+  blocks, emoji presentation (✅ ⚡ …), ZWJ families, combining marks. The
+  old hand-rolled table missed whole ranges — that is why columns wobbled
+- **figures** — cross-platform symbols (✔ ✘ ❯ ↑↓) with automatic ASCII
+  fallback on legacy terminals
+- **cli-boxes** — the `╭─╮ ╰─╯` round border preset; **picocolors** for
+  color; **wrap-ansi** for hard word wrap
+- one kit, four consumers: the inline TUI, the classic TUI, the markdown
+  renderer and the select menus all measure with the same functions
 
-- at **80%** (configurable: `compact.threshold`) the run ends with a one-key
-  y/N prompt; `/compact [keep-tokens]` any time, also in the ctrl+x menu
-- old turns become ONE structured digest — who asked what, which tools ran on
-  which paths, statuses, decisions — while the newest ~10k tokens stay
-  verbatim. A 100k-token history lands near 10k
-- **deterministic local code, no AI call, nothing generated** — every digest
-  line is copied from the transcript, so nothing can be hallucinated and the
-  compaction itself costs zero tokens (it must never spend your model to save
-  your tokens)
-- `@file` attachment bodies drop out of old turns (files live on disk);
-  re-compaction folds the prior digest in, history never duplicates
+### The glow-up
 
-### Caveman mode, reworked — summarize, never blind-cut
+- boot banner is a rounded card with an emoji row per fact and a value
+  column that is ALWAYS aligned (the old hardcoded padding was off by one
+  column on two rows — `mcp` and `web gui`)
+- your messages echo as opencode-style rounded cards (`╭─ ❯ you ──╮`) —
+  CJK and emoji in the text can no longer break the right rail
+- tool lines carry emoji icons (📖 read · 💻 bash · 🔍 search · 🌐 fetch ·
+  💬 ask · 🧠 memory · 🤖 subagent …) on a fixed tool-name column, so
+  durations and summaries line up; results keep the `⎿` connector
+- markdown pipe tables render as full box tables (`╭┬╮ ├──┼──┤ ╰┴╯`) with
+  left/center/right alignment preserved
+- assistant messages get Claude Code's orange ● bullet; the status row has
+  a moon-phase spinner (🌑🌒🌓) with 🤔/⚡/🌊 phase emoji
+- `/help`, `/tools`, `/models`, `/mcp`, `/sessions` menus pad with true
+  width — emoji or CJK in names no longer shear the columns
 
-- big tool outputs become **head+tail digests** with explicit
-  `…[compacted: N chars elided]…` markers instead of a silent mid-cut — the
-  model always knows exactly what it did not see
-- repeated lines collapse (`(×N)`), pretty JSON minifies losslessly
-- old `write_file`/`edit_file` echoes are slimmed to path + preview — whole
-  file contents stopped being re-sent forever (the newest 2 turns stay full)
-- old tool results become per-tool digests (tool + input + status); caveman
-  starts dieting at 80k instead of 150k
+### Also
 
-### Updates — never blocks, never loses data
-
-- a **stuck conflicted merge** ("bun.lock: needs merge" / "you have unmerged
-  files" — the state that killed both `git stash` and `git pull`) now
-  self-recovers: the in-progress operation is aborted, the index cleared,
-  your files kept
-- a diverged branch no longer blocks the update: fetch + reset to the upstream
-  tip, with the reflog recovery path printed
-- `~/.tagent` (auth, MCP, config, models, memory) is snapshotted into
-  `~/.tagent/backups/update-<timestamp>/` before EVERY update and verified +
-  restored after — the 5 newest snapshots are kept
+- full test coverage: 46 ui-kit unit tests plus the whole regression battery
+  re-run green (tui-app, tui-md, markdown 95, compact 49, context-loop 30,
+  ask 38, cache 38, features, select, host, PTY suites)
 
 ---
 

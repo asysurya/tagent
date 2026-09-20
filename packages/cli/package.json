@@ -1,6 +1,6 @@
 {
   "name": "tagent",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "description": "Tagent — terminal-native coding agent with a web GUI. Loop, subagents, skills, memory, plugins, MEGA + GitHub sync.",
   "type": "module",
   "bin": {
@@ -26,6 +26,12 @@
   },
   "dependencies": {
     "@tagent/core": "workspace:*",
-    "socket.io": "^4.8.3"
+    "cli-boxes": "^4.0.1",
+    "figures": "^6.1.0",
+    "picocolors": "^1.1.1",
+    "socket.io": "^4.8.3",
+    "string-width": "^8.2.2",
+    "strip-ansi": "^7.2.0",
+    "wrap-ansi": "^10.0.1"
   }
 }

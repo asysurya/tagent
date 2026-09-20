@@ -74,6 +74,10 @@ import {
 import type { AgentHost } from './host'
 import type { DaemonHandle } from './daemon'
 import { selfUpdate } from './updater'
+import {
+  vw, truncateV, fitV, padCol, roundBox, labelRow, kvRow, toolIcon,
+  setUiColor, STATUS_ICONS, SYM, F, cpW, wrapV,
+} from './ui'
 /* ------------------------------------------------------------------ */
 /* ansi + format helpers                                                */
 /* ------------------------------------------------------------------ */
@@ -82,6 +86,7 @@ let USE_COLOR = true
 /** test hook — the app sets this in its constructor */
 export function setAppColor(enabled: boolean): void {
   USE_COLOR = enabled
+  setUiColor(enabled)
 }
 const c = (code: string, s: string) => (USE_COLOR && process.env.NO_COLOR === undefined ? `\x1b[${code}m${s}\x1b[0m` : s)
 const bold = (s: string) => c('1', s)
@@ -94,77 +99,25 @@ const magenta = (s: string) => c('35', s)
 const cyan = (s: string) => c('36', s)
 const orange = (s: string) => c('38;5;208', s)
 
-const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+const SPINNER = ['🌑', '🌒', '🌓', '🌔', '🌕', '🌖', '🌗', '🌘']
 
-/** display width of one code point (CJK ≈ 2) — mirrors select.ts vwidth */
-function cpWidth(cp: number): number {
-  return cp >= 0x1100 &&
-    (cp <= 0x115f || (cp >= 0x2e80 && cp <= 0xa4cf) || (cp >= 0xac00 && cp <= 0xd7a3) ||
-      (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xfe30 && cp <= 0xfe4f) || (cp >= 0xff00 && cp <= 0xff60) ||
-      (cp >= 0xffe0 && cp <= 0xffe6) || (cp >= 0x1f300 && cp <= 0x1f9ff))
-    ? 2
-    : 1
+/** display width of a possibly ANSI-styled string — routed through the
+ * ui kit (string-width): CJK ext, emoji presentation, ZWJ clusters and
+ * combining marks all count correctly, so every column stays rata. */
+function vwidthANSI(s: string): number {
+  return vw(s)
 }
 
 const ANSI_RE = /^\x1b(?:\[[0-9;:<>?]*[A-Za-z~]|\][^\x07\x1b]*(?:\x07|\x1b\\))/g
 
-/** visible width of a possibly ANSI-styled string */
-function vwidthANSI(s: string): number {
-  let w = 0
-  let i = 0
-  while (i < s.length) {
-    if (s[i] === '\x1b') {
-      ANSI_RE.lastIndex = i
-      const m = ANSI_RE.exec(s)
-      if (m && m.index === i) {
-        i += m[0].length
-        continue
-      }
-      i += 1
-      continue
-    }
-    const cp = s.codePointAt(i) ?? 32
-    w += cpWidth(cp)
-    i += cp >= 0x10000 ? 2 : 1
-  }
-  return w
-}
-
-/** ANSI-aware truncation to a visible width */
+/** ANSI-aware truncation to a visible width — cluster-aware via the ui kit */
 function truncateStyled(s: string, maxW: number): string {
-  if (vwidthANSI(s) <= maxW) return s
-  let w = 0
-  let out = ''
-  let i = 0
-  while (i < s.length) {
-    if (s[i] === '\x1b') {
-      ANSI_RE.lastIndex = i
-      const m = ANSI_RE.exec(s)
-      if (m && m.index === i) {
-        out += m[0]
-        i += m[0].length
-        continue
-      }
-      out += s[i]
-      i += 1
-      continue
-    }
-    const cp = s.codePointAt(i) ?? 32
-    const ch = String.fromCodePoint(cp)
-    const cw = cpWidth(cp)
-    if (w + cw > maxW) break
-    out += ch
-    w += cw
-    i += ch.length
-  }
-  return out
+  return truncateV(s, maxW)
 }
 
 /** truncate + pad with spaces to an exact visible width (box rows) */
 function fitStyled(s: string, w: number): string {
-  const t = truncateStyled(s, w)
-  const pad = Math.max(0, w - vwidthANSI(t))
-  return t + ' '.repeat(pad)
+  return fitV(s, w)
 }
 
 /** append a reset when a row carries SGR state (bleed protection) */
@@ -209,7 +162,7 @@ function wrapStyled(s: string, w: number): string[] {
     if (curSpace === null) curSpace = isSpace
     else if (isSpace !== curSpace) flush()
     cur += ch
-    curW += ch === '\t' ? 2 : cpWidth(cp)
+    curW += ch === '\t' ? 2 : cpW(cp)
     i += ch.length
   }
   flush()
@@ -257,7 +210,7 @@ function wrapStyled(s: string, w: number): string[] {
           }
           const cp = rest.codePointAt(j) ?? 32
           const ch = String.fromCodePoint(cp)
-          const cw = cpWidth(cp)
+          const cw = cpW(cp)
           if (hw + cw > w) break
           hw += cw
           cut += ch.length
@@ -300,7 +253,7 @@ function wrapSegments(line: string, w: number): Seg[] {
   while (i < line.length) {
     const cp = line.codePointAt(i) ?? 32
     const ch = String.fromCodePoint(cp)
-    const cw = cpWidth(cp)
+    const cw = cpW(cp)
     if (curW + cw > w && curW > 0) {
       segs.push({ s: cur, colStart: start })
       cur = ''
@@ -730,7 +683,7 @@ export interface TuiAppOptions {
 }
 
 const EDITOR_PLACEHOLDER = 'Message tagent… (/ commands, @ files, ? shortcuts)'
-const HINT_KEYS = '? shortcuts · / commands · @ files'
+const HINT_KEYS = `? shortcuts · / commands · @ files`
 
 /* ------------------------------------------------------------------ */
 /* the app                                                             */
@@ -1057,19 +1010,23 @@ export class TuiApp {
     this.streamText = ''
     if (!content.trim()) return
     const lines = this.mdRender ? this.mdRender(content, this.transcriptW()) : content.split('\n')
-    lines.forEach((l, i) => this.println(i === 0 ? `\u25CF ${l}` : l))
+    lines.forEach((l, i) => this.println(i === 0 ? `${orange('\u25CF')} ${l}` : l))
   }
 
   private onToolStart(call: ToolCallRecord): void {
-    this.println(`  ${dim(`⎿ ⋯ ${call.tool} ${summarizeInput(call)}`)}`)
+    // aligned tool column: every summary starts at the same column no
+    // matter how long the tool name is (padCol — CJK/emoji proof)
+    const name = bold(padCol(call.tool, 14))
+    this.println(`  ${toolIcon(call.tool)} ${name} ${dim(summarizeInput(call))}`)
   }
 
   private onToolEnd(call: ToolCallRecord): void {
-    const icon = call.status === 'done' ? green('✓') : call.status === 'error' ? red('✗') : call.status === 'denied' ? yellow('⊘') : '·'
+    const icon =
+      call.status === 'done' ? green(SYM.tick) : call.status === 'error' ? red(SYM.cross) : call.status === 'denied' ? yellow('⊘') : '·'
     const dur = call.startedAt && call.endedAt ? ` ${dim(((call.endedAt - call.startedAt) / 1000).toFixed(1) + 's')}` : ''
     const out = (call.output ?? '').split('\n').find((l) => l.trim()) ?? ''
     const tail = out ? ` ${dim('— ' + truncateStyled(out, Math.max(20, this.termW - 60)))}` : ''
-    this.println(`  ${dim('⎿')} ${icon} ${call.tool}${dur}${tail}`)
+    this.println(`    ${dim('⎿')} ${icon}${dur}${tail}`)
   }
 
   private onTodos(todos: TodoItem[]): void {
@@ -1079,7 +1036,7 @@ export class TuiApp {
     const done = todos.filter((t) => t.status === 'completed').length
     this.println(`  ${bold(`⎿ todos ${done}/${todos.length}`)}`)
     for (const t of todos.slice(0, 12)) {
-      const icon = t.status === 'completed' ? green('✔') : t.status === 'in_progress' ? cyan('▸') : dim('☐')
+      const icon = t.status === 'completed' ? green(SYM.tick) : t.status === 'in_progress' ? cyan('▸') : dim(SYM.checkboxOff)
       const body = t.status === 'completed' ? dim(t.content) : t.content
       this.println(`    ${icon} ${body}`)
     }
@@ -1165,7 +1122,7 @@ export class TuiApp {
     if (this.streamText.trim()) {
       const raw = this.streamText
       this.streamText = ''
-      raw.split('\n').forEach((l, i) => this.println(i === 0 ? `\u25CF ${l}` : l))
+      raw.split('\n').forEach((l, i) => this.println(i === 0 ? `${orange('\u25CF')} ${l}` : l))
     }
     const mark = summary.finished === 'complete' ? green('✔ done') : summary.finished === 'aborted' ? yellow('■ stopped') : red('✗ error')
     const u = summary.usage
@@ -1312,29 +1269,52 @@ export class TuiApp {
       mcpStatus?: { state: string; tools: number }[]
     }
     const mcpReady = (cfg.mcpStatus ?? []).filter((s) => s.state === 'ready')
-    this.println('')
-    this.println(`${orange(bold('✻'))} ${bold('Tagent')} ${dim(`v${CURRENT_VERSION} · terminal-native coding agent`)}`)
-    this.println('')
-    this.println(dim(`${'─'.repeat(Math.min(this.transcriptW(), 72))}`))
-    this.println(`  ${dim('workspace')} ${this.host.root}`)
     const ci = this.host.contextInfo()
-    this.println(
+
+    // the boot card: a rounded box, one emoji row per fact, value column
+    // aligned via the ui kit (string-width — CJK/emoji proof)
+    const boxW = Math.max(44, Math.min(this.transcriptW() - 2, 78))
+    const labelW = 9 // 'workspace' is the longest label
+    const cellW = boxW - 4
+    const valueW = cellW - (2 + 1 + labelW + 1)
+
+    const rows: string[] = []
+    const factRow = (icon: string, label: string, value: string): void => {
+      const parts = wrapV(value, Math.max(8, valueW))
+      rows.push(`${icon} ${dim(padCol(label, labelW))} ${parts[0]}`)
+      for (const cont of parts.slice(1)) rows.push(`  ${' '.repeat(labelW)} ${cont}`)
+    }
+    factRow('📂', 'workspace', this.host.root)
+    factRow(
+      '🤖',
+      'model',
       ci.limit > 0
-        ? `  ${dim('model')}     ${cfg.defaultModel} ${dim(`(${cfg.defaultProvider}) · ctx ${ci.bar} · mode ${this.mode}`)}`
-        : `  ${dim('model')}     ${cfg.defaultModel} ${dim(`(${cfg.defaultProvider}) · mode ${this.mode}`)}`,
+        ? `${cfg.defaultModel} ${dim(`(${cfg.defaultProvider}) · ctx ${ci.bar} · mode ${this.mode}`)}`
+        : `${cfg.defaultModel} ${dim(`(${cfg.defaultProvider}) · mode ${this.mode}`)}`,
     )
-    this.println(
+    factRow(
+      '🔌',
+      'mcp',
       mcpReady.length
-        ? `  ${dim('mcp')}        ${dim(`${mcpReady.length} server(s) · ${mcpReady.reduce((n, s) => n + s.tools, 0)} tools — /mcp`)}`
-        : `  ${dim('mcp')}        ${dim('none — /mcp adds Model Context Protocol servers')}`,
+        ? dim(`${mcpReady.length} server(s) · ${mcpReady.reduce((n, s) => n + s.tools, 0)} tools — /mcp`)
+        : dim('none — /mcp adds Model Context Protocol servers'),
     )
-    this.println(
+    factRow(
+      '🌐',
+      'web gui',
       this.webUrl
-        ? `  ${dim('web gui')}    ${this.webUrl} ${dim('(sharing this session)')}`
-        : `  ${dim('web gui')}    ${dim('off — /webgui on or start with --web-gui')}`,
+        ? `${this.webUrl} ${dim('(sharing this session)')}`
+        : dim('off — /webgui on or start with --web-gui'),
     )
-    this.println(dim(`${'─'.repeat(Math.min(this.transcriptW(), 72))}`))
-    this.println(`  ${dim('type to talk to the agent · / commands · @ files · ? shortcuts · ctrl+x menu')}`)
+
+    this.println('')
+    for (const r of roundBox({
+      title: `${orange('✻')} ${bold('Tagent')} ${dim(`v${CURRENT_VERSION} · terminal-native coding agent`)}`,
+      rows,
+      width: boxW,
+    })) this.println(r)
+    this.println('')
+    this.println(dim('  type to talk to the agent · / commands · @ files · ? shortcuts · ctrl+x menu'))
     this.println('')
   }
 
@@ -1641,12 +1621,22 @@ export class TuiApp {
     void this.handleLine(text)
   }
 
-  /** user-message echo — bold `❯` prefix (Claude Code's prompt glyph),
-   * continuation lines indented under it */
+  /** user-message echo — opencode-style rounded box (`╭─ ❯ you ──╮`):
+   *  the text is bold-wrapped inside, widths handled by the ui kit so the
+   *  right rail stays RATA even with CJK/emoji in the message */
   private logUser(text: string): void {
-    const ls = text.split('\n')
-    this.println(`${bold('❯ ')}${ls[0]}`)
-    for (const l of ls.slice(1)) this.println(`  ${l}`)
+    const boxW = Math.max(30, Math.min(this.transcriptW() - 2, 78))
+    const cellW = boxW - 4
+    const rows: string[] = []
+    for (const l of text.split('\n')) {
+      if (!l.trim()) {
+        rows.push('')
+        continue
+      }
+      rows.push(...wrapV(l, cellW))
+    }
+    this.println('')
+    for (const r of roundBox({ title: '❯ you', rows, width: boxW, color: cyan })) this.println(r)
   }
 
   private async handleLine(text: string): Promise<void> {
@@ -2492,7 +2482,7 @@ export class TuiApp {
 
   private helpOverlay(): void {
     const lines: string[] = ['', bold('  Tagent commands'), '']
-    for (const [k, v] of HELP_ROWS) lines.push(`    ${'/' + k.padEnd(46)} ${dim(v)}`)
+    for (const [k, v] of HELP_ROWS) lines.push(`    ${'/' + padCol(k, 46)} ${dim(v)}`)
     lines.push('')
     lines.push(dim('    keys: ? shortcuts · enter send · alt+enter newline · ctrl+x menu'))
     this.overlayStack.push({ kind: 'text', title: 'help', lines, scroll: 0, resolve: () => undefined })
@@ -2501,7 +2491,7 @@ export class TuiApp {
 
   /** the `?` overlay — Claude Code's shortcuts panel */
   private shortcutsOverlay(): void {
-    const k = (key: string, what: string) => `    ${bold(key.padEnd(16))} ${dim(what)}`
+    const k = (key: string, what: string) => `    ${bold(padCol(key, 16))} ${dim(what)}`
     const lines: string[] = [
       '',
       bold('  keyboard'), '',
@@ -2733,7 +2723,7 @@ export class TuiApp {
           for (const p of ready) {
             const mark = p.id === host.cfg.defaultProvider ? green('▸') : ' '
             const key = !p.needsKey ? dim('free') : p.hasKey ? green('key✓') : red('no key')
-            this.println(`  ${mark} ${bold(p.id.padEnd(16))} ${key} ${dim(p.models.map((m) => m.id).slice(0, 4).join(', '))}${p.models.length > 4 ? dim(` +${p.models.length - 4}`) : ''}`)
+            this.println(`  ${mark} ${bold(padCol(p.id, 16))} ${key} ${dim(p.models.map((m) => m.id).slice(0, 4).join(', '))}${p.models.length > 4 ? dim(` +${p.models.length - 4}`) : ''}`)
           }
           if (locked.length) this.println(dim(`  ${locked.length} more in the catalog (add a key): ${locked.slice(0, 8).map((p) => p.id).join(', ')}${locked.length > 8 ? '…' : ''}`))
           this.println(dim('  interactive: /model · set: /model <provider>/<model> · search: /model <text>'))
@@ -2979,7 +2969,7 @@ export class TuiApp {
         this.println(bold('  permissions') + dim(` · default: ${host.cfg.permissions.defaultMode}`))
         for (const [tool, mode] of Object.entries(host.cfg.permissions.tools)) {
           const color = mode === 'allow' ? green(mode) : mode === 'deny' ? red(mode) : yellow(mode)
-          this.println(`    ${tool.padEnd(14)} ${color}`)
+          this.println(`    ${padCol(tool, 14)} ${color}`)
         }
         this.println(dim('    change: /allow <tool> · /ask <tool> · /deny <tool>'))
         return
@@ -3146,7 +3136,7 @@ export class TuiApp {
           JSON.stringify(host.sanitizeConfig(), (k, v) => (k === 'providers' ? undefined : v)),
         ) as Record<string, unknown>
         for (const [k, v] of Object.entries(s)) {
-          this.println(`  ${k.padEnd(18)} ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
+          this.println(`  ${padCol(k, 18)} ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
         }
         return
       }
@@ -3457,7 +3447,7 @@ export class TuiApp {
     this.println(bold(`  MCP servers (${status.length})`))
     for (const s of status) {
       const icon = s.state === 'ready' ? green('◉') : s.state === 'error' ? red('✗') : s.state === 'disabled' ? dim('○') : yellow('◌')
-      this.println(`   ${icon} ${bold(s.name.padEnd(16))} ${dim(s.state)} · ${s.tools} tools${s.enabled === false ? dim(' (disabled)') : ''}`)
+      this.println(`   ${icon} ${bold(padCol(s.name, 16))} ${dim(s.state)} · ${s.tools} tools${s.enabled === false ? dim(' (disabled)') : ''}`)
       if (s.error) this.println(`      ${red(s.error.slice(0, 90))}`)
     }
     this.println(dim('    tools: mcp_<server>_<tool> · permissions: /allow mcp_<server> · manage: /mcp'))
@@ -3741,9 +3731,10 @@ export class TuiApp {
     if (this.notice) {
       s = red(this.notice)
     } else if (this.statusKind === 'stream') {
-      s = `${cyan(SPINNER[this.spinnerFrame])} ${dim(`streaming · ${this.streamChars} chars · esc to interrupt`)}`
+      s = `${cyan(SPINNER[this.spinnerFrame])} ${dim(`🌊 streaming · ${this.streamChars} chars · esc to interrupt`)}`
     } else if (this.statusKind === 'status') {
-      s = `${cyan(SPINNER[this.spinnerFrame])} ${dim(this.statusLabel)}${this.running ? dim(' · esc to interrupt') : ''}`
+      const ic = /thinking/.test(this.statusLabel) ? STATUS_ICONS.thinking : STATUS_ICONS.acting
+      s = `${cyan(SPINNER[this.spinnerFrame])} ${dim(`${ic} ${this.statusLabel}`)}${this.running ? dim(' · esc to interrupt') : ''}`
     } else if (this.lastDoneLabel) {
       s = dim(this.lastDoneLabel)
     }
@@ -3763,7 +3754,7 @@ export class TuiApp {
       const raw = renderContextBar(this.ctxUsed, this.ctxLimit, 10)
       ctx = pct >= 80 ? red(raw) : pct >= 60 ? yellow(raw) : green(raw)
     } else if (this.tokensIn + this.tokensOut > 0) {
-      ctx = `${fmtTok(this.tokensIn)}↑ ${fmtTok(this.tokensOut)}↓`
+      ctx = `${fmtTok(this.tokensIn)}${SYM.arrowUp} ${fmtTok(this.tokensOut)}${SYM.arrowDown}`
     }
     const badge = this.syncBadge ? ` · ⎇ ${this.syncBadge}` : ''
     const right = `${this.mode} · ${shortModelName(cfg.defaultModel)}${ctx ? ` · ${ctx}` : ''} · ${fmtElapsed(Date.now() - this.startedAt)}${badge}`

@@ -28,9 +28,45 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.17.0'
+export const LATEST = '0.18.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.18.0',
+    date: '2026-09-20',
+    title: 'The glow-up: real TUI libraries — boxes, emoji, lines that finally align',
+    summary:
+      'The TUI is now built on real terminal libraries (string-width, figures, cli-boxes, picocolors, wrap-ansi) instead of hand-rolled width math. Boot banner and user messages are rounded cards (╭─╮), tool lines carry emoji icons with aligned columns, markdown tables draw as full box tables, and every width now counts CJK, emoji and combining marks correctly — the "garis gak rata" era is over.',
+    stable: true,
+    sections: [
+      {
+        name: 'New: shared UI kit (ui.ts)',
+        items: [
+          'backed by string-width + strip-ansi: true Unicode display width — CJK extension blocks (U+3400, U+20000+), emoji presentation (✅ ⚡ …), ZWJ families and combining marks all count correctly (the old hand-rolled table missed whole ranges, which is why columns used to wobble)',
+          'figures for cross-platform symbols (✔ ✘ ❯ ↑↓) with automatic ASCII fallback on legacy terminals; cli-boxes for the ╭─╮ ╰─╯ round border preset; picocolors for color; wrap-ansi for hard word wrap',
+          'one kit, four consumers: the inline TUI, the classic TUI, the markdown renderer and the select menus all measure with the same functions now',
+        ],
+      },
+      {
+        name: 'The glow-up',
+        items: [
+          'boot banner is a rounded card with an emoji row per fact (📂 workspace · 🤖 model · 🔌 mcp · 🌐 web gui) and a value column that is ALWAYS aligned — the old hardcoded-space padding was off by one column on two rows',
+          'your messages echo as opencode-style rounded cards (╭─ ❯ you ──╮) — CJK and emoji in the text can no longer break the right rail',
+          'tool lines get emoji icons (📖 read · 💻 bash · 🔍 search · 🌐 fetch · 💬 ask · 🧠 memory · 🤖 subagent …) and a fixed tool-name column, so durations and summaries line up vertically; results keep the ⎿ connector with ✓/✗ status',
+          'markdown pipe tables render as full box tables (╭─┬─╮ ├──┼──┤ ╰─┴─╯) with l/c/r alignment preserved',
+          'assistant messages get Claude Code\u2019s orange ● bullet; the status row gained a moon-phase spinner (🌑🌒🌓) with 🤔/⚡/🌊 phase emoji',
+          '/help, /keys, /tools, /models, /mcp, /sessions menus pad with true width — emoji or CJK in names no longer shear the columns',
+        ],
+      },
+      {
+        name: 'Also',
+        items: [
+          'tagent v0.17.0 is out: context window bar + deterministic /compact + bulletproof update (stuck merges self-recover, ~/.tagent snapshotted before every update)',
+          'full test coverage for the kit: 46 ui-kit unit tests plus the whole regression battery re-run green (tui-app, tui-md, markdown 95, compact 49, context-loop 30, ask 38, cache 38, features, select, host, PTY suites)',
+        ],
+      },
+    ],
+  },
   {
     version: '0.17.0',
     date: '2026-09-20',
