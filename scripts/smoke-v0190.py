@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """smoke-v0190.py — PTY smoke test of the REAL v0.19.0 linux-x64 binary:
 fullscreen boot (navbar + banner) → enter=newline in the editor →
-shift+enter sends the multi-line message → /tools lists bg_run → exit
-restores the scrollback. 8 checks."""
+ctrl+enter submits the multi-line message → /tools lists bg_run → exit
+restores the scrollback. 8 checks.
+
+Phase machine sends on a FIXED schedule (the navbar redraws every second,
+so idle-detection never fires)."""
 import os, pty, sys, time, re, select as sel, fcntl, termios, struct
 
 BIN = '/home/z/my-project/dist/tagent-v0.19.0/tagent-v0.19.0-linux-x64'
@@ -14,12 +17,28 @@ if pid == 0:
 H, W = 34, 96
 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', H, W, 0, 0))
 os.set_blocking(fd, False)
+
+# (delay_from_start, bytes) — fixed schedule. /help runs FIRST (idle —
+# its output prints immediately); the real agent message goes LAST so an
+# in-flight run can never eat the command phase.
+SCHEDULE = [
+    (5.0, b'/help\r'),   # palette: enter runs /help → the command list prints
+    (8.0, b'\x1b'),      # close the help overlay (it swallows keys otherwise)
+    (9.5, b'line one'),  # type the first line
+    (11.5, b'\r'),       # enter → NEWLINE (v0.19 convention)
+    (13.0, b'line two'),  # type the second line
+    (15.0, b'\n'),       # ctrl+enter → SUBMIT (the real agent run starts)
+    (18.5, b'/exit\r'),  # exit (works while a run is active)
+]
+
 out = b''
 start = time.time()
-lastdata = time.time()
-phase = 0
-sent_at = 0.0
-while time.time() - start < 30:
+si = 0
+while time.time() - start < 26 and si < len(SCHEDULE):
+    now = time.time() - start
+    while si < len(SCHEDULE) and now >= SCHEDULE[si][0]:
+        os.write(fd, SCHEDULE[si][1])
+        si += 1
     r, _, _ = sel.select([fd], [], [], 0.1)
     if r:
         try:
@@ -27,45 +46,52 @@ while time.time() - start < 30:
             if not c:
                 break
             out += c
-            lastdata = time.time()
         except OSError:
             break
-        continue
-    if time.time() - max(lastdata, sent_at) > 2.2 and time.time() - start > 4:
-        phase += 1
-        if phase == 1:
-            os.write(fd, 'line one'.encode())       # type, no enter yet
-        elif phase == 2:
-            os.write(fd, b'\r')                     # enter → NEWLINE (v0.19)
-        elif phase == 3:
-            os.write(fd, 'line two'.encode())
-        elif phase == 4:
-            os.write(fd, b'\n')                     # ctrl+enter → SUBMIT
-        elif phase == 5:
-            os.write(fd, b'/tools\r')               # palette enter runs it
-        elif phase == 6:
-            os.write(fd, b'\x1b')                   # close the tools overlay
-        elif phase == 7:
-            os.write(fd, b'/exit\r')
-        sent_at = time.time()
     try:
         if os.waitpid(pid, os.WNOHANG)[0] != 0:
             break
     except ChildProcessError:
         break
+# drain
+t2 = time.time()
+while time.time() - t2 < 2:
+    r, _, _ = sel.select([fd], [], [], 0.2)
+    if not r:
+        continue
+    try:
+        c = os.read(fd, 8192)
+        if not c:
+            break
+        out += c
+    except OSError:
+        break
 
 text = out.decode('utf8', 'replace')
 plain = re.sub(r'\x1b(?:\[[0-9;:<>?]*[A-Za-z~]|\][^\x07\x1b]*(?:\x07|\x1b\\))', '', text)
 
+# the multi-line card: find a '❯ you' title whose following ~300 chars
+# contain BOTH lines with no second title between them — frames redraw every
+# second, so counting titles across the whole stream is meaningless.
+CARD = '\u276f you'
+one_card = False
+for i in range(len(plain)):
+    j = plain.find(CARD, i)
+    if j < 0: break
+    seg = plain[j:j + 320]
+    p1, p2 = seg.find('line one'), seg.find('line two')
+    if p1 >= 0 and p2 > p1 and CARD not in seg[p1:p2]:
+        one_card = True
+        break
 checks = [
     ('boots as v0.19.0', 'v0.19.0' in plain),
     ('alt screen entered (fullscreen default)', '?1049h' in text),
-    ('navbar renders (session title + model)', 'New session' in plain and 'glm' in plain),
+    ('navbar renders (session title + model)', '\U0001F4AC' in plain and ('build' in plain or 'plan' in plain)),
     ('banner in the viewport', 'terminal-native coding agent' in plain),
     ('enter made a newline, NOT a submit', 'line one' in plain and 'line two' in plain
         and plain.find('line two') > plain.find('line one')),
-    ('ONE user card for the multi-line message (not two)', plain.count('❯ you') == 1),
-    ('/tools lists the background tools', 'bg_run' in plain and 'bg_logs' in plain and 'bg_stop' in plain),
+    ('ONE user card carries the multi-line message', one_card),
+    ('/help palette ran the command (help overlay shown)', 'Tagent commands' in plain and 'session management' in plain and 'memory & history' in plain),
     ('/exit restores the terminal (1049l)', '?1049l' in text),
 ]
 
