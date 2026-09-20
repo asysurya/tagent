@@ -1,6 +1,6 @@
 {
   "version": "0.14.0",
   "date": "2026-09-20",
-  "notes": "`tagent auth` in a terminal now offers web connect: a one-time page opens in your browser (loopback only, one-time secret URL), you create a GitHub token with the repo scope pre-selected and paste it there — the terminal handles the rest. Works on UserLAnd/Termux too, where the printed URL opens in the phone’s own browser. The paste and device flows stay; scripted pipes are unchanged.",
+  "notes": "The TUI is rebuilt on the Claude Code / opencode model: an INLINE app — no alternate screen — so the transcript lives in your terminal’s own scrollback and scrolling works everywhere (mouse wheel, touch on a phone, shift+pgup, tmux copy mode). A small sticky region redraws at the bottom: live stream tail, status, the rounded editor box, and a hint row with model · tokens · ⎇ repo. Plus: `tagent auth` gets web connect (login in the browser, nothing typed in the terminal), and `tagent sync` becomes multi-device safe (fetch + rebase before push). The Go native edition is retired — the main binaries are the only build now.",
   "url": "https://github.com/asysurya/tagent/releases/tag/v0.14.0"
 }

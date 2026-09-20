@@ -67,12 +67,6 @@ const FEATURES = [
     title: "Runs on a phone",
     body: "Ubuntu via UserLAnd (no root) — the GUI has a dedicated mobile layout with bottom tabs. localhost:4020 in Chrome.",
   },
-  {
-    icon: IconPackage,
-    title: "Windows 7 & 32-bit",
-    body: "The native edition — the core agent as a pure-Go single file (~10–15 MB) for machines the main binary can't touch: Windows 7/8 and 32-bit systems. Download, run, done.",
-    tag: "new",
-  },
 ]
 
 function FeatureCard({ icon: Icon, title, body, tag }: (typeof FEATURES)[number]) {
@@ -240,10 +234,11 @@ export default function Home() {
             <ul className="mt-4 space-y-2.5 text-sm text-zinc-400">
               {[
                 "Arrow-key menus everywhere — model picker, sessions, permissions, y/N confirms",
-                "Type-to-filter across 40+ providers and hundreds of models",
-                "Slash commands: /mcp, /plugins, /update, /model, /sessions, /auth…",
+                "Claude Code-style: transcript in your terminal's own scrollback, rounded editor box at the bottom",
+                "Scroll naturally — mouse wheel, touch on a phone, shift+pgup, tmux copy mode",
+                "Slash commands: /mcp, /plugins, /update, /model, /sessions, /auth… · @file mentions · ? shortcuts",
                 "Answers render as markdown — headings, code blocks, lists, tables",
-                "Stats bar under the input (model · mode · tokens · time), ESC stops the run, ↑/↓ scrolls",
+                "Hint row under the editor (model · tokens · ⎇ repo), ESC stops the run",
                 "Streams tokens live, queues your next message mid-run",
               ].map((t) => (
                 <li key={t} className="flex gap-2.5">

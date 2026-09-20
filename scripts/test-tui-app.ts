@@ -1,10 +1,12 @@
 #!/usr/bin/env bun
 /**
- * test-tui-app.ts — unit test for the full-screen TUI (tui-app.ts).
+ * test-tui-app.ts — unit test for the inline TUI (tui-app.ts).
  *
- * Drives TuiApp with injected fake stdin/stdout streams (no real TTY needed):
- * render() + key handling are exercised directly through feed()/renderNow(),
- * and the frames written to the fake output are asserted.
+ * Drives TuiApp with injected fake stdin/stdout streams (no real TTY
+ * needed): render() + key handling are exercised directly through
+ * feed()/renderNow(), the sticky region is asserted via app.lastFrame, and
+ * the flushed transcript (what lands in the terminal scrollback) via the
+ * raw output stream.
  *
  * Run: bun scripts/test-tui-app.ts
  */
@@ -203,26 +205,30 @@ test('appCapable() is false when stdout is not a TTY', () => {
   if (v !== false) throw new Error('expected appCapable() === false without a TTY')
 })
 
-test('startup: alternate screen, hidden cursor, header renders, footer hints', async () => {
+test('startup: INLINE (no alternate screen), cursor hidden, banner flushed, sticky editor', async () => {
   const host = new FakeHost(tmp)
   const { app, out } = await started(host)
   const raw = out.text()
-  if (!raw.includes('\x1b[?1049h')) throw new Error('alternate screen not entered')
+  if (raw.includes('\x1b[?1049h')) throw new Error('alternate screen must NOT be used (inline model)')
   if (!raw.includes('\x1b[?25l')) throw new Error('cursor not hidden')
+  // the banner lands in the scrollback stream, not the sticky region
+  const scroll = stripAnsi(raw)
+  if (!scroll.includes('terminal-native coding agent')) throw new Error('banner missing from the scrollback')
+  if (!scroll.includes('✻')) throw new Error('welcome glyph missing')
+  // the sticky region = status row + editor box + hint row (small, fixed-ish)
   const frame = app.lastFrame
-  if (frame.length !== 24) throw new Error(`expected 24 frame rows, got ${frame.length}`)
+  if (frame.length > 8) throw new Error(`sticky region too tall at boot: ${frame.length} rows`)
   const plain = frame.map(stripAnsi)
-  const head = plain[0]
-  if (!head.includes(path.basename(tmp))) throw new Error(`header missing workspace name: ${head}`)
-  if (!head.includes('BUILD')) throw new Error(`header missing BUILD chip: ${head}`)
-  if (!head.includes('glm-4.7')) throw new Error(`header missing model: ${head}`)
-  if (!plain.some((r) => r.includes('enter send') && r.includes('ctrl+x menu'))) throw new Error('footer shortcuts missing')
   if (!plain.some((r) => r.includes('Message tagent'))) throw new Error('placeholder missing')
-  if (!plain.some((r) => r.includes('terminal-native coding agent'))) throw new Error('banner missing')
+  if (!plain.some((r) => r.includes('? shortcuts') && r.includes('/ commands'))) throw new Error('hint row shortcuts missing')
+  if (!plain.some((r) => r.includes('glm-4.7'))) throw new Error('hint row missing model stats')
+  if (!plain.some((r) => r.startsWith('╭'))) throw new Error('editor box top rail missing')
+  if (!plain.some((r) => r.startsWith('╰'))) throw new Error('editor box bottom rail missing')
   app.exit()
   await ctx0done(app)
   app.destroy()
-  if (!out.text().includes('\x1b[?1049l')) throw new Error('alternate screen not left on destroy')
+  if (out.text().includes('\x1b[?1049l')) throw new Error('alternate screen restore leaked into destroy')
+  if (!out.text().includes('\x1b[?25h')) throw new Error('cursor not restored on destroy')
 })
 
 async function ctx0done(app: TuiApp): Promise<void> {
@@ -244,19 +250,21 @@ test('editor: typing echoes in the boxed input', async () => {
   app.destroy()
 })
 
-test('enter sends: host.chatSend receives the text, user line + done line render', async () => {
+test('enter sends: host.chatSend receives the text, user line + done line flush to the scrollback', async () => {
   const host = new FakeHost(tmp)
-  const { app } = await started(host)
+  const { app, out } = await started(host)
   app.feed('ping the agent\r')
   await sleep(30)
   app.renderNow()
   if (host.sent.length !== 1 || host.sent[0].text !== 'ping the agent') throw new Error(`chatSend not called once: ${JSON.stringify(host.sent)}`)
-  const plain = app.lastFrame.map(stripAnsi).join('\n')
-  if (!plain.includes('> ping the agent')) throw new Error('user line missing')
-  if (!plain.includes('Hello from the agent')) throw new Error('assistant text missing')
+  const plain = stripAnsi(out.text())
+  if (!plain.includes('❯ ping the agent')) throw new Error('user ❯ line missing from scrollback')
+  if (!plain.includes('Hello from the agent')) throw new Error('assistant text missing from scrollback')
   if (!plain.includes('done')) throw new Error('done line missing')
   if (!plain.includes('turn')) throw new Error('turn count missing on done line')
   if (!plain.includes('120')) throw new Error('token usage missing')
+  // sticky region must not carry the transcript (that's the scrollback's job)
+  if (app.lastFrame.map(stripAnsi).some((r) => r.includes('Hello from the agent'))) throw new Error('transcript leaked into the sticky region')
   app.exit()
   await sleep(10)
   app.destroy()
@@ -346,7 +354,7 @@ test('ctrl+x menu: enter on "Continue" sends "continue" to the host', async () =
 
 test('permission overlay: renders, y allows once, host.permissionRespond called', async () => {
   const host = new FakeHost(tmp)
-  const { app } = await started(host)
+  const { app, out } = await started(host)
   host.bus.emit('permission:request', { id: 'p1', tool: 'bash', input: { command: 'rm -rf /tmp/x' }, risk: 'high' })
   await sleep(20)
   app.renderNow()
@@ -360,7 +368,7 @@ test('permission overlay: renders, y allows once, host.permissionRespond called'
   if (host.responded.length !== 1) throw new Error('permissionRespond not called')
   const r = host.responded[0]
   if (r.id !== 'p1' || r.approved !== true || r.remember !== 'once') throw new Error(`respond payload wrong: ${JSON.stringify(r)}`)
-  if (!app.lastFrame.map(stripAnsi).some((x) => x.includes('allowed'))) throw new Error('allowed line missing')
+  if (!stripAnsi(out.text()).includes('allowed')) throw new Error('allowed line missing from the scrollback')
   app.exit()
   await sleep(10)
   app.destroy()
@@ -428,48 +436,68 @@ test('@file completion: @ + prefix lists workspace files, tab inserts', async ()
   app.destroy()
 })
 
-test('scroll: pgup scrolls up, new lines indicator appears, pgdn follows again', async () => {
+test('scrollback: a long message flushes fully into the scrollback; the sticky region stays small (native scrolling)', async () => {
   const host = new FakeHost(tmp)
-  const { app } = await started(host)
+  const { app, out } = await started(host)
   const lines = Array.from({ length: 40 }, (_, i) => `MARK-${String(i).padStart(2, '0')}`).join('\n')
   host.bus.emit('message:new', { message: { role: 'assistant', content: lines } })
   await sleep(20)
   app.renderNow()
-  if (!app.lastFrame.map(stripAnsi).some((r) => r.includes('MARK-39'))) throw new Error('auto-follow should show the newest line')
-  app.feed('\x1b[5~') // pgup
-  app.renderNow()
-  if (app.lastFrame.map(stripAnsi).some((r) => r.includes('MARK-39'))) throw new Error('pgup should hide the newest line')
-  // new output while scrolled up → indicator
-  host.bus.emit('message:new', { message: { role: 'assistant', content: 'BRAND-NEW-LINE' } })
-  await sleep(20)
-  app.renderNow()
-  if (!app.lastFrame.some((r) => stripAnsi(r).includes('new lines'))) throw new Error('new-lines indicator missing')
-  app.feed('\x1b[6~') // pgdn — back to the bottom
-  app.renderNow()
-  if (!app.lastFrame.map(stripAnsi).some((r) => r.includes('BRAND-NEW-LINE'))) throw new Error('pgdn should re-follow')
+  const scroll = stripAnsi(out.text())
+  if (!scroll.includes('MARK-00') || !scroll.includes('MARK-39')) throw new Error('the whole message must reach the scrollback')
+  if (app.lastFrame.length > 10) throw new Error(`sticky region should stay small, got ${app.lastFrame.length} rows`)
+  if (app.lastFrame.map(stripAnsi).some((r) => r.includes('MARK-39'))) throw new Error('old transcript lines must not linger in the sticky region')
   app.exit()
   await sleep(10)
   app.destroy()
 })
 
-test('wrapping: long + CJK lines wrap inside the viewport width', async () => {
+test('?: the shortcuts overlay opens on an empty editor and closes with esc', async () => {
   const host = new FakeHost(tmp)
-  const { app } = await started(host, { columns: 40 })
+  const { app } = await started(host)
+  app.feed('?')
+  await sleep(20)
+  app.renderNow()
+  const plain = app.lastFrame.map(stripAnsi).join('\n')
+  if (!plain.includes('shortcuts')) throw new Error('shortcuts overlay missing')
+  if (!plain.includes('command palette')) throw new Error('shortcut rows missing')
+  app.feed('\x1b')
+  await sleep(80) // bare esc is disambiguated by a 50ms timer
+  app.renderNow()
+  if (app.lastFrame.map(stripAnsi).some((r) => r.includes('command palette'))) throw new Error('shortcuts overlay did not close')
+  // ? with text present just types
+  app.feed('what?')
+  app.renderNow()
+  if (!app.lastFrame.map(stripAnsi).some((r) => r.includes('what?'))) throw new Error('? while typing must insert, not open the overlay')
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+test('wrapping: long + CJK transcript lines wrap inside the terminal width', async () => {
+  const host = new FakeHost(tmp)
+  const { app, out } = await started(host, { columns: 40 })
   const long = 'word '.repeat(30)
   const cjk = '终端原生编程助手'.repeat(12)
   host.bus.emit('message:new', { message: { role: 'assistant', content: `${long}\n${cjk}` } })
   await sleep(20)
   app.renderNow()
+  // rows in the raw stream are separated by '\n' (fresh lines) or '\r'
+  // (in-place rewrites — every row write starts with \r\x1b[2K)
+  for (const [i, rowRaw] of out.text().split(/[\r\n]/).entries()) {
+    const w = vis(rowRaw)
+    if (w > 40) throw new Error(`scrollback row ${i} overflows: ${w} cols — ${JSON.stringify(stripAnsi(rowRaw))}`)
+  }
   for (const [i, row] of app.lastFrame.entries()) {
     const w = vis(row)
-    if (w > 40) throw new Error(`row ${i} overflows: ${w} cols — ${JSON.stringify(stripAnsi(row))}`)
+    if (w > 40) throw new Error(`sticky row ${i} overflows: ${w} cols — ${JSON.stringify(stripAnsi(row))}`)
   }
   app.exit()
   await sleep(10)
   app.destroy()
 })
 
-test('resize: narrower terminal re-wraps every row', async () => {
+test('resize: narrower terminal redraws the sticky region without overflow', async () => {
   const host = new FakeHost(tmp)
   const { app, out } = await started(host)
   host.bus.emit('message:new', { message: { role: 'assistant', content: 'x'.repeat(120) } })
@@ -478,7 +506,7 @@ test('resize: narrower terminal re-wraps every row', async () => {
   out.columns = 50
   app.onResize()
   app.renderNow()
-  if (app.lastFrame.length !== 24) throw new Error(`row count changed on resize: ${app.lastFrame.length}`)
+  if (app.lastFrame.length > 24) throw new Error(`sticky region taller than the screen after resize: ${app.lastFrame.length}`)
   for (const [i, row] of app.lastFrame.entries()) {
     const w = vis(row)
     if (w > 50) throw new Error(`row ${i} overflows after resize: ${w}`)
@@ -488,7 +516,7 @@ test('resize: narrower terminal re-wraps every row', async () => {
   app.destroy()
 })
 
-test('ctrl+c: first press warns, second press exits cleanly and restores the screen', async () => {
+test('ctrl+c: first press warns, second press exits cleanly and restores the cursor', async () => {
   const host = new FakeHost(tmp)
   const { app, out } = await started(host)
   app.feed('\x03')
@@ -502,7 +530,7 @@ test('ctrl+c: first press warns, second press exits cleanly and restores the scr
   await sleep(60)
   app.destroy()
   const raw = out.text()
-  if (!raw.includes('\x1b[?1049l')) throw new Error('alternate screen not restored on exit')
+  if (raw.includes('\x1b[?1049l')) throw new Error('alternate screen restore leaked (inline model has none)')
   if (!raw.includes('\x1b[?25h')) throw new Error('cursor not restored on exit')
   void resolved
 })
@@ -530,13 +558,15 @@ test('ctrl+c during a run interrupts instead of exiting', async () => {
   app.destroy()
 })
 
-test('mode switch: header chip flips to PLAN', async () => {
+test('mode switch: hint row flips to plan', async () => {
   const host = new FakeHost(tmp)
   const { app } = await started(host)
   host.newSession('plan')
   await sleep(10)
   app.renderNow()
-  if (!stripAnsi(app.lastFrame[0]).includes('PLAN')) throw new Error('header chip did not flip to PLAN')
+  const hint = app.lastFrame.map(stripAnsi).find((r) => r.includes('glm-4.7'))
+  if (!hint) throw new Error('hint row missing')
+  if (!/\bplan\b/.test(hint)) throw new Error(`hint row did not flip to plan: ${hint}`)
   app.exit()
   await sleep(10)
   app.destroy()
@@ -548,7 +578,7 @@ test('/exit command exits the app', async () => {
   app.feed('/exit\r')
   await sleep(40)
   app.destroy()
-  if (!out.text().includes('\x1b[?1049l')) throw new Error('/exit did not restore the screen')
+  if (!out.text().includes('\x1b[?25h')) throw new Error('/exit did not restore the cursor')
 })
 
 test('streaming status: thinking + streamed partial render in the status row', async () => {
@@ -575,9 +605,9 @@ test('streaming status: thinking + streamed partial render in the status row', a
   app.destroy()
 })
 
-test('tool cards: one-line compact render with status icon + duration', async () => {
+test('tool lines: ⎿ connector + status icon + duration flush to the scrollback', async () => {
   const host = new FakeHost(tmp)
-  const { app } = await started(host)
+  const { app, out } = await started(host)
   host.bus.emit('tool:start', { call: { id: 't1', tool: 'bash', input: { command: 'ls -la' }, status: 'running' } })
   await sleep(10)
   host.bus.emit('tool:end', {
@@ -585,11 +615,12 @@ test('tool cards: one-line compact render with status icon + duration', async ()
   })
   await sleep(10)
   app.renderNow()
-  const plain = app.lastFrame.map(stripAnsi).join('\n')
-  if (!plain.includes('bash')) throw new Error('tool card missing tool name')
-  if (!plain.includes('ls -la')) throw new Error('tool card missing summarized input')
-  if (!plain.includes('1.5s')) throw new Error('tool card missing duration')
-  if (!plain.includes('file-a')) throw new Error('tool card missing output tail')
+  const plain = stripAnsi(out.text())
+  if (!plain.includes('⎿')) throw new Error('tool line missing the ⎿ connector')
+  if (!plain.includes('bash')) throw new Error('tool line missing tool name')
+  if (!plain.includes('ls -la')) throw new Error('tool line missing summarized input')
+  if (!plain.includes('1.5s')) throw new Error('tool line missing duration')
+  if (!plain.includes('file-a')) throw new Error('tool line missing output tail')
   app.exit()
   await sleep(10)
   app.destroy()
@@ -614,7 +645,7 @@ test('palette: enter RUNS the arrow-selected command (/, down, enter → /new fl
 
 test('palette: enter applies the selection and keeps the args (/mo zzz + down + enter → /model zzz)', async () => {
   const host = new FakeHost(tmp)
-  const { app } = await started(host)
+  const { app, out } = await started(host)
   app.feed('/mo zzz')
   await sleep(20)
   app.feed('\x1b[B') // mode → model
@@ -622,7 +653,7 @@ test('palette: enter applies the selection and keeps the args (/mo zzz + down + 
   app.feed('\r')
   await sleep(60)
   app.renderNow()
-  const plain = app.lastFrame.map(stripAnsi).join('\n')
+  const plain = stripAnsi(out.text())
   if (plain.includes('unknown command')) throw new Error('palette enter submitted the raw partial token')
   if (!plain.includes('nothing matches "zzz"')) throw new Error(`/model zzz search output missing — got: ${plain.split('\n').filter((l) => l.trim()).slice(-5).join(' | ')}`)
   if (!plain.includes('/model custom')) throw new Error('no-match message should point at /model custom')
@@ -745,12 +776,11 @@ test('model picker: custom model id CTA saves any id on a custom provider', asyn
 
 test('custom provider wizard: /model custom saves the endpoint and selects it', async () => {
   const host = new FakeHost(tmp)
-  const { app } = await started(host)
+  const { app, out } = await started(host)
   void (app as unknown as { customProviderWizard: () => Promise<void> }).customProviderWizard()
   await sleep(40)
   app.renderNow()
-  let plain = app.lastFrame.map(stripAnsi).join('\n')
-  if (!plain.includes('add a custom provider')) throw new Error('wizard banner missing')
+  if (!stripAnsi(out.text()).includes('add a custom provider')) throw new Error('wizard banner missing')
   app.feed('My Ollama\r')
   await sleep(30)
   app.feed('http://localhost:11434/v1\r')
@@ -762,7 +792,7 @@ test('custom provider wizard: /model custom saves the endpoint and selects it', 
   app.feed('llama3.1, qwen2.5\r')
   await sleep(60)
   app.renderNow()
-  plain = app.lastFrame.map(stripAnsi).join('\n')
+  const plain = stripAnsi(out.text())
   const cp = host.saved.find((p) => p.customProvider)?.customProvider as {
     id: string; label: string; baseUrl: string; kind: string; models: string[]
   } | undefined

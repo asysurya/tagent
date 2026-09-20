@@ -34,26 +34,31 @@ else
   bash scripts/build-binaries.sh "$VERSION"
 fi
 
-# ------------------------------------------------ 1b. native (Go) edition --
-# tagent-native binaries (Win7/8/32-bit port) are built separately into
-# native/dist/ — merge them into the release dir + regenerate merged sums.
-if [ -d native/dist ]; then
-  for f in native/dist/tagent-native-*; do
-    [ -f "$f" ] && cp -f "$f" "$OUT/"
-  done
-fi
-if ls "$OUT"/tagent-native-* >/dev/null 2>&1; then
-  (cd "$OUT" && sha256sum tagent-v"$VERSION"-* tagent-native-* > SHA256SUMS.txt)
-  echo "[release] native edition merged — checksums regenerated for all binaries"
-fi
-
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — web connect login & multi-device sync
+## v__VER__ — TUI rebuilt Claude Code-style, web connect login & multi-device sync
 
-Two things every machine-pair asked for: **logging in without typing in the
-terminal**, and **continuing one project on many devices without git
-yelling at you**.
+The TUI is rebuilt on the Claude Code / opencode model: an **inline app — no
+alternate screen**. The transcript lives in your terminal's own scrollback,
+so scrolling works everywhere (mouse wheel, touch on a phone, shift+pgup,
+tmux copy mode), and a small sticky region redraws at the bottom: live
+stream tail → status row → the rounded editor box → a hint row with
+model · tokens · ⎇ repo.
+
+### The new TUI
+
+- **inline rendering** (Claude Code's model, Ink-style): completed lines
+  flow into the scrollback and are never redrawn — native scrolling on every
+  device, including Termux/UserLAnd where there is no PageUp
+- the old full-screen alt-buffer app is gone: it killed native scrollback,
+  which is exactly why scrolling broke
+- Claude Code visual language: ✻ banner, bold ❯ user echo, ● assistant
+  bullets, ⎿ tree connectors for tool lines and results
+- streaming stays in the sticky region while the message arrives; the final
+  markdown render is flushed into the scrollback exactly once
+- `?` on an empty editor opens the shortcuts overlay (Claude Code parity);
+  ↑/↓ walk the input history; esc interrupts / clears; ctrl+x menu unchanged
+- fixed a real history bug: ↑ recalled the same entry forever
 
 ### Web connect login
 
@@ -93,6 +98,13 @@ on both, and `tagent sync` now **converges instead of colliding**:
 - fixed a 0.13.x latent bug: syncing silently deleted the clone's upstream
   tracking, which broke `git pull` in any project that had synced once
 
+### Native edition retired
+
+The Go port (`tagent-native-*`) is removed — the release ships the six
+Bun-compiled binaries only: one engine, one feature set, one set of release
+notes. It had fallen behind the main CLI (no MCP, plugins, relay, subagents
+or web GUI), and the repo loses `native/` and the Go 1.21 toolchain pin.
+
 ---
 
 ## Single-file binaries: download, run, done
@@ -111,26 +123,16 @@ embedded inside the binary and self-extracts on first run).
 | `tagent-v__VER__-macos-x64` | macOS Intel |
 | `tagent-v__VER__-macos-arm64` | macOS Apple silicon |
 
-Native edition (Go):
-
-| File | Platform |
-| --- | --- |
-| `tagent-native-windows-386.exe` | **Windows 7/8/8.1/10/11 — 32-bit & 64-bit** |
-| `tagent-native-windows-amd64.exe` | Windows 7+ (64-bit, lightweight) |
-| `tagent-native-linux-amd64` | Linux (static — any distro, any glibc) |
-| `tagent-native-linux-arm64` | Linux ARM64 (static) |
-
 | `SHA256SUMS.txt` | checksums for everything above |
 
 Also linked from the website's [download page](https://tagent-website.vercel.app/download),
-which auto-detects your platform — 32-bit Windows visitors get the native
-edition automatically.
+which auto-detects your platform.
 
 ### Native Windows — no WSL needed
-- The full builds run the full stack natively: TUI, daemon, web GUI, relay, the 40-provider catalog
+- The builds run the full stack natively: TUI, daemon, web GUI, relay, the 40-provider catalog
 - The bash tool uses Git for Windows' bash.exe (auto-detected, override with `TAGENT_BASH`); `tagent doctor` tells you if it's missing
 - Home/config/sessions live in the real Windows user profile (`~/.tagent` via USERPROFILE)
-- Windows 7/8/32-bit: use the native edition above — it has the same app TUI
+- Windows 10+ 64-bit is required (Windows 7/8 and 32-bit are no longer covered)
 
 **Install / upgrade**
 
@@ -139,8 +141,6 @@ edition automatically.
 chmod +x tagent-v__VER__-linux-x64 && ./tagent-v__VER__-linux-x64 doctor
 # Windows (PowerShell) — the .exe runs as-is
 .\tagent-v__VER__-windows-x64.exe doctor
-# Windows 7 / 32-bit — native edition (just run it: the app TUI opens)
-.\tagent-native-windows-386.exe
 ```
 
 **Verify a download**
@@ -156,7 +156,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — web connect login & multi-device sync" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — TUI rebuilt Claude Code-style, web connect login & multi-device sync" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")
@@ -170,7 +170,7 @@ have_asset() {
   echo "$ASSETS_JSON" | python3 -c "import json,sys; print('\n'.join(a['name'] for a in json.load(sys.stdin)))" | grep -qx "$1"
 }
 shopt -s nullglob
-for f in "$OUT"/tagent-v* "$OUT"/tagent-native-* "$OUT"/SHA256SUMS.txt; do
+for f in "$OUT"/tagent-v* "$OUT"/SHA256SUMS.txt; do
   name=$(basename "$f")
   if have_asset "$name"; then
     echo "[release] $name already uploaded — skipping"

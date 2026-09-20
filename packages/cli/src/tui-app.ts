@@ -1,31 +1,42 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /**
- * tui-app.ts — the full-screen TUI (opencode / Claude Code style).
+ * tui-app.ts — the TUI (Claude Code / opencode style).
  *
- * `tagent start` takes over the terminal: alternate screen buffer, hidden
- * cursor, raw stdin, one framed app (header bar · scrollable transcript ·
- * live status row · boxed input editor · shortcut footer). It runs on a
- * desktop terminal, over SSH and on a phone — pure ANSI, zero dependencies,
- * same feature set as the classic readline TUI (tui.ts):
+ * `tagent start` takes over the bottom of the terminal: an INLINE app —
+ * no alternate screen. Completed lines (markdown, tools, results) flow into
+ * the terminal's own scrollback, and a small sticky region is redrawn in
+ * place at the bottom:
+ *
+ *      [ live stream tail / overlay boxes / palette ]
+ *      [ status row — spinner · elapsed · esc to interrupt ]
+ *      [ rounded editor box — the block cursor lives here ]
+ *      [ hint row — ? shortcuts · model · tokens · ⎇ repo ]
+ *
+ * Why inline (Claude Code's model, Ink-style) instead of a full-screen
+ * alt-buffer app: the terminal's NATIVE scrollback keeps working — mouse
+ * wheel, touch scroll on a phone (Termux/UserLAnd), shift+pgup, tmux copy
+ * mode. Full-screen TUIs kill exactly that, and on Android there is no
+ * PageUp to rescue you. So: the transcript IS the scrollback.
  *
  *  - every slash command of tui.ts, with a `/` palette overlay while typing
- *  - ctrl+x main menu — arrow-key access to the common actions, "rarely type"
+ *  - ctrl+x main menu · `?` shortcuts overlay (Claude Code parity)
  *  - @file mentions with an inline file completion overlay
  *  - permission prompts, plan approvals, model / session / MCP / plugin
- *    pickers as overlays drawn above the editor
- *  - live streaming, spinner status, token accounting, queued messages
- *  - PageUp / PageDown transcript scrolling with a "N new lines" indicator
+ *    pickers as overlay boxes drawn above the editor
+ *  - live streaming (the message tail rides the sticky region, the final
+ *    markdown render is flushed into the scrollback exactly once)
  *  - CJK-aware wrapping, terminal resize support (SIGWINCH)
  *
  * Rendering model (performance discipline):
- *  - the transcript is a LOG of pre-styled lines, wrapped lazily per width
- *  - the frame is rebuilt only when dirty and coalesced on a ~33ms timer
- *  - one stdout.write per frame (row-by-row \r\x1b[2K rewrite)
+ *  - transcript lines are wrapped once at flush time and APPENDED to the
+ *    scrollback — they are never redrawn
+ *  - the sticky region is rebuilt only when dirty, coalesced on a ~33ms
+ *    timer, and rewritten with one cursor-up + \x1b[J + write
  *
  * The whole lifecycle is wrapped in try/finally: a crashed app still restores
- * the terminal (alternate screen off, cursor visible, raw mode off).
+ * the terminal (cursor visible, raw mode off).
  *
- * Non-TTY or tiny terminals fall back to the classic TUI — check appCapable()
+ * Non-TTY terminals fall back to the classic readline TUI — check appCapable()
  * before calling runApp() (index.ts wiring).
  */
 
@@ -489,26 +500,32 @@ class Editor {
     this.lines[this.row] = l.slice(0, i) + l.slice(this.col)
     this.col = i
   }
-  /** single-line history navigation; returns true when it moved */
+  /** single-line history navigation; returns true when it moved.
+   *  (histPos is set AFTER setText — setText resets it, so the navigation
+   *  must re-stamp it or every ↑ recalls the same entry forever) */
   histPrev(): boolean {
     if (this.lines.length > 1 || this.history.length === 0) return false
+    let pos: number
     if (this.histPos === null) {
       this.draft = this.text
-      this.histPos = this.history.length - 1
-    } else if (this.histPos > 0) this.histPos -= 1
+      pos = this.history.length - 1
+    } else if (this.histPos > 0) pos = this.histPos - 1
     else return false
-    this.setText(this.history[this.histPos] ?? '')
+    this.setText(this.history[pos] ?? '')
+    this.histPos = pos
     return true
   }
   histNext(): boolean {
     if (this.lines.length > 1 || this.histPos === null) return false
-    if (this.histPos < this.history.length - 1) {
-      this.histPos += 1
-      this.setText(this.history[this.histPos] ?? '')
-    } else {
-      this.histPos = null
+    let pos: number
+    if (this.histPos < this.history.length - 1) pos = this.histPos + 1
+    else {
       this.setText(this.draft)
+      this.histPos = null
+      return true
     }
+    this.setText(this.history[pos] ?? '')
+    this.histPos = pos
     return true
   }
 }
@@ -647,8 +664,8 @@ export interface TuiAppOptions {
   io?: AppIO
 }
 
-const EDITOR_PLACEHOLDER = 'Message tagent… (/ for commands, ctrl+x menu, @ to attach files)'
-const FOOTER_KEYS = 'enter send · alt+enter newline · ctrl+x menu · pgup/pgdn scroll · esc stop/clear · ctrl+c exit'
+const EDITOR_PLACEHOLDER = 'Message tagent… (/ commands, @ files, ? shortcuts)'
+const HINT_KEYS = '? shortcuts · / commands · @ files'
 
 /* ------------------------------------------------------------------ */
 /* the app                                                             */
@@ -656,12 +673,8 @@ const FOOTER_KEYS = 'enter send · alt+enter newline · ctrl+x menu · pgup/pgdn
 
 interface LogLine {
   raw: string
-  w?: number
+  /** wrapped (at flush time) lines already written into the scrollback */
   wrapped?: string[]
-  /** set on raw assistant-stream output (onChunk): lets onAssistantMessage
-   * know these rows belong to the message it may roll back for the
-   * markdown re-render */
-  stream?: true
 }
 
 export class TuiApp {
@@ -685,13 +698,13 @@ export class TuiApp {
   private dirty = true
   private frameTimer: ReturnType<typeof setTimeout> | undefined
   lastFrame: string[] = []
+  /** sticky rows currently on screen — the cursor sits on the last one */
+  private stickyDrawn = 0
 
   /* transcript */
   private log: LogLine[] = []
-  private flat: string[] | null = null
-  private flatW = -1
-  private offset = 0
-  private newBelow = 0
+  /** log entries already flushed into the terminal scrollback */
+  private flushed = 0
   private frozen: string[] = []
   private permissionFrozen = false
 
@@ -712,10 +725,9 @@ export class TuiApp {
   private runStartedAt = 0
   private todos: TodoItem[] = []
   private lastSubagentTurn = new Map<string, number>()
-  private printedLines = 0
-  /** this.log.length when the current message started streaming — the
-   * markdown re-render in onAssistantMessage rolls the transcript back here */
-  private streamStartLog = 0
+  /** the assistant message while it streams — rendered in the sticky region;
+   * flushed into the scrollback as markdown once the message completes */
+  private streamText = ''
   private lastCtrlC = 0
   private notice = ''
   private lastDoneLabel = ''
@@ -802,7 +814,9 @@ export class TuiApp {
       this.io.input.setRawMode?.(true)
     } catch { /* not a tty — appCapable() gates this */ }
     this.io.input.resume?.()
-    this.writeOut('\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H')
+    // hide the terminal cursor — the editor draws its own block cursor, and
+    // the sticky rewrite would make a real cursor dance around otherwise
+    this.writeOut('\x1b[?25l')
   }
 
   /** restore the terminal — idempotent, safe from crashes */
@@ -840,7 +854,14 @@ export class TuiApp {
       } catch { /* ignore */ }
       this.resizeBound = false
     }
-    this.writeOut('\x1b[?1049l\x1b[?25h')
+    // clear the sticky region — the transcript stays in the scrollback
+    if (this.stickyDrawn > 0) {
+      try {
+        this.io.output.write(`\x1b[${this.stickyDrawn - 1}A\x1b[J`)
+      } catch { /* EPIPE */ }
+      this.stickyDrawn = 0
+    }
+    this.writeOut('\x1b[?25h')
     try {
       if (this.prevRaw === undefined) this.io.input.setRawMode?.(false)
       else this.io.input.setRawMode?.(this.prevRaw)
@@ -869,7 +890,6 @@ export class TuiApp {
   }
 
   onResize = (): void => {
-    this.flat = null
     this.requestRender()
   }
 
@@ -883,11 +903,11 @@ export class TuiApp {
     }
     add('agent:status', (s: { phase: string; detail?: string }) => this.onStatus(s.phase, s.detail))
     add('agent:chunk', (d: { text: string }) => this.onChunk(d.text))
+    add('tool:start', (d: { call: ToolCallRecord }) => this.onToolStart(d.call))
+    add('tool:end', (d: { call: ToolCallRecord }) => this.onToolEnd(d.call))
     add('message:new', (d: { message: { role: string; content: string } }) => {
       if (d.message.role === 'assistant') this.onAssistantMessage(d.message.content)
     })
-    add('tool:start', (d: { call: ToolCallRecord }) => this.onToolStart(d.call))
-    add('tool:end', (d: { call: ToolCallRecord }) => this.onToolEnd(d.call))
     add('todos:update', (d: { todos: TodoItem[] }) => this.onTodos(d.todos))
     add('subagent:update', (d: { info: SubagentInfo }) => this.onSubagent(d.info))
     add('notify', (d: { level: string; message: string }) => {
@@ -921,86 +941,40 @@ export class TuiApp {
     }
   }
 
-  /** live token streaming: complete lines append, the partial rides the status row */
+  /** live token streaming — the message accumulates in streamText and its
+   * tail rides the sticky region; the final markdown render is flushed into
+   * the scrollback once the message completes (onAssistantMessage) */
   private onChunk(full: string): void {
-    const lines = full.split('\n')
-    const complete = lines.slice(0, -1)
-    // fresh message → snapshot the transcript so onAssistantMessage can roll
-    // these raw lines back and replace them with the markdown render
-    if (this.printedLines === 0 && complete.length > 0) this.streamStartLog = this.log.length
-    for (let i = this.printedLines; i < complete.length; i++) {
-      this.println(complete[i] === '' ? '' : complete[i], true)
-    }
-    this.printedLines = complete.length
-    const partial = (lines[lines.length - 1] ?? '').trimEnd()
-    if (partial) {
-      const max = Math.max(10, this.termW - 22)
-      this.streamChars = partial.length
-      this.showStream(partial.length > max ? '…' + partial.slice(-max) : partial)
-    }
+    this.streamText = full
+    this.streamChars = full.length
+    this.showStream()
   }
 
   /**
-   * Final assistant text. While streaming (onChunk) the user watched the raw
-   * lines arrive; now that the whole message is known, those raw lines are
-   * rolled back and the message is printed exactly once, as rendered
-   * markdown (A2's renderMarkdown, v0.13.0 contract).
-   *
-   * The rollback is only safe when every log entry appended since the stream
-   * snapshot is `stream: true` raw onChunk output — tool / notify lines that
-   * interleaved with the stream would be eaten by a rollback, so that rare
-   * path keeps the raw lines and only prints the un-streamed tail via the
-   * printedLines dedup (the message stays raw, but nothing is lost or
-   * duplicated). A non-empty frozen buffer (lines parked mid-permission)
-   * also blocks the rollback: those lines are not in this.log yet and would
-   * re-appear out of order after the flush.
+   * Final assistant text. While streaming the user watched the tail live in
+   * the sticky region; now that the whole message is known, it is rendered
+   * exactly once — as markdown (A2's renderMarkdown, v0.13.0 contract) — and
+   * appended to the scrollback. Nothing is ever rolled back: flushed lines
+   * are immutable, the raw stream never reaches the scrollback.
    */
   private onAssistantMessage(content: string): void {
     this.hideStatus()
-    const streamed = this.printedLines
-    this.printedLines = 0
-    const snapshot = this.streamStartLog
-    this.streamStartLog = 0
-    if (
-      this.mdRender &&
-      streamed > 0 &&
-      content.trim().length > 0 &&
-      snapshot >= 0 &&
-      snapshot <= this.log.length &&
-      this.frozen.length === 0
-    ) {
-      let safe = true
-      for (let i = snapshot; i < this.log.length; i++) {
-        if (!this.log[i].stream) {
-          safe = false
-          break
-        }
-      }
-      if (safe) {
-        this.log.length = snapshot
-        this.flat = null
-        for (const l of this.mdRender(content, this.transcriptW())) this.println(l)
-        return
-      }
-    }
-    const lines = content.split('\n')
-    for (let i = streamed; i < lines.length; i++) {
-      this.println(lines[i])
-    }
+    this.streamText = ''
+    if (!content.trim()) return
+    const lines = this.mdRender ? this.mdRender(content, this.transcriptW()) : content.split('\n')
+    lines.forEach((l, i) => this.println(i === 0 ? `\u25CF ${l}` : l))
   }
 
   private onToolStart(call: ToolCallRecord): void {
-    this.hideStatus()
-    this.println(`  ${dim(`⚙ ${call.tool} ${summarizeInput(call)}`)}`)
+    this.println(`  ${dim(`⎿ ⋯ ${call.tool} ${summarizeInput(call)}`)}`)
   }
 
   private onToolEnd(call: ToolCallRecord): void {
-    this.hideStatus()
     const icon = call.status === 'done' ? green('✓') : call.status === 'error' ? red('✗') : call.status === 'denied' ? yellow('⊘') : '·'
     const dur = call.startedAt && call.endedAt ? ` ${dim(((call.endedAt - call.startedAt) / 1000).toFixed(1) + 's')}` : ''
     const out = (call.output ?? '').split('\n').find((l) => l.trim()) ?? ''
     const tail = out ? ` ${dim('— ' + truncateStyled(out, Math.max(20, this.termW - 60)))}` : ''
-    this.println(`  ${icon} ${call.tool}${dur}${tail}`)
+    this.println(`  ${dim('⎿')} ${icon} ${call.tool}${dur}${tail}`)
   }
 
   private onTodos(todos: TodoItem[]): void {
@@ -1008,11 +982,11 @@ export class TuiApp {
     this.todos = todos
     if (prev === JSON.stringify(todos) || todos.length === 0) return
     const done = todos.filter((t) => t.status === 'completed').length
-    this.println(`  ${bold(`todos ${done}/${todos.length}`)}`)
+    this.println(`  ${bold(`⎿ todos ${done}/${todos.length}`)}`)
     for (const t of todos.slice(0, 12)) {
       const icon = t.status === 'completed' ? green('✔') : t.status === 'in_progress' ? cyan('▸') : dim('☐')
       const body = t.status === 'completed' ? dim(t.content) : t.content
-      this.println(`   ${icon} ${body}`)
+      this.println(`    ${icon} ${body}`)
     }
   }
 
@@ -1020,7 +994,7 @@ export class TuiApp {
     const last = this.lastSubagentTurn.get(info.id) ?? -1
     if (info.turns === last) return
     this.lastSubagentTurn.set(info.id, info.turns)
-    this.println(`  ${magenta('▸')} ${dim(`subagent · ${info.description} — turn ${info.turns}`)}`)
+    this.println(`  ${magenta('⎿')} ${dim(`subagent · ${info.description} — turn ${info.turns}`)}`)
   }
 
   private async onPermission(req: PermissionRequest): Promise<void> {
@@ -1042,6 +1016,13 @@ export class TuiApp {
   private onChatDone(summary: LoopSummary): void {
     const secs = ((Date.now() - this.runStartedAt) / 1000).toFixed(1)
     this.hideStatus()
+    // an aborted/error run can end mid-stream — the partial text was never
+    // flushed; keep what the user watched instead of losing it
+    if (this.streamText.trim()) {
+      const raw = this.streamText
+      this.streamText = ''
+      raw.split('\n').forEach((l, i) => this.println(i === 0 ? `\u25CF ${l}` : l))
+    }
     const mark = summary.finished === 'complete' ? green('✔ done') : summary.finished === 'aborted' ? yellow('■ stopped') : red('✗ error')
     const u = summary.usage
     if (u) {
@@ -1050,7 +1031,7 @@ export class TuiApp {
     }
     const tok = u ? ` · ${fmtTok(u.input)} in / ${fmtTok(u.output)} out${u.cacheRead ? ` (${fmtTok(u.cacheRead)} cache-hit)` : ''}` : ''
     this.lastDoneLabel = `${summary.turns} turns · ${summary.toolCalls} tool calls · ${secs}s${tok}`
-    this.println(`  ${mark} ${dim(`· ${this.lastDoneLabel}`)}`)
+    this.println(`  ${dim('⎿')} ${mark} ${dim(`· ${this.lastDoneLabel}`)}`)
     if (summary.error) this.println(`  ${red(summary.error)}`)
     this.running = false
     if (summary.plan) void this.offerPlan(summary.plan)
@@ -1083,9 +1064,8 @@ export class TuiApp {
     this.requestRender()
   }
 
-  private showStream(label: string): void {
+  private showStream(): void {
     this.statusKind = 'stream'
-    this.statusLabel = label
     this.startSpinner()
     this.requestRender()
   }
@@ -1094,6 +1074,8 @@ export class TuiApp {
     this.statusKind = 'none'
     this.statusLabel = ''
     this.streamChars = 0
+    // NOTE: streamText is NOT cleared here — 'agent:status done' fires before
+    // chat:done / message:new, and those handlers flush the partial text
     if (this.spinnerTimer) {
       clearInterval(this.spinnerTimer)
       this.spinnerTimer = undefined
@@ -1112,29 +1094,25 @@ export class TuiApp {
 
   /* ---------------- output primitives ---------------- */
 
-  /**
-   * append a (possibly multi-line) styled string to the transcript.
-   * `stream` marks raw assistant-stream output (onChunk) — see
-   * onAssistantMessage for why those entries are special.
-   */
-  println(s: string, stream = false): void {
+  /** append a (possibly multi-line) styled string to the transcript — it is
+   * wrapped at flush time and written into the terminal scrollback */
+  println(s: string): void {
     if (this.permissionFrozen) {
       this.frozen.push(s)
       return
     }
-    this.addLine(s, stream)
+    this.addLine(s)
   }
 
-  private addLine(s: string, stream = false): void {
-    for (const l of s.split('\n')) this.log.push(stream ? { raw: l, stream: true } : { raw: l })
+  private addLine(s: string): void {
+    for (const l of s.split('\n')) this.log.push({ raw: l })
+    // the scrollback itself is the transcript history — 4000 entries is only
+    // a safety valve against unbounded memory in an endless session
     if (this.log.length > 4000) {
       const cut = this.log.length - 4000
       this.log.splice(0, this.log.length - 4000)
-      // keep the stream snapshot pointing at the same entry after the trim
-      this.streamStartLog = Math.max(0, this.streamStartLog - cut)
+      this.flushed = Math.max(0, this.flushed - cut)
     }
-    this.flat = null
-    if (this.offset > 0) this.newBelow += 1
     this.requestRender()
   }
 
@@ -1153,20 +1131,23 @@ export class TuiApp {
     }
     const mcpReady = (cfg.mcpStatus ?? []).filter((s) => s.state === 'ready')
     this.println('')
-    this.println(bold(cyan('Tagent')) + dim(` v${CURRENT_VERSION} · terminal-native coding agent`))
-    this.println(dim(`workspace  ${this.host.root}`))
-    this.println(dim(`model      ${cfg.defaultModel} (${cfg.defaultProvider}) · mode: ${this.mode} · caveman: ${cfg.caveman ? 'on' : 'off'}`))
+    this.println(`${orange(bold('✻'))} ${bold('Tagent')} ${dim(`v${CURRENT_VERSION} · terminal-native coding agent`)}`)
+    this.println('')
+    this.println(dim(`${'─'.repeat(Math.min(this.transcriptW(), 72))}`))
+    this.println(`  ${dim('workspace')} ${this.host.root}`)
+    this.println(`  ${dim('model')}     ${cfg.defaultModel} ${dim(`(${cfg.defaultProvider}) · mode ${this.mode}`)}`)
     this.println(
       mcpReady.length
-        ? dim(`mcp        ${mcpReady.length} server(s) connected · ${mcpReady.reduce((n, s) => n + s.tools, 0)} tools (/mcp)`)
-        : dim('mcp        none — /mcp adds Model Context Protocol servers'),
+        ? `  ${dim('mcp')}        ${dim(`${mcpReady.length} server(s) · ${mcpReady.reduce((n, s) => n + s.tools, 0)} tools — /mcp`)}`
+        : `  ${dim('mcp')}        ${dim('none — /mcp adds Model Context Protocol servers')}`,
     )
     this.println(
       this.webUrl
-        ? dim(`web gui    ${this.webUrl} (sharing this session)`)
-        : dim('web gui    off — /webgui on or start with --web-gui'),
+        ? `  ${dim('web gui')}    ${this.webUrl} ${dim('(sharing this session)')}`
+        : `  ${dim('web gui')}    ${dim('off — /webgui on or start with --web-gui')}`,
     )
-    this.println(dim('/help lists every command · plain text talks to the agent · ctrl+x opens the menu'))
+    this.println(dim(`${'─'.repeat(Math.min(this.transcriptW(), 72))}`))
+    this.println(`  ${dim('type to talk to the agent · / commands · @ files · ? shortcuts · ctrl+x menu')}`)
     this.println('')
   }
 
@@ -1339,7 +1320,9 @@ export class TuiApp {
     const file = this.fileCompletion()
     switch (k.t) {
       case 'print': {
-        this.jumpToBottom()
+        // Claude Code parity: `?` on an empty editor opens the shortcuts
+        // overlay (so "what?" or URLs with ? still type normally)
+        if (k.ch === '?' && this.editor.isEmpty && !pal && !file) return this.shortcutsOverlay()
         this.editor.insert(k.ch)
         this.palDismissed = null
         this.fileDismissed = null
@@ -1352,13 +1335,11 @@ export class TuiApp {
           return
         }
         if (pal) return this.paletteEnter()
-        this.jumpToBottom()
         return this.submit()
       }
       case 'tab': {
         if (file) return this.insertFileCandidate()
         if (pal) return this.paletteComplete()
-        this.jumpToBottom()
         this.editor.insert('  ')
         return
       }
@@ -1389,9 +1370,7 @@ export class TuiApp {
           this.fileCursor = Math.max(0, this.fileCursor - 1)
           return
         }
-        // scroll mode: while the transcript is scrolled up, the arrows scroll
-        // it (one line) instead of moving the cursor / walking the history
-        if (this.offset > 0) return this.scrollViewport(-1, 1)
+        // single-line editor: ↑ walks the input history (Claude Code / shell)
         if (!this.editor.up()) this.editor.histPrev()
         return
       }
@@ -1404,15 +1383,13 @@ export class TuiApp {
           this.fileCursor = Math.min(file.items.length - 1, this.fileCursor + 1)
           return
         }
-        if (this.offset > 0) return this.scrollViewport(1, 1)
         if (!this.editor.down()) this.editor.histNext()
         return
       }
       case 'pgup':
-        this.scrollViewport(-1)
-        return
       case 'pgdn':
-        this.scrollViewport(1)
+        // nothing to page — the transcript lives in the terminal's native
+        // scrollback (mouse wheel / touch / shift+pgup scroll it)
         return
       case 'esc': {
         if (file) {
@@ -1459,28 +1436,6 @@ export class TuiApp {
     }
   }
 
-  /** dir<0 scrolls up, dir>0 down; `lines` overrides the default full-page
-   * stride (arrows scroll one line, pgup/pgdn a page) */
-  private scrollViewport(dir: number, lines = 0): void {
-    const h = Math.max(1, this.viewportHeight() - this.overlayRows(this.termW, Math.max(1, this.viewportHeight())).length)
-    const step = lines > 0 ? lines : h
-    if (dir < 0) this.offset = Math.min(Math.max(0, this.flatLines().length - h), this.offset + step)
-    else {
-      this.offset = Math.max(0, this.offset - step)
-      if (this.offset === 0) this.newBelow = 0
-    }
-    this.requestRender()
-  }
-
-  /** scrolled-up transcript + the user types → snap to the bottom first
-   * (opencode behavior — typed keys are never lost to the scrollback) */
-  private jumpToBottom(): void {
-    if (this.offset > 0) {
-      this.offset = 0
-      this.newBelow = 0
-    }
-  }
-
   /* ---------------- submit / send (port of handleLine + send) ---------------- */
 
   private submit(): void {
@@ -1494,10 +1449,11 @@ export class TuiApp {
     void this.handleLine(text)
   }
 
-  /** user-message echo — dim `> ` prefix, continuation lines indented */
+  /** user-message echo — bold `❯` prefix (Claude Code's prompt glyph),
+   * continuation lines indented under it */
   private logUser(text: string): void {
     const ls = text.split('\n')
-    this.println(`${dim('> ')}${ls[0]}`)
+    this.println(`${bold('❯ ')}${ls[0]}`)
     for (const l of ls.slice(1)) this.println(`  ${l}`)
   }
 
@@ -2178,8 +2134,36 @@ export class TuiApp {
     const lines: string[] = ['', bold('  Tagent commands'), '']
     for (const [k, v] of HELP_ROWS) lines.push(`    ${'/' + k.padEnd(46)} ${dim(v)}`)
     lines.push('')
-    lines.push(dim('    keys: enter send · alt+enter newline · ctrl+x menu · pgup/pgdn scroll · ctrl+c interrupt'))
+    lines.push(dim('    keys: ? shortcuts · enter send · alt+enter newline · ctrl+x menu'))
     this.overlayStack.push({ kind: 'text', title: 'help', lines, scroll: 0, resolve: () => undefined })
+    this.requestRender()
+  }
+
+  /** the `?` overlay — Claude Code's shortcuts panel */
+  private shortcutsOverlay(): void {
+    const k = (key: string, what: string) => `    ${bold(key.padEnd(16))} ${dim(what)}`
+    const lines: string[] = [
+      '',
+      bold('  keyboard'), '',
+      k('? / esc', 'close this panel'),
+      k('/', 'command palette'),
+      k('@', 'file mention + completion'),
+      k('↑ / ↓', 'input history (single line)'),
+      k('alt+enter', 'newline inside the editor'),
+      k('ctrl+a/e/u/k/w', 'line editing (home/end/kill)'),
+      k('ctrl+x', 'main menu'),
+      k('enter', 'send · tab complete'),
+      '',
+      bold('  while running'), '',
+      k('esc', 'interrupt the run'),
+      k('ctrl+c', 'interrupt · twice = exit'),
+      '',
+      bold('  scrolling'), '',
+      k('mouse / touch', 'the transcript is the terminal scrollback —'),
+      k('shift+pgup', 'scroll it however your terminal does.'),
+      '',
+    ]
+    this.overlayStack.push({ kind: 'text', title: 'shortcuts', lines, scroll: 0, resolve: () => undefined })
     this.requestRender()
   }
 
@@ -2781,10 +2765,14 @@ export class TuiApp {
       }
 
       case 'clear': {
+        // wipe the screen AND the scrollback (the transcript lives there now),
+        // then drop the sticky region and start over with a fresh banner
+        this.writeOut(`\x1b[${Math.max(0, this.stickyDrawn - 1)}A\x1b[J\x1b[H\x1b[2J\x1b[3J`)
+        this.stickyDrawn = 0
         this.log = []
-        this.flat = null
-        this.newBelow = 0
-        this.offset = 0
+        this.flushed = 0
+        this.streamText = ''
+        this.lastDoneLabel = ''
         this.banner()
         return
       }
@@ -3274,7 +3262,15 @@ export class TuiApp {
     }
   }
 
-  /** build + write one frame (also the test entry point) */
+  /** build + write one frame (also the test entry point)
+   *
+   * The inline model in one place:
+   *   1. jump to the first sticky row and wipe the sticky region (\x1b[J)
+   *   2. flush pending transcript lines into the scrollback — wrapped once
+   *      at flush time, they are immutable from there on
+   *   3. rewrite the sticky region; the cursor parks on its last row, which
+   *      is exactly where the next render's cursor-up math starts from
+   */
   renderNow(): void {
     if (this.frameTimer) {
       clearTimeout(this.frameTimer)
@@ -3282,49 +3278,46 @@ export class TuiApp {
     }
     const rows = this.buildFrame()
     this.lastFrame = rows
-    let out = '\x1b[?25l\x1b[H'
+    let out = ''
+    if (this.stickyDrawn > 0) out += `\x1b[${this.stickyDrawn - 1}A`
+    out += '\x1b[J'
+    while (this.flushed < this.log.length) {
+      const e = this.log[this.flushed]
+      const wrapped = e.wrapped ?? (e.wrapped = wrapStyled(e.raw, this.transcriptW()))
+      for (const l of wrapped) out += '\r\x1b[2K' + truncateStyled(l, this.termW) + '\n'
+      this.flushed++
+    }
     for (let i = 0; i < rows.length; i++) {
       out += '\r\x1b[2K' + rows[i]
       if (i < rows.length - 1) out += '\n'
     }
     this.writeOut(out)
+    this.stickyDrawn = rows.length
     this.dirty = false
   }
 
-  /** pure frame builder — no writes (testable) */
+  /** pure sticky-region builder — no writes (testable).
+   * Layout, top to bottom: live stream tail · overlay box · status row ·
+   * editor box · hint row. Never taller than the screen. */
   buildFrame(): string[] {
     const W = this.termW
-    const H = this.termH
     const rows: string[] = []
-    rows.push(safeRow(this.headerRow(W)))
-
     const edRows = this.editorRows(W)
     const statusRow = safeRow(this.statusRow(W))
-    const footerRow = safeRow(this.footerRow(W))
-    const statsRow = safeRow(this.statsRow(W))
-
-    // header + status + stats + footer rows are fixed; the rest is the
-    // transcript viewport
-    const viewportH = Math.max(1, H - rows.length - edRows.length - 3)
-    const ovRows = this.overlayRows(W, viewportH)
-    const transH = Math.max(0, viewportH - ovRows.length)
-    for (const r of this.transcriptRows(transH)) rows.push(safeRow(r))
+    const hintRow = safeRow(this.hintRow(W))
+    // how many rows overlays may take without pushing the editor off-screen
+    const avail = Math.max(0, this.termH - edRows.length - 2)
+    const ovRows = this.overlayRows(W, avail)
+    for (const r of this.streamTailRows(W, Math.max(0, avail - ovRows.length))) rows.push(safeRow(r))
     for (const r of ovRows) rows.push(safeRow(r))
     rows.push(statusRow)
     for (const r of edRows) rows.push(safeRow(r))
-    rows.push(statsRow)
-    rows.push(footerRow)
-    return rows
+    rows.push(hintRow)
+    // last-resort clamp — dropping the top-most rows keeps the editor visible
+    return rows.length > this.termH ? rows.slice(rows.length - this.termH) : rows
   }
 
-  private viewportHeight(): number {
-    const H = this.termH
-    const edRows = this.editorRows(this.termW)
-    // header + status + stats + footer
-    return Math.max(1, H - 1 - edRows.length - 3)
-  }
-
-  /** sanitized config with a 1s cache — the header reads it every frame */
+  /** sanitized config with a 1s cache — the hint row reads it every frame */
   private cfgFast(): ReturnType<AgentHost['sanitizeConfig']> {
     const now = Date.now()
     if (this.cfgCache && now - this.cfgCache.at < 1000) return this.cfgCache.val
@@ -3333,24 +3326,16 @@ export class TuiApp {
     return val
   }
 
-  private headerRow(W: number): string {
-    const ws = path.basename(this.host.root) || this.host.root
-    const chip =
-      this.mode === 'plan'
-        ? USE_COLOR ? `\x1b[46m\x1b[30m PLAN \x1b[0m` : ' PLAN '
-        : USE_COLOR ? `\x1b[48;5;208m\x1b[30m BUILD \x1b[0m` : ' BUILD '
-    const cfg = this.cfgFast() as { defaultModel: string; defaultProvider: string }
-    const right =
-      this.running
-        ? orange(`${SPINNER[this.spinnerFrame]} working…`)
-        : this.tokensIn + this.tokensOut > 0
-          ? dim(`${fmtTok(this.tokensIn)} in / ${fmtTok(this.tokensOut)} out`)
-          : ''
-    const left = ` ${bold(ws)} ${chip} ${dim(`${cfg.defaultModel} · ${this.sessionTitle}`)}`
-    const room = W - vwidthANSI(right) - 2
-    const leftCut = truncateStyled(left, Math.max(4, room))
-    const pad = Math.max(1, room - vwidthANSI(leftCut))
-    return leftCut + ' '.repeat(pad) + right
+  /** the live message tail while streaming — the last few wrapped lines of
+   *  streamText ride the sticky region (the final markdown render is flushed
+   *  into the scrollback when the message completes) */
+  private streamTailRows(W: number, availH: number): string[] {
+    if (this.statusKind !== 'stream' || !this.streamText || availH <= 0) return []
+    const w = Math.max(10, Math.min(W - 4, 78))
+    const wrapped = wrapStyled(this.streamText.trimEnd(), w)
+    const max = Math.max(1, Math.min(8, availH))
+    const tail = wrapped.slice(-max)
+    return tail.map((l, i) => (i === tail.length - 1 ? `  ${l}${dim('▌')}` : `  ${l}`))
   }
 
   private statusRow(W: number): string {
@@ -3358,46 +3343,28 @@ export class TuiApp {
     if (this.notice) {
       s = red(this.notice)
     } else if (this.statusKind === 'stream') {
-      s = `${dim('│ ')}${this.statusLabel}${dim('▌')}${dim(` · ${this.streamChars} chars`)}`
+      s = `${cyan(SPINNER[this.spinnerFrame])} ${dim(`streaming · ${this.streamChars} chars · esc to interrupt`)}`
     } else if (this.statusKind === 'status') {
-      s = `${cyan(SPINNER[this.spinnerFrame])} ${dim(this.statusLabel)}`
-    } else if (this.offset > 0) {
-      // scroll-mode indicator: while scrolled up, the arrows scroll the
-      // transcript (not the cursor / history) and typing jumps back down
-      s = dim(`↑ scrolled — ↑↓/pgdn to follow · typing jumps down${this.newBelow > 0 ? ` · ↓ ${this.newBelow} new lines` : ''}`)
-    } else if (this.newBelow > 0) {
-      s = dim(`↓ ${this.newBelow} new lines — pgdn to follow`)
+      s = `${cyan(SPINNER[this.spinnerFrame])} ${dim(this.statusLabel)}${this.running ? dim(' · esc to interrupt') : ''}`
     } else if (this.lastDoneLabel) {
       s = dim(this.lastDoneLabel)
     }
     return truncateStyled(s, W)
   }
 
-  private footerRow(W: number): string {
-    return dim(truncateStyled(FOOTER_KEYS, W))
-  }
-
-  /**
-   * Persistent stats row — always visible, right under the editor box:
-   * model · mode · session tokens · elapsed · workspace. One dim line,
-   * truncation-safe, CJK-width-aware (truncateStyled / vwidthANSI).
-   */
-  private statsRow(W: number): string {
+  /** the row under the editor box — Claude Code's `? for shortcuts` line:
+   *  keys on the left, live session stats (model · tokens · ⎇ repo) right */
+  private hintRow(W: number): string {
     const cfg = this.cfgFast() as { defaultModel: string }
-    const tok = this.tokensIn + this.tokensOut > 0 ? `${fmtTok(this.tokensIn)}↑ ${fmtTok(this.tokensOut)}↓` : '0↑ 0↓'
-    // GitHub sync badge — cached via refreshSyncBadge() (registry is file
-    // I/O, never read per-frame). '⎇ owner/repo' only while linked + logged
-    // in; guests see nothing. Kept before the workspace name so the row
-    // still ends with the workspace (stable in tests + muscle memory).
+    const keys = this.running ? 'esc interrupt · ? shortcuts · ctrl+x menu' : HINT_KEYS
+    const tok = this.tokensIn + this.tokensOut > 0 ? ` · ${fmtTok(this.tokensIn)}↑ ${fmtTok(this.tokensOut)}↓` : ''
     const badge = this.syncBadge ? ` · ⎇ ${this.syncBadge}` : ''
-    return dim(
-      truncateStyled(
-        ` ${shortModelName(cfg.defaultModel)} · ${this.mode} · ${tok} · ${fmtElapsed(Date.now() - this.startedAt)}${badge} · ${
-          path.basename(this.host.root) || this.host.root
-        }`,
-        W,
-      ),
-    )
+    const right = `${this.mode} · ${shortModelName(cfg.defaultModel)}${tok} · ${fmtElapsed(Date.now() - this.startedAt)}${badge}`
+    const room = W - vwidthANSI(keys) - 2
+    const rightCut = room > 10 ? dim(truncateStyled(right, Math.max(4, room))) : ''
+    const keysCut = truncateStyled(keys, Math.max(4, W - vwidthANSI(rightCut) - 1))
+    const pad = Math.max(1, W - vwidthANSI(keysCut) - vwidthANSI(rightCut))
+    return dim(keysCut) + ' '.repeat(pad) + rightCut
   }
 
   /** slow ticker (30s) — keeps the elapsed-time stat fresh while idle; while
@@ -3436,41 +3403,15 @@ export class TuiApp {
     }
   }
 
-  private flatLines(): string[] {
-    const w = this.transcriptW()
-    if (this.flat && this.flatW === w) return this.flat
-    const out: string[] = []
-    for (const e of this.log) {
-      if (e.w !== w || !e.wrapped) {
-        e.wrapped = wrapStyled(e.raw, w)
-        e.w = w
-      }
-      out.push(...e.wrapped)
-    }
-    this.flat = out
-    this.flatW = w
-    return out
-  }
-
-  private transcriptRows(h: number): string[] {
-    const flat = this.flatLines()
-    const total = flat.length
-    const maxOff = Math.max(0, total - h)
-    if (this.offset > maxOff) this.offset = maxOff
-    const bottom = total - this.offset
-    const top = Math.max(0, bottom - h)
-    const slice = flat.slice(top, bottom).map((r) => truncateStyled(r, this.termW))
-    while (slice.length < h) slice.push('')
-    return slice
-  }
-
   /* ---------------- editor rendering ---------------- */
 
   private editorRows(W: number): string[] {
     const innerW = Math.max(4, W - 4)
     const allSegs = this.editor.lines.map((l) => wrapSegments(l, innerW))
     const totalVis = allSegs.reduce((n, a) => n + a.length, 0)
-    const contentRows = Math.min(6, Math.max(2, totalVis))
+    // the box grows with the text (up to 8 rows, Claude Code-style) and the
+    // view scrolls to keep the cursor visible
+    const contentRows = Math.min(8, Math.max(2, totalVis))
     // cursor visual position
     let rowsBefore = 0
     for (let i = 0; i < this.editor.row; i++) rowsBefore += allSegs[i]?.length ?? 0
@@ -3794,8 +3735,10 @@ function shortModelName(m: string): string {
 /* ------------------------------------------------------------------ */
 
 /**
- * Can this terminal run the full-screen app? index.ts falls back to the
- * classic readline TUI (tui.ts) when this returns false.
+ * Can this terminal run the inline app? index.ts falls back to the classic
+ * readline TUI (tui.ts) when this returns false. The bar is low: the sticky
+ * region only needs a handful of rows — the transcript lives in the
+ * terminal's own scrollback, so even a phone terminal qualifies.
  */
 export function appCapable(): boolean {
   if (!process.stdout.isTTY || !process.stdin.isTTY) return false
@@ -3804,11 +3747,11 @@ export function appCapable(): boolean {
   // 0×0 = size not reported yet (pty race before TIOCSWINSZ / early boot) —
   // assume a standard 24×80 and let SIGWINCH fix the layout when it arrives.
   if (rows === 0 && cols === 0) return true
-  return rows >= 12 && cols >= 30
+  return rows >= 8 && cols >= 20
 }
 
 /**
- * Run the full-screen TUI. Mirrors `new Tui(host, opts).start()` — resolves
+ * Run the inline TUI. Mirrors `new Tui(host, opts).start()` — resolves
  * when the user exits (ctrl+c twice, /exit). Always restores the terminal.
  */
 export async function runApp(host: AgentHost, opts: { workspaceRoot: string; webUrl?: string }): Promise<void> {

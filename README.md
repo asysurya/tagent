@@ -49,7 +49,7 @@ process when you want a browser. Same engine, same sessions, same permissions.
 | 🧩 **MCP servers** | Any stdio [Model Context Protocol](https://modelcontextprotocol.io) server — Context7, filesystem, memory, sequential-thinking or your own. Tools appear as `mcp_<server>_<tool>`, same permission gates (`/mcp` in the TUI, Settings → MCP in the GUI) |
 | 🔌 **Multi-provider** | 40-provider catalog (OpenAI, Anthropic, Google, Groq, DeepSeek, xAI, Mistral, Qwen, Kimi, Zhipu, OpenRouter, …) + custom endpoints — BYOK or env vars. Anthropic prompt caching on by default; live token usage in the TUI done-line |
 | 🧩 **Plugins v2** | Hook into the loop AND contribute custom agent tools (`plugin_<name>_<tool>`) and slash commands — hot-reloading `.mjs` files |
-| 🖥️ **App TUI** | Full-screen terminal app (opencode-style): alternate screen, boxed input editor, scrollable transcript, slash-command palette with tab completion, `@file` mentions, `ctrl+x` quick-action menu — arrow keys over typing (`--classic` for the readline TUI, auto-fallback on tiny terminals) |
+| 🖥️ **App TUI** | Claude Code-style inline terminal app: the transcript lives in your terminal's own scrollback (scroll with mouse wheel / touch / shift+pgup), a rounded editor box + hint row redraw at the bottom, slash-command palette with tab completion, `@file` mentions, `?` shortcuts, `ctrl+x` quick-action menu (`--classic` for the readline TUI) |
 | 🎛️ **Classic TUI** | Arrow-key menus everywhere — model picker with type-to-filter, session browser, permission prompts, y/N confirms — like opencode |
 | ⬆️ **Self-update** | Checks for releases on startup and offers an arrow-key y/N update — binary installs swap in place (`tagent update` too) |
 | 🔐 **Permissions** | Per-tool ask/allow/deny, remember once/session/always — every write asks first |
@@ -68,10 +68,6 @@ process when you want a browser. Same engine, same sessions, same permissions.
 | 👤 **Guest-first** | Works fully offline & local; accounts are optional |
 
 ## Install
-
-> **Windows 7 / 8 / 32-bit?** The main binaries need Windows 10+ 64-bit. Use
-> **tagent-native** (`native/` in the repo, also on the release page): a single
-> static Go binary — `tagent-native-windows-386.exe` runs on Windows 7+ 32-bit.
 
 Grab the file for your platform from [releases](https://github.com/asysurya/tagent/releases/latest)
 (or the website's [download page](https://tagent-website.vercel.app/download), which auto-detects it)

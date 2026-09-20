@@ -89,6 +89,9 @@ class FakeOut {
   write(s: string): void {
     this.chunks.push(s)
   }
+  text(): string {
+    return this.chunks.join('')
+  }
 }
 class FakeIn {
   isTTY = true
@@ -160,32 +163,36 @@ type AppInternals = {
 const internals = (app: TuiApp): AppInternals => app as unknown as AppInternals
 
 const framePlain = (app: TuiApp): string => app.lastFrame.map(stripAnsi).join('\n')
-const statsRowPlain = (app: TuiApp): string => {
-  const row = app.lastFrame.map(stripAnsi).find((r) => r.includes(' · build · ') || r.includes(' · plan · '))
+/** the sticky hint row — carries the ⎇ sync badge in the inline model */
+const hintRowPlain = (app: TuiApp): string => {
+  const row = app.lastFrame.map(stripAnsi).find((r) => /\b(build|plan) ·/.test(r))
   return row ?? ''
 }
 
 async function main(): Promise<void> {
   setAppColor(true)
 
-  /* ---------------- 1. guest boot: stats row, no sync badge ---------------- */
+  /* ---------------- 1. guest boot: hint row, no sync badge ---------------- */
   const host = new FakeHost(WS)
-  const io: AppIO = { input: new FakeIn() as never, output: new FakeOut() as never }
+  const out = new FakeOut()
+  const io: AppIO = { input: new FakeIn() as never, output: out as never }
   const app = new TuiApp(host as unknown as AgentHost, { workspaceRoot: WS, updateCheck: false, io })
   void app.start()
   await sleep(80)
   app.renderNow()
+  /** everything the user saw — scrollback flushes + sticky redraws */
+  const seen = (): string => stripAnsi(out.text())
 
-  const guestStats = statsRowPlain(app)
-  assert(guestStats.length > 0, 'stats row renders for a guest', guestStats)
-  assert(!guestStats.includes('⎇'), 'guest stats row has no sync badge', guestStats)
+  const guestStats = hintRowPlain(app)
+  assert(guestStats.length > 0, 'hint row renders for a guest', guestStats)
+  assert(!guestStats.includes('⎇'), 'guest hint row has no sync badge', guestStats)
   assert(core.listProjects().length === 0, 'registry starts empty')
 
   /* ---------------- 2. /push while guest → friendly guard ---------------- */
   await internals(app).command('/push')
   await sleep(10)
   app.renderNow()
-  const guestPush = framePlain(app)
+  const guestPush = seen()
   assert(guestPush.includes('not logged in'), '/push as guest → "not logged in" guard', guestPush.slice(-400))
   assert(!guestPush.includes('pushing…'), 'guest /push never starts pushing', guestPush.slice(-400))
   assert(core.listProjects().length === 0, 'registry still empty after guest /push')
@@ -195,7 +202,7 @@ async function main(): Promise<void> {
   await internals(app).command('/push test: tui sync integration')
   await sleep(10)
   app.renderNow()
-  const pushed = framePlain(app)
+  const pushed = seen()
 
   assert(pushed.includes('Ensuring repo octocat/tagent-ws'), '/push streams syncProject onLog lines', pushed.slice(-600))
   assert(pushed.includes('✔ pushed to octocat/tagent-ws'), '/push success line names the repo', pushed.slice(-600))
@@ -216,15 +223,15 @@ async function main(): Promise<void> {
   assert(!remoteTokenLeak.includes(FAKE_PAT), 'no token persisted in any remote config', remoteTokenLeak)
 
   /* ---------------- 6. the badge lights up (cached refresh after /push) ---------------- */
-  const badgeStats = statsRowPlain(app)
-  assert(badgeStats.includes('⎇ octocat/tagent-ws'), 'stats row shows the sync badge after /push', badgeStats)
-  assert(badgeStats.trimEnd().endsWith('ws'), 'stats row still ends with the workspace name', badgeStats)
+  const badgeStats = hintRowPlain(app)
+  assert(badgeStats.includes('⎇ octocat/tagent-ws'), 'hint row shows the sync badge after /push', badgeStats)
+  assert(badgeStats.trimEnd().endsWith('ws'), 'hint row badge sits at the right end', badgeStats)
 
   /* ---------------- 7. badge clears on logout (linked but guest → hidden) ---------------- */
   core.logout()
   internals(app).refreshSyncBadge()
   app.renderNow()
-  const loggedOutStats = statsRowPlain(app)
+  const loggedOutStats = hintRowPlain(app)
   assert(!loggedOutStats.includes('⎇'), 'badge hidden after logout (guest again)', loggedOutStats)
   assert(core.getLinkedProject(WS)?.repo === 'octocat/tagent-ws', 'registry link survives logout (link ≠ auth)')
 
@@ -232,7 +239,7 @@ async function main(): Promise<void> {
   await internals(app).command('/push')
   await sleep(10)
   app.renderNow()
-  assert(framePlain(app).includes('not logged in'), '/push after logout → guarded again')
+  assert(seen().includes('not logged in'), '/push after logout → guarded again')
 
   app.exit()
   await sleep(20)

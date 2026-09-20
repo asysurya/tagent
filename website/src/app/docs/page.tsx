@@ -112,7 +112,7 @@ tagent web ~/my-project --no-open`}</Code>
         <ul className="mt-4 space-y-2 text-zinc-300">
           <li><b>Chat</b> — describe the task; the loop plans, calls tools, and reports back. Interrupt any time; steer mid-run.</li>
           <li><b>Markdown</b> — assistant replies render properly in the terminal: headings, bold/italic, code blocks, lists and tables.</li>
-          <li><b>Keys</b> — ESC stops a running agent; while the transcript is scrolled up, ↑/↓ scroll it (input history stays on history recall — pgup/pgdn work too); the stats bar under the input keeps model · mode · tokens · time · workspace visible.</li>
+          <li><b>Keys</b> — ESC stops a running agent (or clears the input when idle); <span className="font-mono text-orange-300">?</span> on an empty input lists every shortcut; ↑/↓ recall input history; the hint row under the editor keeps model · mode · tokens · ⎇ repo visible. The transcript lives in your terminal&apos;s own scrollback — scroll it however your terminal does (mouse wheel, touch, shift+pgup).</li>
           <li><b>Permissions</b> — every risky action (bash, write, edit, MCP tools) asks first — an arrow-key menu in the TUI, a dialog in the GUI. Choose once / session / always.</li>
           <li><b>Checkpoints</b> — auto-snapshots before writes; <span className="font-mono text-orange-300">/undo</span> restores.</li>
           <li><b>Plan mode</b> — read-only exploration before committing to changes.</li>

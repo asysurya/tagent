@@ -162,7 +162,6 @@ type AppInternals = {
   onChunk(t: string): void
   onAssistantMessage(c: string): void
   mdRender: ((text: string, width?: number) => string[]) | undefined
-  offset: number
   queued: string[]
   running: boolean
   send(t: string): Promise<void>
@@ -170,12 +169,13 @@ type AppInternals = {
 const internals = (app: TuiApp): AppInternals => app as unknown as AppInternals
 
 const framePlain = (app: TuiApp): string => app.lastFrame.map(stripAnsi).join('\n')
+const scrollPlain = (out: FakeOut): string => stripAnsi(out.text())
 
 /* ---------------- tests ---------------- */
 
-test('markdown rollback: streamed raw lines are replaced by the rendered message', async () => {
+test('stream model: raw tail rides the sticky region, final markdown flushes to the scrollback exactly once', async () => {
   const host = new FakeHost(tmp)
-  const { app } = await started(host)
+  const { app, out } = await started(host)
   if (!(await waitUntil(() => internals(app).mdRender !== undefined))) throw new Error('renderMarkdown did not load at boot')
   // cumulative chunks, exactly like the throttled host stream
   host.bus.emit('agent:chunk', { text: 'streamed raw body line one\nstreamed raw body line two\n' })
@@ -185,18 +185,26 @@ test('markdown rollback: streamed raw lines are replaced by the rendered message
   host.bus.emit('message:new', { message: { role: 'assistant', content: '# Report title\n\nfinal body line three\n' } })
   await sleep(20)
   app.renderNow()
-  const plain = framePlain(app)
-  if (plain.includes('streamed raw body')) throw new Error('raw stream lines were not rolled back')
+  const rawCount = count(scrollPlain(out), 'streamed raw body line one')
+  const plain = scrollPlain(out)
   if (count(plain, 'Report title') !== 1) throw new Error(`final message rendered ${count(plain, 'Report title')}x — want exactly 1`)
   if (count(plain, 'final body line three') !== 1) throw new Error('final message body missing or duplicated')
+  // the message is DONE — further idle redraws must not resurrect the raw
+  // stream or duplicate the markdown
+  await sleep(60)
+  app.renderNow()
+  if (count(scrollPlain(out), 'streamed raw body line one') !== rawCount) throw new Error('raw stream still being drawn after the message completed')
+  if (count(scrollPlain(out), 'Report title') !== 1) throw new Error('idle redraw duplicated the markdown message')
+  // sticky no longer carries the message
+  if (framePlain(app).includes('final body line three')) throw new Error('finished message still lingering in the sticky region')
   app.exit()
   await sleep(10)
   app.destroy()
 })
 
-test('markdown rollback: stub renderer isolates tui-app’s own rollback logic', async () => {
+test('stream model: stub renderer isolates tui-app’s own flush logic', async () => {
   const host = new FakeHost(tmp)
-  const { app } = await started(host)
+  const { app, out } = await started(host)
   const a = internals(app)
   a.mdRender = (text: string) => text.split('\n').map((l) => `STUB>${l}`)
   a.onChunk('raw chunk alpha\nraw chunk beta\n')
@@ -204,8 +212,8 @@ test('markdown rollback: stub renderer isolates tui-app’s own rollback logic',
   a.onAssistantMessage('alpha\nbeta')
   await sleep(10)
   app.renderNow()
-  const plain = framePlain(app)
-  if (plain.includes('raw chunk')) throw new Error('stub run: raw lines were not rolled back')
+  const plain = scrollPlain(out)
+  if (plain.includes('raw chunk')) throw new Error('stub run: raw lines reached the scrollback')
   if (!plain.includes('STUB>alpha') || !plain.includes('STUB>beta')) throw new Error('stub render output missing')
   if (count(plain, 'STUB>alpha') !== 1) throw new Error('stub render output duplicated')
   a.mdRender = undefined
@@ -214,31 +222,31 @@ test('markdown rollback: stub renderer isolates tui-app’s own rollback logic',
   app.destroy()
 })
 
-test('rollback guard: interleaved tool line keeps the raw stream, loses nothing', async () => {
+test('stream model: interleaved tool line keeps everything, loses nothing', async () => {
   const host = new FakeHost(tmp)
-  const { app } = await started(host)
+  const { app, out } = await started(host)
   const a = internals(app)
   a.onChunk('part one\n')
   await sleep(10)
-  app.println('  tool line interleave') // non-stream — a tool card / notify line
+  app.println('  tool line interleave') // a tool card / notify line mid-stream
   a.onChunk('part one\npart two\n')
   await sleep(10)
   a.onAssistantMessage('part one\npart two\npart three')
   await sleep(10)
   app.renderNow()
-  const plain = framePlain(app)
+  const plain = scrollPlain(out)
   if (count(plain, 'tool line interleave') !== 1) throw new Error('interleaved line lost or duplicated')
-  if (count(plain, 'part one') !== 1) throw new Error(`"part one" appears ${count(plain, 'part one')}x — raw must stay, content must not re-print it`)
+  if (count(plain, 'part one') !== 1) throw new Error(`"part one" appears ${count(plain, 'part one')}x — want exactly 1 (markdown flush)`)
   if (count(plain, 'part two') !== 1) throw new Error('"part two" duplicated or lost')
-  if (count(plain, 'part three') !== 1) throw new Error('un-streamed tail missing')
+  if (count(plain, 'part three') !== 1) throw new Error('final tail missing')
   app.exit()
   await sleep(10)
   app.destroy()
 })
 
-test('rollback guard: frozen permission buffer keeps everything, in order', async () => {
+test('stream model: frozen permission buffer keeps everything, in order', async () => {
   const host = new FakeHost(tmp)
-  const { app } = await started(host)
+  const { app, out } = await started(host)
   const a = internals(app)
   host.bus.emit('permission:request', { id: 'p1', tool: 'bash', input: { command: 'ls' }, risk: 'high' })
   await sleep(20)
@@ -247,11 +255,11 @@ test('rollback guard: frozen permission buffer keeps everything, in order', asyn
   a.onAssistantMessage('frozen one\nfrozen two')
   await sleep(10)
   app.renderNow()
-  if (framePlain(app).includes('frozen one')) throw new Error('precondition failed: lines must stay parked while frozen')
+  if (scrollPlain(out).includes('frozen one')) throw new Error('precondition failed: lines must stay parked while frozen')
   app.feed('y') // allow once → flush
   await sleep(30)
   app.renderNow()
-  const plain = framePlain(app)
+  const plain = scrollPlain(out)
   if (count(plain, 'frozen one') !== 1) throw new Error('frozen stream line lost or duplicated')
   if (count(plain, 'frozen two') !== 1) throw new Error('frozen tail lost or duplicated')
   app.exit()
@@ -282,7 +290,7 @@ test('esc priority: text → clear (no notice), idle → notice', async () => {
 
 test('esc while running: interrupt + queued messages dropped', async () => {
   const host = new FakeHost(tmp)
-  const { app } = await started(host)
+  const { app, out } = await started(host)
   const a = internals(app)
   let finishRun: (() => void) | undefined
   host.chatSend = async () =>
@@ -298,9 +306,9 @@ test('esc while running: interrupt + queued messages dropped', async () => {
   app.feed('\x1b') // esc → interrupt
   await sleep(90)
   app.renderNow()
-  const plain = framePlain(app)
+  const plain = scrollPlain(out)
   if (host.interrupted !== 1) throw new Error(`esc should interrupt once, got ${host.interrupted}`)
-  if (!plain.includes('interrupting')) throw new Error('interrupting line missing')
+  if (!plain.includes('interrupting')) throw new Error('interrupting line missing from the scrollback')
   if (!plain.includes('1 queued message dropped')) throw new Error('queued-drop note missing')
   if (a.queued.length !== 0) throw new Error('queued messages were not dropped')
   finishRun?.()
@@ -311,21 +319,13 @@ test('esc while running: interrupt + queued messages dropped', async () => {
   app.destroy()
 })
 
-test('mashed esc-esc-arrow: the esc fires (editor cleared) AND the arrow still scrolls', async () => {
+test('mashed esc-esc-arrow: the esc fires (editor cleared) and no bytes get typed', async () => {
   const host = new FakeHost(tmp)
   const { app } = await started(host)
-  const a = internals(app)
-  host.bus.emit('message:new', { message: { role: 'assistant', content: Array.from({ length: 40 }, (_, i) => `MARK-${i}`).join('\n') } })
-  await sleep(20)
   app.feed('draft text') // editor has text — the esc must clear it
-  app.feed('\x1b[5~') // pgup → offset > 0
-  app.renderNow()
-  const off0 = a.offset
-  if (off0 <= 0) throw new Error('precondition: pgup should scroll up')
   app.feed('\x1b\x1b[A') // mashed: esc esc up-arrow in one burst
   await sleep(90)
   app.renderNow()
-  if (a.offset !== off0 + 1) throw new Error(`arrow after esc-esc should scroll exactly one line: ${off0} → ${a.offset}`)
   const plain = framePlain(app)
   if (/\[A/.test(plain)) throw new Error('leftover sequence bytes were typed into the UI')
   if (!plain.includes('Message tagent')) throw new Error('the first esc of the mash must clear the editor text')
@@ -334,44 +334,52 @@ test('mashed esc-esc-arrow: the esc fires (editor cleared) AND the arrow still s
   app.destroy()
 })
 
-test('scroll mode: arrows step one line; typing snaps to the bottom', async () => {
+test('up-arrow walks the input history on a single-line editor', async () => {
   const host = new FakeHost(tmp)
   const { app } = await started(host)
   const a = internals(app)
-  host.bus.emit('message:new', { message: { role: 'assistant', content: Array.from({ length: 40 }, (_, i) => `MARK-${String(i).padStart(2, '0')}`).join('\n') } })
-  await sleep(20)
-  app.feed('\x1b[5~') // pgup — full page
-  const offPg = a.offset
-  app.feed('\x1b[A') // up — one line
-  if (a.offset !== offPg + 1) throw new Error(`up-arrow must step one line: ${offPg} → ${a.offset}`)
-  app.feed('\x1b[B') // down — one line back
-  if (a.offset !== offPg) throw new Error(`down-arrow must step one line back: ${offPg} → ${a.offset}`)
-  app.feed('x') // printable → snap to bottom + type
-  if (a.offset !== 0) throw new Error('typing should snap the viewport to the bottom')
+  // seed history through a real submit
+  a.mdRender = undefined
+  host.chatSend = async (text: string) => {
+    host.sent.push({ text })
+    return { turns: 1, toolCalls: 0, finished: 'complete' }
+  }
+  app.feed('first message\r')
+  await sleep(30)
+  a.running = false // the stub host never emits chat:done — reset the flag
+  app.feed('second message\r')
+  await sleep(30)
+  if (host.sent.length !== 2) throw new Error(`precondition: 2 sends, got ${host.sent.length}`)
+  app.feed('\x1b[A') // up → latest history entry
   app.renderNow()
-  if (!app.lastFrame.map(stripAnsi).some((r) => r.includes('MARK-39'))) throw new Error('snapped frame should show the newest line')
+  if (!app.lastFrame.map(stripAnsi).some((r) => r.includes('second message'))) throw new Error('up-arrow must recall the latest history entry')
+  app.feed('\x1b[A') // up again → the first
+  app.renderNow()
+  if (!app.lastFrame.map(stripAnsi).some((r) => r.includes('first message'))) throw new Error('up-arrow must walk back through history')
+  app.feed('\x1b[B') // down → forward again
+  app.renderNow()
+  if (!app.lastFrame.map(stripAnsi).some((r) => r.includes('second message'))) throw new Error('down-arrow must walk history forward')
   app.exit()
   await sleep(10)
   app.destroy()
 })
 
-test('stats row: model · mode · tokens · elapsed · workspace after a run', async () => {
+test('hint row: mode · model · tokens · elapsed after a run', async () => {
   const host = new FakeHost(tmp)
   const { app } = await started(host)
   host.bus.emit('chat:done', { summary: { turns: 1, toolCalls: 2, finished: 'complete', usage: { input: 1200, output: 45 } } })
   await sleep(20)
   app.renderNow()
   const rows = app.lastFrame.map(stripAnsi)
-  const stats = rows.find((r) => r.includes(' · build · ') && r.includes('1.2k↑ 45↓'))
-  if (!stats) throw new Error(`stats row with tokens missing — rows: ${rows.filter((r) => r.includes('·')).join(' | ')}`)
-  if (!stats.includes('glm-4.7')) throw new Error(`stats row missing model: ${stats}`)
-  if (!stats.includes(path.basename(tmp))) throw new Error(`stats row missing workspace: ${stats}`)
-  if (!/\d+s/.test(stats)) throw new Error(`stats row missing elapsed time: ${stats}`)
-  // …and it sits between the editor box bottom and the footer
+  const hint = rows.find((r) => r.includes('1.2k↑ 45↓'))
+  if (!hint) throw new Error(`hint row with tokens missing — rows: ${rows.filter((r) => r.includes('·')).join(' | ')}`)
+  if (!hint.includes('glm-4.7')) throw new Error(`hint row missing model: ${hint}`)
+  if (!/\d+s/.test(hint)) throw new Error(`hint row missing elapsed time: ${hint}`)
+  // …and it is the LAST sticky row, right under the editor box
   const boxBottom = rows.findIndex((r) => r.startsWith('╰'))
-  const footer = rows.findIndex((r) => r.includes('enter send'))
-  const statsIdx = rows.indexOf(stats)
-  if (!(boxBottom < statsIdx && statsIdx < footer)) throw new Error(`stats row position wrong: box=${boxBottom} stats=${statsIdx} footer=${footer}`)
+  const hintIdx = rows.indexOf(hint)
+  if (hintIdx !== rows.length - 1) throw new Error(`hint row must be the last sticky row: idx=${hintIdx} of ${rows.length - 1}`)
+  if (hintIdx <= boxBottom) throw new Error(`hint row must sit under the editor box: box=${boxBottom} hint=${hintIdx}`)
   app.exit()
   await sleep(10)
   app.destroy()

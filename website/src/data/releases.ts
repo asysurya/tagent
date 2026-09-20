@@ -34,11 +34,23 @@ export const RELEASES: Release[] = [
   {
     version: '0.14.0',
     date: '2026-09-20',
-    title: 'Web-connect login & multi-device sync',
+    title: 'TUI rebuilt Claude Code-style, web-connect login, multi-device sync',
     summary:
-      '`tagent auth` in a terminal now offers web connect: a one-time page opens in your browser (loopback only, one-time secret URL), you create a GitHub token with the repo scope pre-selected and paste it there — the terminal handles the rest. Works on UserLAnd/Termux too, where the printed URL opens in the phone\u2019s own browser. And `tagent sync` is now multi-device safe: it fetches and rebases the remote\u2019s main before pushing, so one project edited on several devices converges instead of being rejected.',
+      'The TUI is rebuilt on the Claude Code / opencode model: an INLINE app — no alternate screen — so the transcript lives in your terminal\u2019s own scrollback and scrolling works everywhere (mouse wheel, touch on a phone, shift+pgup, tmux copy mode). A small sticky region redraws at the bottom: live stream tail, status, the rounded editor box, and a hint row with model · tokens · ⎇ repo. Plus: `tagent auth` gets web connect (login in the browser, nothing typed in the terminal), and `tagent sync` becomes multi-device safe (fetch + rebase before push). The Go native edition is retired — the main binaries are the only build now.',
     stable: true,
     sections: [
+      {
+        name: 'The new TUI',
+        items: [
+          'INLINE rendering (Claude Code\u2019s model, Ink-style): completed lines flow into the terminal scrollback and are never redrawn — native scrolling works on every device, including Termux/UserLAnd where there is no PageUp',
+          'the old full-screen alt-buffer app is gone: it killed native scrollback, which is exactly why scrolling broke — the docs of Claude Code\u2019s own fullscreen experiment say the same',
+          'a small sticky region redraws in place at the bottom: live message tail while streaming → status row (spinner · elapsed · esc to interrupt) → rounded editor box → hint row (? shortcuts · / commands · @ files + model · tokens · ⎇ repo)',
+          'Claude Code visual language: ✻ banner, bold ❯ user echo, ● assistant bullets, ⎿ tree connectors for tool lines and results',
+          'streaming stays in the sticky region while the message arrives; the final markdown render is flushed into the scrollback exactly once — no raw-stream flicker, no duplicated lines',
+          '`?` on an empty editor opens the shortcuts overlay (Claude Code parity); ↑/↓ walk the input history; esc still interrupts / clears; ctrl+x menu unchanged',
+          'fixed a real history bug: ↑ recalled the same entry forever because setText reset the cursor — history navigation now walks properly',
+        ],
+      },
       {
         name: 'Web connect',
         items: [
@@ -59,6 +71,14 @@ export const RELEASES: Release[] = [
         ],
       },
       {
+        name: 'Native edition retired',
+        items: [
+          'the Go port (tagent-native-*) is removed: the release ships the six Bun-compiled binaries only, so there is one engine, one feature set and one set of release notes',
+          'it had fallen behind the main CLI (no MCP, plugins, relay, subagents or web GUI) and the same machines can run the full binary\u2019s Linux static sibling or the source install',
+          'the repo loses native/ (~4.5k lines of Go) and the Go 1.21 toolchain pin — everything builds from the single TypeScript codebase',
+        ],
+      },
+      {
         name: 'Security shape',
         items: [
           'loopback-only bind (never 0.0.0.0), random port, one-time 128-bit secret in the URL path — a drive-by page on some website can\u2019t hit an endpoint it can\u2019t name',
@@ -69,11 +89,11 @@ export const RELEASES: Release[] = [
       {
         name: 'Under the hood',
         items: [
+          'packages/cli/src/tui-app.ts render core rewritten: cursor-up + erase-to-end sticky rewrite, wrap-once-at-flush transcript lines, stream tail riding the sticky region — 29 unit tests + 11 PTY checks re-verified',
           'packages/cli/src/web-auth.ts — a UI-free module (injectable validator) so the whole flow is testable hermetically over real HTTP: routing, CSRF gates, retry, one-shot teardown, timeout',
           'fixed a latent bug from 0.13.x: every sync cycled `git remote remove/add origin`, which silently deleted the clone\u2019s upstream tracking — `git pull` stopped working in any project that had synced once',
           '29 hermetic multi-device tests in scripts/test-sync-conflict.ts — divergent devices, region merges, conflicts + the full manual-recovery path, a simulated simultaneous push (pre-push hook racing the sync), and token hygiene (FETCH_HEAD scrubbed, token never on disk)',
           '19 hermetic tests in scripts/test-web-auth.ts + the auth/sync RPC suites re-run green',
-          'teardown choreography: close() stops new connections at once; lingering keep-alives are swept 2s later so a parked browser socket can never hold the CLI process hostage',
         ],
       },
     ],
