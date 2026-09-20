@@ -12,17 +12,39 @@ Windows 7/8), including **32-bit x86** builds.
 
 ## What it does
 
+- **The full-screen app TUI** (since v0.11.0) — the same opencode-style
+  experience as the main CLI: header bar, scrollable transcript, boxed
+  editor with reverse-video cursor, live spinner/status row, `ctrl+x` menu,
+  `/` command palette, scrollback with pgup/pgdn, and `esc` to interrupt a
+  running task. Colors and keys go through the Windows Console API (not
+  ANSI), so it renders correctly on a genuine Windows 7 `conhost` too.
 - OpenAI-compatible chat with **function calling** (tools)
 - Tools: `read_file`, `write_file`, `edit_file`, `list_files`, `bash`
   (workspace-jailed — paths cannot escape the workspace root)
-- Interactive REPL (one task per line) and one-shot `tagent-native run "task"`
-- **Ordered provider fallback chain** — same as the full Tagent, configured in
-  the same `~/.tagent/config.json`
+- Multi-turn conversations (the context is kept between tasks), token
+  usage in the header, one-shot `tagent-native run "task"`
+- **Ordered provider fallback chain** — same as the full Tagent, configured
+  in the same `~/.tagent/config.json`
+
+### Keys
+
+| key | action |
+| --- | --- |
+| `enter` | send the task |
+| `alt+enter` | newline (multi-line tasks) |
+| `ctrl+x` | the menu (switch model, chain, diagnostics, help…) |
+| `/` | command palette (`/model` `/chain` `/diag` `/clear` `/help` `/exit`) |
+| `pgup` / `pgdn` | scroll the transcript |
+| `esc` | interrupt a running task · clear the box · jump to bottom |
+| `ctrl+c` | exit |
+
+`up`/`down` in an empty box recall history. On non-TTY terminals it falls
+back to a plain line-mode REPL automatically.
 
 ## What it does NOT have (use the full Tagent for these)
 
-TUI menus, web GUI, MCP servers, plugins, skills, checkpoints, the smart
-cache, plan mode — this is the minimal core for machines that cannot run Bun.
+Web GUI, MCP servers, plugins, skills, checkpoints, the smart cache, plan
+mode — this is the core for machines that cannot run Bun.
 
 ## Config
 

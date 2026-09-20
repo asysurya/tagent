@@ -17,9 +17,38 @@ export interface Release {
   stable?: boolean
 }
 
-export const LATEST = '0.10.0'
+export const LATEST = '0.11.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.11.0',
+    date: '2026-09-20',
+    title: 'tagent-native gets the app TUI — the Windows 7 build stops looking like 1995',
+    summary:
+      'The native Go build for Windows 7/8/32-bit machines now opens the same opencode-style full-screen app as the main CLI: header bar, boxed editor with a real cursor, transcript scrollback, ctrl+x menu, slash palette, colors via the Windows Console API (no ANSI needed — genuine conhost-safe), esc-to-interrupt and multi-turn conversations with token counting. The main CLI is unchanged underneath this release.',
+    stable: true,
+    sections: [
+      {
+        name: 'Native app TUI (tagent-native)',
+        items: [
+          'Full-screen takeover painted through the classic Windows Console API — SetConsoleTextAttribute + WriteConsoleW + ReadConsoleInputW — so it works on a genuine Windows 7 conhost that has no ANSI support at all',
+          'Same layout language as the main CLI: header (workspace · NATIVE chip · model · chain), scrollable transcript, status row with spinner, boxed multi-line editor with reverse-video cursor, shortcut footer',
+          'ctrl+x menu and a / command palette: switch model (saved straight into ~/.tagent/config.json), view the fallback chain, diagnostics, clear, help, exit',
+          'esc interrupts the running task through Go context cancellation — HTTP calls and bash commands stop, and the conversation stays usable',
+          'Multi-turn conversations (context kept between tasks), token usage in the header, up/down history recall, pgup/pgdn scrollback with a new-lines indicator',
+          'CJK-aware word wrapping, terminal resize support, and automatic fallback to a plain line-mode REPL when stdin/stdout is not a terminal',
+          'Win7-safe glyph set: square box corners and an ASCII spinner — no braille or rounded corners that Lucida Console cannot render',
+        ],
+      },
+      {
+        name: 'Also in this release',
+        items: [
+          'tagent-native diag subcommand for quick terminal-free checks',
+          'Zero new dependencies: still a single static ~10–15 MB binary, Go stdlib only',
+        ],
+      },
+    ],
+  },
   {
     version: '0.10.0',
     date: '2026-09-19',

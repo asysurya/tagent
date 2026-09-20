@@ -1,6 +1,6 @@
 {
-  "version": "0.10.0",
-  "date": "2026-09-19",
-  "notes": "tagent start now opens a real full-screen terminal application: alternate screen, boxed input editor, scrollable transcript, slash-command palette with tab completion, @file mentions, and a ctrl+x quick-action menu so you rarely type. Falls back to the classic readline TUI on tiny terminals or with --classic. tagent uninstall removes everything — command, ~/.tagent data, the repo and/or the binary — each behind its own confirmation.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.10.0"
+  "version": "0.11.0",
+  "date": "2026-09-20",
+  "notes": "The native Go build for Windows 7/8/32-bit machines now opens the same opencode-style full-screen app as the main CLI: header bar, boxed editor with a real cursor, transcript scrollback, ctrl+x menu, slash palette, colors via the Windows Console API (no ANSI needed — genuine conhost-safe), esc-to-interrupt and multi-turn conversations with token counting. The main CLI is unchanged underneath this release.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.11.0"
 }
