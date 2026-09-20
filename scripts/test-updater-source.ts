@@ -190,8 +190,12 @@ const NEW3 = '0.15.0'
 setVersion(ORIGIN, NEW3)
 fs.writeFileSync(path.join(ORIGIN, 'CONFLICT.txt'), 'upstream version\n')
 git(ORIGIN, 'add', '-A'); git(ORIGIN, 'commit', '-qm', `chore: marker v${NEW3} + add/add conflict file`)
-fs.writeFileSync(FEED, JSON.stringify({ version: NEW3, date: '2026-09-20', notes: 'test feed 3', url: 'https://x' }))
-// local commit adding the SAME path with different content → AA conflict
+// the feed advertises a version one ahead of origin's tip — that mirrors the
+// real world (releases can be ahead of a branch) and guarantees the updater
+// actually triggers even though the half-merged tree already carries NEW3
+fs.writeFileSync(FEED, JSON.stringify({ version: '0.16.0', date: '2026-09-20', notes: 'test feed 3', url: 'https://x' }))
+// local commit: SAME path with different content → AA conflict (version.ts
+// itself must stay parseable — the CLI has to boot to run the update)
 fs.writeFileSync(path.join(CLONE, 'CONFLICT.txt'), 'local version\n')
 git(CLONE, 'add', '-A'); git(CLONE, 'commit', '-qm', 'chore: local add/add conflict file')
 git(CLONE, 'fetch', 'origin')
@@ -222,6 +226,7 @@ const backupDirs = fs.existsSync(path.join(HOME_TAGENT, 'backups'))
   : []
 ok(backupDirs.length >= 1, 'backup dir created under ~/.tagent/backups', backupDirs.join(','))
 const lastBackup = backupDirs.sort().at(-1)!
+ok(!!lastBackup, 'backup dir name sane')
 const backedUp = fs.readdirSync(path.join(HOME_TAGENT, 'backups', lastBackup))
 ok(backedUp.includes('credentials.json') && backedUp.includes('config.json'), 'auth + mcp config are in the backup', backedUp.join(','))
 ok(fs.existsSync(path.join(HOME_TAGENT, 'credentials.json')), 'credentials.json still in place after the update')

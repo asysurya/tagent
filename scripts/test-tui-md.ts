@@ -394,6 +394,33 @@ test('hint row: mode · model · tokens · elapsed after a run', async () => {
   app.destroy()
 })
 
+test('hint row: context bar replaces token counters once the limit is known', async () => {
+  const host = new FakeHost(tmp)
+  const { app } = await started(host, { columns: 120 })
+  // a run reports context state: 12.3k of 131k used → the bar renders
+  host.bus.emit('context:update', { sessionId: 's1', used: 12_300, limit: 131_072, turn: 2 })
+  await sleep(20)
+  app.renderNow()
+  let rows = app.lastFrame.map(stripAnsi)
+  let hint = rows.find((r) => r.includes('12.3k/131.1k'))
+  if (!hint) throw new Error(`context bar missing — rows: ${rows.filter((r) => r.includes('·')).join(' | ')}`)
+  if (!/\[\u2588+\u2591+\]/.test(hint)) throw new Error(`bar blocks missing: ${hint}`)
+  if (!hint.includes('9%')) throw new Error(`percentage missing: ${hint}`)
+  if (!hint.includes('glm-4.7')) throw new Error(`model missing: ${hint}`)
+  if (hint.includes('↑')) throw new Error(`token counters should be replaced by the bar: ${hint}`)
+  // crossing 80% keeps the bar (and marks the offer pending — covered by host tests)
+  host.bus.emit('context:update', { sessionId: 's1', used: 110_000, limit: 131_072, turn: 9 })
+  await sleep(20)
+  app.renderNow()
+  rows = app.lastFrame.map(stripAnsi)
+  hint = rows.find((r) => r.includes('110k/131.1k'))
+  if (!hint) throw new Error(`updated bar missing: ${rows.join(' | ')}`)
+  if (!hint.includes('84%')) throw new Error(`84% missing: ${hint}`)
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
 /* ---------------- run ---------------- */
 
 setAppColor(true)
