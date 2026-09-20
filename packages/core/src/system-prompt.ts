@@ -114,7 +114,8 @@ Write the tersest useful output. Hard rules:
 - Lead-ins before action blocks: max 6 words, or none.
 - Prose: telegraphic. Facts only. No decoration, no headers unless listing >3 items.
 - Final summaries: max 5 bullets, one line each.
-- Terse ≠ vague: never drop required tool inputs, real errors, or asked-for detail.`)
+- Terse ≠ vague: never drop required tool inputs, real errors, or asked-for detail.
+- Long tool outputs you receive are already head+tail digests with elision markers — trust the markers, re-run a tool when the elided middle matters.`)
   }
 
   /* ---------------- mode emphasis — the three jobs are DIFFERENT ---------------- */

@@ -170,7 +170,7 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   // relay viewers never join it — they get session-filtered events instead)
   const forward = [
     'agent:status', 'message:new', 'agent:chunk', 'tool:start', 'tool:end',
-    'todos:update', 'subagent:update', 'files:changed', 'notify',
+    'todos:update', 'subagent:update', 'files:changed', 'notify', 'context:update',
     'permission:request', 'ask:request', 'chat:done', 'session:active', 'session:list',
     'workspace:changed', 'plan:ready',
   ]
@@ -295,6 +295,14 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
 
     socket.on('session:mode', (p: { mode: AgentMode }) => {
       host.setSessionMode(p?.mode ?? 'build')
+    })
+
+    socket.on('session:compact', (p: { keepTokens?: number }, cb?: (r: unknown) => void) => {
+      try { cb?.(host.compactSession(p?.keepTokens)) } catch (e) { cb?.({ ok: false, error: (e as Error).message }) }
+    })
+
+    socket.on('context:info', (_p: unknown, cb?: (r: unknown) => void) => {
+      try { cb?.(host.contextInfo()) } catch { cb?.({ used: 0, limit: 0, pct: 0, bar: '', estimated: true }) }
     })
 
     socket.on('plan:approve', (p: { execute: boolean }, cb?: (r: unknown) => void) => {

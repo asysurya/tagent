@@ -57,6 +57,8 @@ import {
   authStatus,
   getCredential,
   readGlobalConfig,
+  renderContextBar,
+  contextPct,
   type LoopSummary,
   type PermissionRequest,
   type AskFormRequest,
@@ -639,6 +641,7 @@ const SLASH_COMMANDS: { name: string; desc: string }[] = [
   { name: 'test', desc: 'run test mode [url]' },
   { name: 'model', desc: 'pick a model [custom]' },
   { name: 'caveman', desc: 'terse replies [on|off]' },
+  { name: 'compact', desc: 'ringkas memory lama [keep-tok]' },
   { name: 'worklog', desc: 'journal + todos [on|off]' },
   { name: 'webgui', desc: 'start gui with tagent [on|off]' },
   { name: 'todos', desc: 'the live plan checklist' },
@@ -666,7 +669,7 @@ const SLASH_COMMANDS: { name: string; desc: string }[] = [
   { name: 'memory', desc: 'saved memory facts' },
   { name: 'skills', desc: 'installed skills' },
   { name: 'skill', desc: 'read a skill <name>' },
-  { name: 'stats', desc: 'sessions · snapshots' },
+  { name: 'stats', desc: 'sessions · ctx · snapshots' },
   { name: 'settings', desc: 'config dump' },
   { name: 'stop', desc: 'interrupt the run' },
   { name: 'clear', desc: 'clear the screen' },
@@ -680,7 +683,7 @@ const HELP_ROWS: [string, string][] = [
   ['agents · mcp · plugins', 'custom subagents · MCP servers · plugin manager'],
   ['fallback [add <p> <m> [key]|rm <n>|clear]', 'provider failover chain'],
   ['diag [cmd|off|test]', 'auto-diagnostics gate (lint/typecheck loop)'],
-  ['caveman [on|off] · worklog [on|off] · maxturns <n>', 'agent behavior'],
+  ['caveman [on|off] · compact [keep-tok] · worklog [on|off] · maxturns <n>', 'agent behavior · context'],
   ['todos · log [n]', 'live plan · journal tail'],
   ['apikey <provider> · permissions · allow/deny/ask <tool>', 'access'],
   ['files [path] · read <f> · grep <pat> · sh <cmd>', 'workspace'],
@@ -817,6 +820,11 @@ export class TuiApp {
   private mode: AgentMode = 'build'
   private tokensIn = 0
   private tokensOut = 0
+  /** live context-window state (from the loop) — the bar under the input */
+  private ctxUsed = 0
+  private ctxLimit = 0
+  /** crossed the compact threshold this run — offer /compact when it ends */
+  private ctxOfferPending = false
 
   /* relay endpoint (/relay without a running web gui) */
   private relayServer?: DaemonHandle
@@ -991,10 +999,25 @@ export class TuiApp {
     add('permission:request', (req: PermissionRequest) => void this.onPermission(req))
     add('ask:request', (form: AskFormRequest) => void this.onAskUserHost(form))
     add('chat:done', (d: { summary: LoopSummary }) => this.onChatDone(d.summary))
+    add('context:update', (d: { used: number; limit: number }) => {
+      const was = this.ctxLimit > 0 ? contextPct(this.ctxUsed, this.ctxLimit) : 0
+      this.ctxUsed = d.used
+      this.ctxLimit = d.limit
+      const pct = d.limit > 0 ? contextPct(d.used, d.limit) : 0
+      const threshold = this.host.compactThreshold()
+      if (threshold > 0 && pct >= threshold && was < threshold) {
+        this.ctxOfferPending = true
+      }
+      this.requestRender()
+    })
     add('session:active', (s: SessionData) => {
       this.todos = s.todos ?? []
       if (s.title) this.sessionTitle = s.title
       if (s.mode) this.mode = s.mode
+      // fresh session — the old run's context numbers no longer apply
+      this.ctxUsed = 0
+      this.ctxLimit = 0
+      this.ctxOfferPending = false
       this.requestRender()
     })
   }
@@ -1161,7 +1184,45 @@ export class TuiApp {
       this.println(dim('  ↩ sending queued message…'))
       this.logUser(next)
       void this.send(next)
+    } else if (this.ctxOfferPending) {
+      // the context bar crossed the threshold during this run — offer the
+      // deterministic compaction now that the terminal is free
+      void this.offerCompact()
     }
+  }
+
+  /** 80% context prompt — summarize old turns? (deterministic, zero AI) */
+  private async offerCompact(): Promise<void> {
+    this.ctxOfferPending = false
+    const ci = this.host.contextInfo()
+    if (ci.limit <= 0 || ci.pct < this.host.compactThreshold()) return
+    await new Promise((r) => setTimeout(r, 150))
+    const yes = await this.askYesNo(
+      `context ${ci.pct}% (${ci.bar}) — ringkas memory sekarang? (deterministik, tanpa AI)`,
+      true,
+    )
+    if (yes) {
+      this.runCompact(undefined)
+    } else {
+      this.println(dim('  — /compact kapan saja'))
+    }
+  }
+
+  /** run the compaction + print the result trail */
+  private runCompact(keepTokens?: number): void {
+    const r = this.host.compactSession(keepTokens)
+    if (!r.ok) {
+      this.println(yellow(`  ⚠ ${r.error}`))
+      return
+    }
+    this.println(
+      `  ${dim('⎿')} ${green('compacted')} ${dim(`· ~${fmtTok(r.before)} → ~${fmtTok(r.after)} tokens · ${r.removedMessages} old turn(s) → digest · no AI used`)}`,
+    )
+    const ci = this.host.contextInfo()
+    this.ctxUsed = ci.used
+    this.ctxLimit = ci.limit
+    if (ci.bar) this.println(`  ${dim('⎿ context now')} ${dim(ci.bar)}`)
+    this.requestRender()
   }
 
   /** plan approval — overlay; execute writes PRD.md and starts the build */
@@ -1256,7 +1317,12 @@ export class TuiApp {
     this.println('')
     this.println(dim(`${'─'.repeat(Math.min(this.transcriptW(), 72))}`))
     this.println(`  ${dim('workspace')} ${this.host.root}`)
-    this.println(`  ${dim('model')}     ${cfg.defaultModel} ${dim(`(${cfg.defaultProvider}) · mode ${this.mode}`)}`)
+    const ci = this.host.contextInfo()
+    this.println(
+      ci.limit > 0
+        ? `  ${dim('model')}     ${cfg.defaultModel} ${dim(`(${cfg.defaultProvider}) · ctx ${ci.bar} · mode ${this.mode}`)}`
+        : `  ${dim('model')}     ${cfg.defaultModel} ${dim(`(${cfg.defaultProvider}) · mode ${this.mode}`)}`,
+    )
     this.println(
       mcpReady.length
         ? `  ${dim('mcp')}        ${dim(`${mcpReady.length} server(s) · ${mcpReady.reduce((n, s) => n + s.tools, 0)} tools — /mcp`)}`
@@ -2181,6 +2247,7 @@ export class TuiApp {
       { label: 'Pick model…', hint: 'provider + model', value: 'model', group: 'session' },
       { label: 'Undo checkpoint', hint: 'rollback last snapshot', value: 'undo', group: 'session' },
       { label: 'Toggle caveman mode', hint: 'terse replies', value: 'caveman', group: 'more' },
+      { label: 'Compact memory…', hint: 'summarize old turns (no AI)', value: 'compact', group: 'more' },
       { label: 'Skills…', hint: 'installed skills', value: 'skills', group: 'more' },
       { label: 'Subagents…', hint: 'custom subagents', value: 'agents', group: 'more' },
       { label: 'Fallback chain…', hint: 'provider failover', value: 'fallback', group: 'more' },
@@ -2234,7 +2301,11 @@ export class TuiApp {
       case 'caveman': {
         const v = !(this.host.cfg.caveman === true)
         this.host.settingsSave({ caveman: v })
-        this.println(green(`  ✔ caveman mode ${v ? 'ON — terse replies, compact prompts' : 'off'}`))
+        this.println(green(`  ✔ caveman mode ${v ? 'ON — outputs summarized (head+tail digests), old action echoes slimmed, terse replies' : 'off'}`))
+        return
+      }
+      case 'compact': {
+        this.runCompact(undefined)
         return
       }
       case 'skills':
@@ -3048,9 +3119,25 @@ export class TuiApp {
         return
       }
 
+      case 'compact': {
+        const keep = arg ? Number(arg.replace(/[^0-9]/g, '')) : undefined
+        if (arg && (!keep || keep < 1000)) {
+          return this.println(dim('  usage: /compact [keep-tokens] — e.g. /compact 8000 (default 10000)'))
+        }
+        this.runCompact(keep)
+        return
+      }
+
       case 'stats': {
         const st = host.stats()
+        const ctx = st.context as { used: number; limit: number; pct: number; bar: string; estimated: boolean }
         this.println(`  ${bold('sessions')} ${st.sessions} · ${bold('snapshots')} ${st.snapshots}`)
+        if (ctx.bar) {
+          this.println(`  ${bold('context')}   ${ctx.bar}${ctx.estimated ? dim(' (estimated)') : ''}`)
+          this.println(dim('    /compact summarizes old turns — deterministic, no AI'))
+        } else {
+          this.println(`  ${bold('context')}   ~${fmtTok(ctx.used)} tokens (model window unknown — set contextWindow in ~/.tagent/zai-models.json or TAGENT_CONTEXT_WINDOW)`)
+        }
         return
       }
 
@@ -3664,13 +3751,22 @@ export class TuiApp {
   }
 
   /** the row under the editor box — Claude Code's `? for shortcuts` line:
-   *  keys on the left, live session stats (model · tokens · ⎇ repo) right */
+   *  keys on the left, live session stats right. The context bar
+   *  (`12.3k/131k [██████░░░░] 9%`) shows how much of the model's window the
+   *  session eats; without a known limit it falls back to token counters. */
   private hintRow(W: number): string {
     const cfg = this.cfgFast() as { defaultModel: string }
     const keys = this.running ? 'esc interrupt · ? shortcuts · ctrl+x menu' : HINT_KEYS
-    const tok = this.tokensIn + this.tokensOut > 0 ? ` · ${fmtTok(this.tokensIn)}↑ ${fmtTok(this.tokensOut)}↓` : ''
+    let ctx = ''
+    if (this.ctxLimit > 0) {
+      const pct = contextPct(this.ctxUsed, this.ctxLimit)
+      const raw = renderContextBar(this.ctxUsed, this.ctxLimit, 10)
+      ctx = pct >= 80 ? red(raw) : pct >= 60 ? yellow(raw) : green(raw)
+    } else if (this.tokensIn + this.tokensOut > 0) {
+      ctx = `${fmtTok(this.tokensIn)}↑ ${fmtTok(this.tokensOut)}↓`
+    }
     const badge = this.syncBadge ? ` · ⎇ ${this.syncBadge}` : ''
-    const right = `${this.mode} · ${shortModelName(cfg.defaultModel)}${tok} · ${fmtElapsed(Date.now() - this.startedAt)}${badge}`
+    const right = `${this.mode} · ${shortModelName(cfg.defaultModel)}${ctx ? ` · ${ctx}` : ''} · ${fmtElapsed(Date.now() - this.startedAt)}${badge}`
     const room = W - vwidthANSI(keys) - 2
     const rightCut = room > 10 ? dim(truncateStyled(right, Math.max(4, room))) : ''
     const keysCut = truncateStyled(keys, Math.max(4, W - vwidthANSI(rightCut) - 1))

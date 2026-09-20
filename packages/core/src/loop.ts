@@ -24,6 +24,8 @@ import { buildToolset, TEST_MODE_TOOLS, ALL_TOOLS } from './tools'
 import { findSubagent, listSubagents } from './subagents'
 import { diagnosticsCommand, renderDiagnosticsBlock, runDiagnostics } from './diagnostics'
 import { completeWithFallback, fallbackTail, type ResolvedChainEntry } from './fallback'
+import { compressOutput, slimActionInput } from './compact'
+import { modelContextWindow, estimateTokens } from './context'
 
 const ACTION_RE = /```tagent:action\s*\n([\s\S]*?)```/g
 const MAX_TOOL_OUTPUT = 24_000
@@ -31,10 +33,16 @@ const MAX_TOOL_OUTPUT = 24_000
 const MAX_TOOL_OUTPUT_CAVEMAN = 8_000
 /** how often streamed text is pushed to the UI (ms) — keeps phones calm */
 const CHUNK_EMIT_MS = 60
-/** context diet: above this, OLD tool results get compacted to stubs */
+/** context diet: above this, OLD tool results get compacted to digests */
 const COMPACT_THRESHOLD = 150_000
+/** caveman mode starts dieting earlier — the whole point is saving tokens */
+const COMPACT_THRESHOLD_CAVEMAN = 80_000
 /** how many of the newest tool-result turns stay uncompacted */
 const COMPACT_KEEP = 4
+/** how many of the newest assistant turns keep their FULL action inputs —
+ * older ones get their bulky inputs elided (write_file contents etc.) */
+const KEEP_FULL_ACTION_TURNS = 2
+const KEEP_FULL_ACTION_TURNS_CAVEMAN = 1
 
 function toNativeToolDef(t: ToolDefinition): NativeToolDef {
   return {
@@ -51,6 +59,42 @@ function toNativeToolDef(t: ToolDefinition): NativeToolDef {
 function displayText(s: string): string {
   const i = s.indexOf('```tagent:action')
   return i >= 0 ? s.slice(0, i).trimEnd() : s
+}
+
+/**
+ * Digest of one old TOOL RESULTS message: keep every action header plus its
+ * key input (path / command / pattern) and status, drop the bulk output.
+ * Deterministic — facts are copied, never generated.
+ */
+function digestOldToolResults(content: string): string {
+  const lines: string[] = []
+  let current: { tool: string; status: string; input?: string } | undefined
+  const flush = () => {
+    if (!current) return
+    lines.push(
+      `[older tool results — output elided] ${current.tool} (${current.status})${
+        current.input ? ` · ${current.input.slice(0, 160)}` : ''
+      }`,
+    )
+  }
+  for (const l of content.split('\n')) {
+    const head = l.match(/^### (\S+) \((\w+)\)$/)
+    if (head) {
+      flush()
+      current = { tool: head[1], status: head[2] }
+    } else if (current && !current.input && l.startsWith('input: ')) {
+      current.input = l.slice(7, 167)
+    }
+  }
+  flush()
+  if (!lines.length) {
+    return '[older tool results compacted — re-run a tool if you need the output]'
+  }
+  return (
+    'TOOL RESULTS (older ones compacted to digests — outputs you read earlier are summarized by tool+status; ' +
+    're-run a tool for fresh output):\n' +
+    lines.join('\n')
+  )
 }
 
 export interface AgentLoopOptions {
@@ -95,6 +139,8 @@ export class AgentLoop {
   readonly ctx: ToolContext
   /** primary first, then the ordered fallback chain */
   private chain: ResolvedChainEntry[]
+  /** the model's context window (0 = unknown) — powers onContext */
+  private ctxLimit: number
 
   constructor(private opts: AgentLoopOptions) {
     this.tools = [
@@ -110,6 +156,7 @@ export class AgentLoop {
       { adapter: opts.provider, model: opts.model, label: 'primary' },
       ...fallbackTail(opts.config),
     ]
+    this.ctxLimit = modelContextWindow(opts.provider.id, opts.model)
     this.ctx = {
       workspaceRoot: opts.session.workspaceId,
       sessionId: opts.session.id,
@@ -187,12 +234,13 @@ export class AgentLoop {
             this.opts.events.onAssistantChunk?.(session.id, displayText(full))
           }
         }
+        const rendered = this.renderMessages(system)
         const result = await completeWithFallback(
           this.chain,
           {
             model: this.opts.model,
             signal: this.abort.signal,
-            messages: this.renderMessages(system),
+            messages: rendered,
             tools: nativeTools,
             onText: (full) => emitStream(full),
           },
@@ -216,6 +264,15 @@ export class AgentLoop {
               }
             : { input: result.usage.input ?? 0, output: result.usage.output ?? 0, cacheRead: result.usage.cacheRead }
           this.opts.events.onUsage?.({ input: result.usage.input ?? 0, output: result.usage.output ?? 0, cacheRead: result.usage.cacheRead, turn: turns })
+        }
+        // context-window state — provider usage when available, else a local
+        // estimate of what this request carried. Powers the usage bar + the
+        // 80% compact prompt in the hosts.
+        {
+          const used = result.usage
+            ? (result.usage.input ?? 0) + (result.usage.output ?? 0)
+            : rendered.reduce((n, m) => n + estimateTokens(m.content), estimateTokens(system))
+          this.opts.events.onContext?.({ used, limit: this.ctxLimit, turn: turns, estimated: !result.usage })
         }
         const { cleanText, actions } = this.parseActions(raw)
         // merge actions that came through native function calling
@@ -316,12 +373,12 @@ export class AgentLoop {
             record.status = 'error'
             output = `Error: ${(e as Error).message}`
           }
-          record.output = trunc(output, caveman ? 1_600 : 4_000)
+          record.output = compressOutput(output, caveman ? 1_600 : 4_000)
           record.endedAt = Date.now()
           toolCalls++
           this.opts.events.onToolEnd?.(record)
           results.push(
-            `### ${action.tool} (${record.status})\ninput: ${JSON.stringify(action.input).slice(0, 400)}\noutput:\n${trunc(output, caveman ? MAX_TOOL_OUTPUT_CAVEMAN : MAX_TOOL_OUTPUT)}`,
+            `### ${action.tool} (${record.status})\ninput: ${compressOutput(JSON.stringify(action.input), 400)}\noutput:\n${compressOutput(output, caveman ? MAX_TOOL_OUTPUT_CAVEMAN : MAX_TOOL_OUTPUT)}`,
           )
         }
 
@@ -515,10 +572,30 @@ export class AgentLoop {
     const out: WireMessage[] = [
       { role: 'system', content: system },
     ]
+    // how many assistant turns carry tools at all — the NEWEST ones keep
+    // their full action inputs; older ones get bulky fields elided. A
+    // write_file content re-sent every turn forever is pure ballast: the
+    // file is on disk, the trail stays auditable via path + preview.
+    const caveman = this.opts.config.caveman === true
+    const keepFull = caveman ? KEEP_FULL_ACTION_TURNS_CAVEMAN : KEEP_FULL_ACTION_TURNS
+    const toolTurns = this.opts.session.messages.filter(
+      (m) => m.role === 'assistant' && (m.toolCalls?.length ?? 0) > 0,
+    ).length
+    let toolTurnsSeen = 0
     for (const m of this.opts.session.messages) {
       if (m.role === 'assistant') {
+        const isToolTurn = (m.toolCalls?.length ?? 0) > 0
+        const full = !isToolTurn || toolTurnsSeen >= toolTurns - keepFull
+        if (isToolTurn) toolTurnsSeen++
         const actions = (m.toolCalls ?? []).map((c) =>
-          '```tagent:action\n' + JSON.stringify({ tool: c.tool, input: c.input }) + '\n```',
+          '```tagent:action\n' +
+          JSON.stringify({
+            tool: c.tool,
+            input: full
+              ? c.input
+              : slimActionInput(c.tool, (c.input ?? {}) as Record<string, unknown>),
+          }) +
+          '\n```',
         )
         out.push({ role: 'assistant', content: [m.content, ...actions].filter(Boolean).join('\n\n') })
       } else if (m.meta?.toolResults) {
@@ -557,10 +634,11 @@ export class AgentLoop {
 
     // ---- context diet -------------------------------------------------
     // 1) compact OLD tool results: keep the newest COMPACT_KEEP full, turn
-    //    older ones into one-line stubs. Saves the bulk of long sessions
-    //    while preserving the reasoning trail.
+    //    older ones into per-tool digests (tool + key input + status — the
+    //    what/where is preserved, only the bulk output is dropped).
     let total = out.reduce((n, m) => n + m.content.length, 0)
-    if (total > COMPACT_THRESHOLD) {
+    const threshold = caveman ? COMPACT_THRESHOLD_CAVEMAN : COMPACT_THRESHOLD
+    if (total > threshold) {
       const toolIdx: number[] = []
       for (let i = 0; i < out.length; i++) {
         if (out[i].role === 'user' && out[i].content.startsWith('TOOL RESULTS:')) toolIdx.push(i)
@@ -568,12 +646,9 @@ export class AgentLoop {
       const keep = new Set(toolIdx.slice(-COMPACT_KEEP))
       for (const i of toolIdx) {
         if (keep.has(i)) continue
-        total -= out[i].content.length - 120
-        out[i] = {
-          role: 'user',
-          content:
-            '[older tool results compacted to save context — contents you read earlier remain in your conversation; re-run a tool if you need fresh output]',
-        }
+        const digest = digestOldToolResults(out[i].content)
+        total -= out[i].content.length - digest.length
+        out[i] = { role: 'user', content: digest }
       }
     }
 

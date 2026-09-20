@@ -10,6 +10,8 @@ import {
   listSkills,
   CURRENT_VERSION,
   SUBAGENT_TEMPLATE,
+  renderContextBar,
+  contextPct,
   type LoopSummary,
   type PermissionRequest,
   type AskFormRequest,
@@ -108,6 +110,11 @@ export class Tui {
   private running = false
   private queued: string[] = []
   private runStartedAt = 0
+  /** live context-window state (from the loop) — the done-line bar */
+  private ctxUsed = 0
+  private ctxLimit = 0
+  /** crossed the compact threshold this run — offer /compact when it ends */
+  private ctxOfferPending = false
   private todos: TodoItem[] = []
   private lastSubagentTurn = new Map<string, number>()
   private printedLines = 0
@@ -198,8 +205,21 @@ export class Tui {
     bus.on('permission:request', (req: PermissionRequest) => void this.onPermission(req))
     bus.on('ask:request', (form: AskFormRequest) => void this.onAskUser(form))
     bus.on('chat:done', (d: { summary: LoopSummary }) => this.onChatDone(d.summary))
+    bus.on('context:update', (d: { used: number; limit: number }) => {
+      const was = this.ctxLimit > 0 ? contextPct(this.ctxUsed, this.ctxLimit) : 0
+      this.ctxUsed = d.used
+      this.ctxLimit = d.limit
+      const pct = d.limit > 0 ? contextPct(d.used, d.limit) : 0
+      const threshold = this.host.compactThreshold()
+      if (threshold > 0 && pct >= threshold && was < threshold) {
+        this.ctxOfferPending = true
+      }
+    })
     bus.on('session:active', (s: SessionData) => {
       this.todos = s.todos ?? []
+      this.ctxUsed = 0
+      this.ctxLimit = 0
+      this.ctxOfferPending = false
     })
   }
 
@@ -404,6 +424,12 @@ export class Tui {
       ? ` · ${fmtTok(u.input)} in / ${fmtTok(u.output)} out${u.cacheRead ? ` (${fmtTok(u.cacheRead)} cache-hit)` : ''}`
       : ''
     this.println(`  ${mark} ${dim(`· ${summary.turns} turns · ${summary.toolCalls} tool calls · ${secs}s${tok}`)}`)
+    // context bar — the live window state after this run
+    if (this.ctxLimit > 0) {
+      const pct = contextPct(this.ctxUsed, this.ctxLimit)
+      const bar = pct >= 80 ? red(renderContextBar(this.ctxUsed, this.ctxLimit, 10)) : pct >= 60 ? yellow(renderContextBar(this.ctxUsed, this.ctxLimit, 10)) : green(renderContextBar(this.ctxUsed, this.ctxLimit, 10))
+      this.println(`  ${dim('⎿ context')}  ${bar}`)
+    }
     if (summary.error) this.println(`  ${red(summary.error)}`)
     this.running = false
     // plan mode delivered a plan → offer the approve-and-build flow
@@ -412,9 +438,31 @@ export class Tui {
     if (next) {
       this.println(dim('  ↩ sending queued message…'))
       void this.send(next)
+    } else if (this.ctxOfferPending) {
+      void this.offerCompact()
     } else {
       this.setPrompt()
     }
+  }
+
+  /** 80% context prompt — summarize old turns? (deterministic, zero AI) */
+  private async offerCompact() {
+    this.ctxOfferPending = false
+    const ci = this.host.contextInfo()
+    if (ci.limit <= 0 || ci.pct < this.host.compactThreshold()) return this.setPrompt()
+    await new Promise((r) => setTimeout(r, 150))
+    const yes = await this.askYesNo(`context ${ci.pct}% (${ci.bar}) — ringkas memory sekarang? (deterministik, tanpa AI)`, true)
+    if (yes) this.runCompact(undefined)
+    else this.println(dim('  — /compact kapan saja'))
+    this.setPrompt()
+  }
+
+  private runCompact(keepTokens?: number) {
+    const r = this.host.compactSession(keepTokens)
+    if (!r.ok) return this.println(yellow(`  ⚠ ${r.error}`))
+    this.println(`  ${green('compacted')} ${dim(`· ~${fmtTok(r.before)} → ~${fmtTok(r.after)} tokens · ${r.removedMessages} old turn(s) → digest · no AI used`)}`)
+    const ci = this.host.contextInfo()
+    if (ci.bar) this.println(`  ${dim('⎿ context now')} ${dim(ci.bar)}`)
   }
 
   /** plan approval — arrow-key y/N; yes writes PRD.md and starts the build */
@@ -693,7 +741,7 @@ export class Tui {
           ['agents · mcp · plugins', 'custom subagents · MCP servers · plugin manager'],
           ['fallback [add <p> <m> [key]|rm <n>|clear]', 'provider failover chain'],
           ['diag [cmd|off|test]', 'auto-diagnostics gate (lint/typecheck loop)'],
-          ['caveman [on|off] · worklog [on|off] · maxturns <n>', 'agent behavior'],
+          ['caveman [on|off] · compact [keep-tok] · worklog [on|off] · maxturns <n>', 'agent behavior · context'],
           ['todos · log [n]', 'live plan · journal tail'],
           ['apikey <provider> · permissions · allow/deny/ask <tool>', 'access'],
           ['files [path] · read <f> · grep <pat> · sh <cmd>', 'workspace'],
@@ -1004,7 +1052,16 @@ export class Tui {
       case 'caveman': {
         const v = arg === 'on' ? true : arg === 'off' ? false : !cfg.caveman
         host.settingsSave({ caveman: v })
-        this.println(green(`  ✔ caveman mode ${v ? 'ON 🦴 — terse replies, compact prompts' : 'off'}`))
+        this.println(green(`  ✔ caveman mode ${v ? 'ON 🦴 — outputs summarized (head+tail digests), old echoes slimmed, terse replies' : 'off'}`))
+        return
+      }
+
+      case 'compact': {
+        const keep = arg ? Number(arg.replace(/[^0-9]/g, '')) : undefined
+        if (arg && (!keep || keep < 1000)) {
+          return this.println(dim('  usage: /compact [keep-tokens] — e.g. /compact 8000 (default 10000)'))
+        }
+        this.runCompact(keep)
         return
       }
 
@@ -1327,6 +1384,13 @@ export class Tui {
       case 'stats': {
         const st = host.stats()
         this.println(`  ${bold('sessions')} ${st.sessions} · ${bold('snapshots')} ${st.snapshots}`)
+        const ctx = st.context as { used: number; limit: number; pct: number; bar: string; estimated: boolean }
+        if (ctx.bar) {
+          this.println(`  ${bold('context')}   ${ctx.bar}${ctx.estimated ? dim(' (estimated)') : ''}`)
+          this.println(dim('    /compact summarizes old turns — deterministic, no AI'))
+        } else {
+          this.println(`  ${bold('context')}   ~${fmtTok(ctx.used)} tokens (model window unknown — set contextWindow or TAGENT_CONTEXT_WINDOW)`)
+        }
         return
       }
 

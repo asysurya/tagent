@@ -173,6 +173,21 @@ class FakeHost {
     this.approvedPlan = execute
     return { ok: true }
   }
+  contextInfo(): { used: number; limit: number; pct: number; bar: string; estimated: boolean } {
+    return { used: 0, limit: 131_072, pct: 0, bar: '0/131k [░░░░░░░░░░] 0%', estimated: true }
+  }
+  compactThreshold(): number {
+    return 80
+  }
+  compactSession(): { ok: false; error: string } {
+    return { ok: false, error: 'nothing to compact' }
+  }
+  stats() {
+    return {
+      sessions: 0, snapshots: 0,
+      context: this.contextInfo(),
+    }
+  }
 }
 
 /* ---------------- harness ---------------- */

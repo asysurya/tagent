@@ -11,6 +11,15 @@ export { loadConfig, saveConfig, defaultConfig, workspaceDir, GLOBAL_DIR, listRe
 export { PermissionManager } from './permissions'
 export { AgentLoop, isReadOnlyTool, extractPlan } from './loop'
 export {
+  modelContextWindow, guessContextWindow, envContextWindow,
+  estimateTokens, estimateMessageTokens,
+  renderContextBar, contextPct, fmtTokens,
+} from './context'
+export {
+  compressOutput, slimActionInput, compactSession,
+  type CompactOptions, type CompactResult,
+} from './compact'
+export {
   listSubagents, findSubagent, subagentDirs, renderSubagentsBlock,
   SUBAGENT_TEMPLATE, type SubagentDef,
 } from './subagents'

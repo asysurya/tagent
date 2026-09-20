@@ -131,6 +131,15 @@ class FakeHost {
     this.responded.push({ id, approved, remember })
     return true
   }
+  contextInfo(): { used: number; limit: number; pct: number; bar: string; estimated: boolean } {
+    return { used: 0, limit: 131_072, pct: 0, bar: '0/131k [░░░░░░░░░░] 0%', estimated: true }
+  }
+  compactThreshold(): number {
+    return 80
+  }
+  stats() {
+    return { sessions: 0, snapshots: 0, context: this.contextInfo() }
+  }
 }
 
 /* ---------------- harness ---------------- */

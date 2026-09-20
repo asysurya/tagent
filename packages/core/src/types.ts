@@ -120,6 +120,9 @@ export interface ModelInfo {
   description?: string
   /** accepts image input (screenshots) — enables visual test verification */
   vision?: boolean
+  /** approx context-window size in tokens — powers the live context bar.
+  * 0/undefined = unknown (no bar, only token counters). */
+  contextWindow?: number
 }
 
 export interface CustomProviderConfig {
@@ -178,6 +181,17 @@ export interface TokenUsage {
   output: number
   /** tokens served from a provider-side prompt cache (Anthropic cache_read, OpenAI cached_tokens) */
   cacheRead?: number
+}
+
+/** Live context-window state — emitted after every model turn. */
+export interface ContextInfo {
+  /** approx tokens the NEXT request will carry (last input + output) */
+  used: number
+  /** the model's context window (0 = unknown) */
+  limit: number
+  turn: number
+  /** true when `used` is a local estimate (provider reported no usage) */
+  estimated?: boolean
 }
 
 export type AgentPhase =
@@ -248,6 +262,8 @@ export interface AgentEvents {
   onNotify?(level: 'info' | 'warn' | 'error', message: string): void
   /** per-turn token usage — the UI can display live cost */
   onUsage?(usage: TokenUsage & { turn: number }): void
+  /** per-turn context-window state — powers the usage bar + compact prompts */
+  onContext?(info: ContextInfo): void
 }
 
 export interface MemoryFact {
@@ -303,6 +319,15 @@ export interface TagentConfig {
   }
   /** caveman mode — ultra-terse replies + compact prompts. Big token saver. */
   caveman?: boolean
+  /** context-window management: live usage bar + deterministic compaction.
+  *  Compaction is 100% local code — no AI call, no invented content. */
+  compact?: {
+    /** warn + offer compaction when context use crosses this % of the
+    *  model's window (default 80; 0 disables the prompt, /compact stays) */
+    threshold?: number
+    /** approx tokens of recent turns kept verbatim when compacting (default 10000) */
+    keepTokens?: number
+  }
   /** start the web GUI together with `tagent start` (default false — the TUI
    *  is the primary interface; the GUI is a companion). Overridable per run
    *  with --web-gui / --no-web-gui. Stored in the GLOBAL config. */

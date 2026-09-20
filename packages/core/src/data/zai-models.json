@@ -16,24 +16,28 @@
       "id": "glm-4.7",
       "label": "GLM-4.7 (default)",
       "vision": true,
+      "contextWindow": 131072,
       "description": "flagship — best overall quality"
     },
     {
       "id": "glm-4.6",
       "label": "GLM-4.6",
       "vision": true,
+      "contextWindow": 131072,
       "description": "previous flagship — solid all-rounder"
     },
     {
       "id": "glm-4.5v",
       "label": "GLM-4.5V",
       "vision": true,
+      "contextWindow": 131072,
       "description": "vision-optimized — strongest at image understanding"
     },
     {
       "id": "glm-4.5-air",
       "label": "GLM-4.5 Air",
       "vision": false,
+      "contextWindow": 131072,
       "description": "lightweight — fastest + cheapest"
     }
   ]

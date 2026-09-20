@@ -41,7 +41,10 @@ export interface CatalogEntry {
   models: ModelInfo[]
 }
 
-const m = (id: string, label: string, p: string): ModelInfo => ({ id, label, provider: p })
+const m = (id: string, label: string, p: string, contextWindow?: number): ModelInfo => ({
+  id, label, provider: p,
+  ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
+})
 
 export const CATALOG: CatalogEntry[] = [
   /* ---------------- big three ---------------- */
@@ -51,11 +54,11 @@ export const CATALOG: CatalogEntry[] = [
     docsUrl: 'https://platform.openai.com/api-keys',
     envVars: ['OPENAI_API_KEY'], needsKey: true, listable: true, popular: true,
     models: [
-      m('gpt-5', 'GPT-5', 'openai'),
-      m('gpt-5-mini', 'GPT-5 Mini', 'openai'),
-      m('gpt-4.1', 'GPT-4.1', 'openai'),
-      m('gpt-4o', 'GPT-4o', 'openai'),
-      m('o3', 'o3 (reasoning)', 'openai'),
+      m('gpt-5', 'GPT-5', 'openai', 272_000),
+      m('gpt-5-mini', 'GPT-5 Mini', 'openai', 272_000),
+      m('gpt-4.1', 'GPT-4.1', 'openai', 1_000_000),
+      m('gpt-4o', 'GPT-4o', 'openai', 128_000),
+      m('o3', 'o3 (reasoning)', 'openai', 200_000),
     ],
   },
   {
@@ -64,11 +67,11 @@ export const CATALOG: CatalogEntry[] = [
     docsUrl: 'https://console.anthropic.com/settings/keys',
     envVars: ['ANTHROPIC_API_KEY'], needsKey: true, listable: true, popular: true,
     models: [
-      m('claude-sonnet-4-5', 'Claude Sonnet 4.5', 'anthropic'),
-      m('claude-haiku-4-5', 'Claude Haiku 4.5', 'anthropic'),
-      m('claude-opus-4-1', 'Claude Opus 4.1', 'anthropic'),
-      m('claude-3-7-sonnet-latest', 'Claude 3.7 Sonnet', 'anthropic'),
-      m('claude-3-5-haiku-latest', 'Claude 3.5 Haiku (fast)', 'anthropic'),
+      m('claude-sonnet-4-5', 'Claude Sonnet 4.5', 'anthropic', 200_000),
+      m('claude-haiku-4-5', 'Claude Haiku 4.5', 'anthropic', 200_000),
+      m('claude-opus-4-1', 'Claude Opus 4.1', 'anthropic', 200_000),
+      m('claude-3-7-sonnet-latest', 'Claude 3.7 Sonnet', 'anthropic', 200_000),
+      m('claude-3-5-haiku-latest', 'Claude 3.5 Haiku (fast)', 'anthropic', 200_000),
     ],
   },
   {
@@ -78,9 +81,9 @@ export const CATALOG: CatalogEntry[] = [
     envVars: ['GEMINI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'GOOGLE_API_KEY'],
     needsKey: true, listable: true, popular: true,
     models: [
-      m('gemini-2.5-pro', 'Gemini 2.5 Pro', 'google'),
-      m('gemini-2.5-flash', 'Gemini 2.5 Flash', 'google'),
-      m('gemini-2.0-flash', 'Gemini 2.0 Flash', 'google'),
+      m('gemini-2.5-pro', 'Gemini 2.5 Pro', 'google', 1_000_000),
+      m('gemini-2.5-flash', 'Gemini 2.5 Flash', 'google', 1_000_000),
+      m('gemini-2.0-flash', 'Gemini 2.0 Flash', 'google', 1_000_000),
     ],
   },
 
@@ -332,9 +335,9 @@ export const CATALOG: CatalogEntry[] = [
     docsUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
     envVars: ['ZHIPU_API_KEY', 'GLM_API_KEY'], needsKey: true, listable: true, popular: true,
     models: [
-      m('glm-4.6', 'GLM-4.6', 'zhipu'),
-      m('glm-4.5-air', 'GLM-4.5 Air', 'zhipu'),
-      m('glm-4.5v', 'GLM-4.5V (vision)', 'zhipu'),
+      m('glm-4.6', 'GLM-4.6', 'zhipu', 131_072),
+      m('glm-4.5-air', 'GLM-4.5 Air', 'zhipu', 131_072),
+      m('glm-4.5v', 'GLM-4.5V (vision)', 'zhipu', 131_072),
     ],
   },
   {
@@ -343,8 +346,8 @@ export const CATALOG: CatalogEntry[] = [
     docsUrl: 'https://z.ai/manage-apikey/apikey',
     envVars: ['ZAI_API_KEY'], needsKey: true, listable: true,
     models: [
-      m('glm-4.6', 'GLM-4.6 (Z.ai)', 'zai-api'),
-      m('glm-4.5-air', 'GLM-4.5 Air (Z.ai)', 'zai-api'),
+      m('glm-4.6', 'GLM-4.6 (Z.ai)', 'zai-api', 131_072),
+      m('glm-4.5-air', 'GLM-4.5 Air (Z.ai)', 'zai-api', 131_072),
     ],
   },
   {

@@ -181,6 +181,53 @@ ok(stashShow.includes('// local edit'), 'index.ts edits preserved in the stash',
 ok(cloneIndex.includes('// upstream change 0.14.0') && !cloneIndex.includes('// local edit'), 'working tree is the clean updated file')
 ok(git(DECOY, 'rev-parse', 'HEAD') === DECOY_HEAD, 'decoy untouched again')
 
+/* ---------------- scenario D: unmerged index (the "bun.lock: needs merge" live failure) ---------------- */
+console.log('\nscenario D — stuck conflicted merge blocks even `git stash`:')
+// the owner's exact NEW failure: a merge was started, conflicted, and left
+// unmerged — `git stash push -u` dies with "bun.lock: needs merge / could not
+// write index" and `git pull` refuses with "you have unmerged files".
+const NEW3 = '0.15.0'
+setVersion(ORIGIN, NEW3)
+fs.writeFileSync(path.join(ORIGIN, 'CONFLICT.txt'), 'upstream version\n')
+git(ORIGIN, 'add', '-A'); git(ORIGIN, 'commit', '-qm', `chore: marker v${NEW3} + add/add conflict file`)
+fs.writeFileSync(FEED, JSON.stringify({ version: NEW3, date: '2026-09-20', notes: 'test feed 3', url: 'https://x' }))
+// local commit adding the SAME path with different content → AA conflict
+fs.writeFileSync(path.join(CLONE, 'CONFLICT.txt'), 'local version\n')
+git(CLONE, 'add', '-A'); git(CLONE, 'commit', '-qm', 'chore: local add/add conflict file')
+git(CLONE, 'fetch', 'origin')
+const doomedMerge = sh(`git -C ${CLONE} merge origin/main`)
+ok(doomedMerge.code !== 0, 'fixture: the merge conflicts (add/add)', doomedMerge.out)
+const unmergedBefore = sh(`git -C ${CLONE} ls-files --unmerged`)
+ok(unmergedBefore.out.includes('CONFLICT.txt'), 'fixture: unmerged index entries exist', unmergedBefore.out)
+const stashBlocked = sh(`git -C ${CLONE} stash push -u -m x`)
+ok(stashBlocked.code !== 0, 'fixture: plain `git stash` refuses (needs merge)', stashBlocked.out)
+// user data must survive: seed ~/.tagent before the update
+const HOME_TAGENT = path.join(CHILD_ENV.HOME!, '.tagent')
+fs.mkdirSync(HOME_TAGENT, { recursive: true })
+fs.writeFileSync(path.join(HOME_TAGENT, 'credentials.json'), JSON.stringify({ v: 1, creds: { github: 'ghp_test' } }))
+fs.writeFileSync(path.join(HOME_TAGENT, 'config.json'), JSON.stringify({ version: 1, defaultProvider: 'zai', mcp: { servers: { x: { command: 'npx' } } } }))
+const D = sh('tagent update --yes', { cwd: DECOY, env: CHILD_ENV })
+const cloneVer3 = /CURRENT_VERSION\s*=\s*'([^']+)'/.exec(
+  fs.readFileSync(path.join(CLONE, 'packages/core/src/version.ts'), 'utf8'),
+)?.[1]
+const Dstatus = sh(`git -C ${CLONE} status --porcelain`)
+ok(D.code === 0, 'update exits 0 despite the stuck merge', `code=${D.code}\n${D.out}`)
+ok(/recovering/.test(D.out), 'tells the user the conflict state was recovered', D.out)
+ok(cloneVer3 === NEW3, `clone bumped ${NEW2} → ${cloneVer3}`, `clone version.ts = ${cloneVer3}`)
+ok(Dstatus.out.trim() === '', 'checkout left clean after the update', Dstatus.out)
+ok(/diverged/.test(D.out), 'divergence handled by fetch+reset (reflog note printed)', D.out)
+ok(D.out.includes('user data backed up'), 'announces the ~/.tagent backup', D.out)
+const backupDirs = fs.existsSync(path.join(HOME_TAGENT, 'backups'))
+  ? fs.readdirSync(path.join(HOME_TAGENT, 'backups')).filter((d) => d.startsWith('update-'))
+  : []
+ok(backupDirs.length >= 1, 'backup dir created under ~/.tagent/backups', backupDirs.join(','))
+const lastBackup = backupDirs.sort().at(-1)!
+const backedUp = fs.readdirSync(path.join(HOME_TAGENT, 'backups', lastBackup))
+ok(backedUp.includes('credentials.json') && backedUp.includes('config.json'), 'auth + mcp config are in the backup', backedUp.join(','))
+ok(fs.existsSync(path.join(HOME_TAGENT, 'credentials.json')), 'credentials.json still in place after the update')
+ok(fs.readFileSync(path.join(HOME_TAGENT, 'credentials.json'), 'utf8').includes('ghp_test'), 'credential content intact')
+ok(git(DECOY, 'rev-parse', 'HEAD') === DECOY_HEAD, 'decoy untouched (again)')
+
 /* ---------------- report ---------------- */
 console.log(`\nupdater-source tests: ${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

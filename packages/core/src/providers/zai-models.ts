@@ -27,6 +27,8 @@ export interface ZaiModelEntry {
   label?: string
   vision?: boolean
   description?: string
+  /** approx context window in tokens — feeds the live context bar */
+  contextWindow?: number
 }
 
 /** top-level shape of zai-models.json */
@@ -47,6 +49,7 @@ export const EMBEDDED_ZAI_MODELS: ModelInfo[] = ((EMBEDDED as unknown as ZaiMode
     provider: PROVIDER,
     ...(m.vision === undefined ? {} : { vision: m.vision }),
     ...(m.description ? { description: m.description } : {}),
+    ...(typeof m.contextWindow === 'number' && m.contextWindow > 0 ? { contextWindow: m.contextWindow } : {}),
   }))
 
 function fromRaw(entries: ZaiModelEntry[]): ModelInfo[] {
@@ -58,6 +61,7 @@ function fromRaw(entries: ZaiModelEntry[]): ModelInfo[] {
       provider: PROVIDER,
       ...(m.vision === undefined ? {} : { vision: m.vision }),
       ...(m.description ? { description: m.description } : {}),
+      ...(typeof m.contextWindow === 'number' && m.contextWindow > 0 ? { contextWindow: m.contextWindow } : {}),
     }))
 }
 
@@ -86,6 +90,7 @@ function mergeModels(base: ModelInfo[], incoming: ZaiModelEntry[]): ModelInfo[] 
       provider: PROVIDER,
       ...(e.vision === undefined ? {} : { vision: e.vision }),
       ...(e.description ? { description: e.description } : {}),
+      ...(typeof e.contextWindow === 'number' && e.contextWindow > 0 ? { contextWindow: e.contextWindow } : {}),
     }
     if (idx >= 0) out[idx] = norm
     else out.push(norm)

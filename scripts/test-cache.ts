@@ -225,7 +225,7 @@ console.log('\n9) Context compaction — old tool results become stubs')
     async complete() { return '' },
     async completeStream(req: any) {
       const msgs = req.messages.map((x: any) => x.content).join('')
-      ;(fakeProvider as any).sawCompact = msgs.includes('[older tool results compacted')
+      ;(fakeProvider as any).sawCompact = msgs.includes('[older tool results — output elided]')
       ;(fakeProvider as any).sawRaw = msgs.includes('x'.repeat(500))
       return { text: 'ok done' }
     },

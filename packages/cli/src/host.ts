@@ -54,11 +54,18 @@ import {
   describeChain,
   diagnosticsCommand,
   runDiagnostics,
+  compactSession as compactMessages,
+  modelContextWindow,
+  estimateMessageTokens,
+  renderContextBar,
+  contextPct,
+  fmtTokens as fmtTokensCore,
   type RelayEntry,
   type AgentEvents,
   type AskFormRequest,
   type AskFormResponse,
   type ChatMessage,
+  type ContextInfo,
   type LoopSummary,
   type PermissionDecision,
   type PermissionRequest,
@@ -117,6 +124,10 @@ export class AgentHost {
   private mcp = new McpManager()
   /** a plan-mode run that presented a plan — awaiting approve/reject */
   private lastPlan: { sessionId: string; plan: string } | undefined
+  /** last context-window state (per-turn, from the loop) — powers the bar */
+  private lastContext: ContextInfo | undefined
+  /** one compact-prompt per crossing — don't nag every turn */
+  private ctxWarned = false
 
   constructor(opts: HostOptions) {
     this.root = path.resolve(opts.workspaceRoot)
@@ -259,6 +270,8 @@ export class AgentHost {
     const s = this.sessions.load(id)
     if (s) {
       this.session = s
+      this.lastContext = undefined
+      this.ctxWarned = false
       this.bus.emit('session:active', s)
       this.bus.emit('todos:update', { sessionId: s.id, todos: s.todos })
     }
@@ -335,6 +348,7 @@ export class AgentHost {
     }
 
     const events = this.makeEvents(s.id)
+    this.ctxWarned = false
     const plugins = await loadPlugins(this.root, this.cfg)
     await emitPluginEvent(plugins, 'onSessionStart', { session: s, config: this.cfg })
     // MCP servers: lazy-connect on the first run of the workspace
@@ -411,6 +425,73 @@ export class AgentHost {
     return !!this.loop
   }
 
+  /* ------------------------------------------------------------------ */
+  /* context window — the usage bar + deterministic compaction          */
+  /* ------------------------------------------------------------------ */
+
+  /** current context state for display (last provider usage, else estimate) */
+  contextInfo(): { used: number; limit: number; pct: number; bar: string; estimated: boolean } {
+    const limit = modelContextWindow(this.cfg.defaultProvider, this.cfg.defaultModel, this.root)
+    const fromLoop = this.lastContext
+    const used =
+      fromLoop?.used ??
+      (this.session?.messages ?? []).reduce(
+        (n, m) => n + estimateMessageTokens(m.content, m.toolCalls),
+        0,
+      )
+    return {
+      used,
+      limit,
+      pct: contextPct(used, limit),
+      bar: renderContextBar(used, limit, 10),
+      estimated: !fromLoop,
+    }
+  }
+
+  /** compact threshold from config (default 80; 0 = never prompt) */
+  compactThreshold(): number {
+    const t = this.cfg.compact?.threshold
+    return typeof t === 'number' && t >= 0 && t <= 100 ? t : 80
+  }
+
+  /**
+   * Deterministic memory compaction: old turns → one digest message,
+   * recent turns verbatim. No AI call, nothing invented — pure structure.
+   * `/compact [keep-tokens]` and the 80% prompt both land here.
+   */
+  compactSession(keepTokens?: number):
+    | { ok: true; before: number; after: number; removedMessages: number; keptMessages: number }
+    | { ok: false; error: string } {
+    const s = this.session
+    if (!s) return { ok: false, error: 'no active session' }
+    if (this.running) return { ok: false, error: 'a run is in progress — /stop it first' }
+    const r = compactMessages(s, {
+      keepTokens: keepTokens ?? this.cfg.compact?.keepTokens ?? 10_000,
+    })
+    if (!r) {
+      return {
+        ok: false,
+        error:
+          'nothing worth compacting — the session is already tight (recent turns are kept verbatim by design)',
+      }
+    }
+    this.sessions.save(s)
+    this.bus.emit('session:active', s)
+    this.ctxWarned = false
+    this.lastContext = undefined // bar falls back to a fresh (small) estimate
+    this.bus.emit('notify', {
+      level: 'info',
+      message: `memory compacted: ~${fmtTokensCore(r.before)} → ~${fmtTokensCore(r.after)} tokens · ${r.removedMessages} old turn(s) became a digest — no AI was used`,
+    })
+    return {
+      ok: true,
+      before: r.before,
+      after: r.after,
+      removedMessages: r.removedMessages,
+      keptMessages: r.keptMessages,
+    }
+  }
+
   private makeEvents(runSessionId: string): AgentEvents {
     return {
       onStatus: (phase, detail) => this.bus.emit('agent:status', { phase, detail }),
@@ -423,6 +504,26 @@ export class AgentHost {
       onSubagent: (info) => this.bus.emit('subagent:update', { sessionId: runSessionId, info }),
       onFilesChanged: (paths) => this.bus.emit('files:changed', { paths }),
       onNotify: (level, message) => this.bus.emit('notify', { level, message }),
+      onContext: (info) => {
+        this.lastContext = info
+        this.bus.emit('context:update', { sessionId: runSessionId, ...info })
+        // the 80% prompt — once per crossing, never per turn
+        const threshold = this.compactThreshold()
+        const pct = info.limit > 0 ? Math.round((info.used / info.limit) * 100) : 0
+        if (threshold > 0 && pct >= threshold) {
+          if (!this.ctxWarned) {
+            this.ctxWarned = true
+            this.bus.emit('notify', {
+              level: 'warn',
+              message:
+                `context window ${pct}% used (~${fmtTokensCore(info.used)}/${fmtTokensCore(info.limit)} tokens) — ` +
+                '/compact will summarize old turns and free space (deterministic, no AI call)',
+            })
+          }
+        } else if (this.ctxWarned && pct < threshold - 15) {
+          this.ctxWarned = false // dropped well below the line — a new crossing may prompt again
+        }
+      },
       onPermission: (req: PermissionRequest) =>
         new Promise<PermissionDecision>((resolve) => {
           const timer = setTimeout(() => {
@@ -539,7 +640,7 @@ export class AgentHost {
   stats() {
     const dir = workspaceDir(this.root) + '/sessions'
     const sessions = fs.existsSync(dir) ? fs.readdirSync(dir).length : 0
-    return { sessions, snapshots: listCheckpoints(this.root).length }
+    return { sessions, snapshots: listCheckpoints(this.root).length, context: this.contextInfo() }
   }
 
   /* ------------------------------------------------------------------ */

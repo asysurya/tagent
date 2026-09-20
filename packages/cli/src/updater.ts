@@ -16,7 +16,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { spawnSync } from 'node:child_process'
-import { CURRENT_VERSION, checkUpdate, type UpdateInfo } from '@tagent/core'
+import { CURRENT_VERSION, GLOBAL_DIR, checkUpdate, type UpdateInfo } from '@tagent/core'
 import { confirm } from './select'
 
 const REPO = 'asysurya/tagent'
@@ -76,10 +76,108 @@ function run(cmd: string, args: string[], cwd?: string): { ok: boolean; output: 
   return { ok: r.status === 0, output: `${r.stdout ?? ''}${r.stderr ?? ''}`.trim().slice(0, 400) }
 }
 
+/** critical user-data files in ~/.tagent — snapshotted before EVERY update
+ *  (auth, MCP, model catalog, workspace registry, memory instructions). */
+const USER_DATA_FILES = [
+  'config.json', 'credentials.json', 'models.json', 'workspaces.json',
+  'zai-models.json', 'AGENTS.md', 'relays.json', 'plugins.json',
+]
+
+/** Snapshot the user's ~/.tagent data before an update. Never throws. */
+function backupUserData(): string | undefined {
+  try {
+    if (!fs.existsSync(GLOBAL_DIR)) return undefined
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19)
+    const dest = path.join(GLOBAL_DIR, 'backups', `update-${stamp}`)
+    let copied = 0
+    for (const f of USER_DATA_FILES) {
+      const src = path.join(GLOBAL_DIR, f)
+      if (fs.existsSync(src) && fs.statSync(src).isFile()) {
+        fs.mkdirSync(dest, { recursive: true })
+        fs.copyFileSync(src, path.join(dest, f))
+        copied++
+      }
+    }
+    // prune — keep the 5 newest backup dirs
+    try {
+      const backupsDir = path.join(GLOBAL_DIR, 'backups')
+      const dirs = fs.readdirSync(backupsDir).filter((d) => d.startsWith('update-')).sort()
+      for (const d of dirs.slice(0, Math.max(0, dirs.length - 5))) {
+        fs.rmSync(path.join(backupsDir, d), { recursive: true, force: true })
+      }
+    } catch { /* pruning is best-effort */ }
+    return copied > 0 ? dest : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** After an update: restore any critical file that vanished (belt+suspenders). */
+function verifyUserData(backupDir?: string): string[] {
+  const restored: string[] = []
+  if (!backupDir) return restored
+  try {
+    for (const f of USER_DATA_FILES) {
+      const now = path.join(GLOBAL_DIR, f)
+      const bak = path.join(backupDir, f)
+      if (fs.existsSync(bak) && !fs.existsSync(now)) {
+        fs.copyFileSync(bak, now)
+        restored.push(f)
+      }
+    }
+  } catch { /* never block the update on the safety net */ }
+  return restored
+}
+
+/**
+ * Clear a stuck in-progress merge/rebase or an unmerged index — the state
+ * that makes BOTH `git stash` and `git pull` refuse to run ("bun.lock: needs
+ * merge" / "you have unmerged files"). The working tree is preserved:
+ * abort restores the pre-operation state, and a mixed reset only rewrites
+ * the index. Whatever is left gets stashed by the caller right after.
+ */
+function recoverGitState(repoDir: string): void {
+  const hasUnmerged = () => {
+    const r = run('git', ['ls-files', '--unmerged'], repoDir)
+    return r.ok && r.output.trim().length > 0
+  }
+  if (!fs.existsSync(path.join(repoDir, '.git', 'MERGE_HEAD')) &&
+      !fs.existsSync(path.join(repoDir, '.git', 'rebase-merge')) &&
+      !fs.existsSync(path.join(repoDir, '.git', 'rebase-apply')) &&
+      !fs.existsSync(path.join(repoDir, '.git', 'CHERRY_PICK_HEAD')) &&
+      !fs.existsSync(path.join(repoDir, '.git', 'REVERT_HEAD')) &&
+      !hasUnmerged()) return
+  console.log(`  ⚠ unfinished merge/conflict state found — recovering (your files are kept)…`)
+  for (const args of [['merge', '--abort'], ['rebase', '--abort'], ['cherry-pick', '--abort'], ['revert', '--abort']]) {
+    const r = run('git', args, repoDir)
+    if (r.ok) break
+  }
+  if (hasUnmerged()) {
+    // conflict markers remain staged — clear the index only (files untouched)
+    run('git', ['reset', 'HEAD', '--', '.'], repoDir)
+  }
+  if (hasUnmerged()) {
+    console.log(`  ⚠ index still unmerged — run: git -C "${repoDir}" reset HEAD -- .`)
+  }
+}
+
 /** do the actual update for the detected install kind */
 export async function selfUpdate(info: UpdateInfo): Promise<boolean> {
   const kind = detectInstallKind()
   console.log(`  ⬆ updating ${kind} install → v${info.latest}…`)
+  // user data first — auth, MCP, model catalog, memory. Whatever happens
+  // below, ~/.tagent is recoverable from the snapshot.
+  const backupDir = backupUserData()
+  if (backupDir) console.log(`  ✔ user data backed up — ${path.join(path.basename(path.dirname(backupDir)), path.basename(backupDir))} (auth · mcp · config)`)
+  try {
+    return await selfUpdateInner(info, kind)
+  } finally {
+    const restored = verifyUserData(backupDir)
+    for (const f of restored) console.log(`  ✔ restored ${f} from the pre-update backup`)
+  }
+}
+
+async function selfUpdateInner(info: UpdateInfo, kind: InstallKind): Promise<boolean> {
   if (kind === 'binary') {
     const dl = downloadAsset(info.latest)
     if (!dl.ok || !dl.file) {
@@ -132,8 +230,9 @@ export async function selfUpdate(info: UpdateInfo): Promise<boolean> {
     return false
   }
   // a dirty tree (bun.lock churn from a different bun version, local edits)
-  // is the #1 reason `git pull` refuses to run — stash it instead of failing.
-  // A stash is recoverable, so nothing is ever lost.
+  // is the #1 reason `git pull` refuses to run — but an UNRESOLVED MERGE is
+  // the #0: it blocks even the stash. Clear it first, then stash.
+  recoverGitState(repoDir)
   let stashed = false
   const dirty = run('git', ['status', '--porcelain'], repoDir)
   if (dirty.ok && dirty.output) {
@@ -152,11 +251,28 @@ export async function selfUpdate(info: UpdateInfo): Promise<boolean> {
       return false
     }
   }
-  const r = run('git', ['pull', '--ff-only'], repoDir)
+  let r = run('git', ['pull', '--ff-only'], repoDir)
+  if (!r.ok) {
+    // ff-only refused — usually local commits that diverged from main.
+    // Fetch + hard reset to the upstream tip: the update can never block on
+    // divergence again. Local commits stay recoverable via reflog.
+    const fetch = run('git', ['fetch', 'origin'], repoDir)
+    if (fetch.ok) {
+      const branch = (run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], repoDir).output || 'main').trim()
+      const up = run('git', ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], repoDir)
+      const target = up.ok && up.output ? up.output.trim() : `origin/${branch}`
+      const reset = run('git', ['reset', '--hard', target], repoDir)
+      if (reset.ok) {
+        console.log(`  ⚠ branch had diverged — reset to ${target} (recover local commits: git -C "${repoDir}" reflog)`)
+        r = { ok: true, output: '' }
+      }
+    }
+  }
   if (!r.ok) {
     console.log(`  ✗ ${r.output || 'git pull failed'} in ${repoDir}`)
     if (stashed) console.log(`    your local changes are safe in the stash: git -C "${repoDir}" stash list`)
     console.log(`    fix conflicts/divergence manually, or re-clone from https://github.com/${REPO}`)
+    console.log(`    note: ~/.tagent (auth, mcp, config) is untouched by re-cloning — it lives in your home dir`)
     return false
   }
   if (stashed) {

@@ -49,6 +49,7 @@ export function defaultConfig(): TagentConfig {
     nativeTools: true,
     worklog: { enabled: true },
     caveman: false,
+    compact: { threshold: 80, keepTokens: 10_000 },
     webGui: false,
     mcp: { servers: {} },
     cache: { fileState: true, web: true, webTtlMin: 10 },
