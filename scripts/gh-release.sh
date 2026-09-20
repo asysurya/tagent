@@ -49,37 +49,35 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v0.10.0 — the app TUI (full-screen, shortcut-driven) + tagent uninstall
+## v0.11.0 — tagent-native gets the app TUI (the Windows 7 build grows up)
 
-`tagent start` now takes over the terminal like a real application — the
-opencode/Claude Code feel: alternate screen, boxed input editor, scrollable
-transcript, and shortcuts so you rarely type. Plus a proper uninstaller.
+The native Go build for Windows 7/8/32-bit machines stopped being a plain
+line-by-line log. It now opens the same opencode-style full-screen app as
+the main CLI — and it does it through the classic Windows Console API, so
+it renders with real colors on a genuine Windows 7 conhost that has never
+heard of ANSI escape sequences.
 
-### The app TUI
-- **Full-screen takeover**: header (workspace · mode chip · model · session), scrollable transcript, live status ticker, boxed input editor, shortcut footer
-- **ctrl+x quick-action menu**: Continue, Explain last change, Run diagnostics, Summarize session, switch plan/build, new session, session list, pick model, undo checkpoint, skills, subagents, fallback chain, MCP, plugins, share — arrows + enter
-- **Slash palette**: type `/` — every command with descriptions, filter as you type, tab completes
-- **@file mentions**: type `@` for a workspace file list, tab inserts — the file rides into the next message
-- **Input editor**: cursor movement, history ↑/↓, alt+enter newline, ctrl+u / ctrl+w
-- **Overlays**: permission prompts and plan approvals render as bordered arrow-key dialogs; tool calls are compact one-line cards with status + duration
-- **Scroll**: pgup/pgdn with a new-lines indicator; CJK-aware wrapping survives resize
-- **ctrl+c** interrupts the run; twice exits — and the terminal is ALWAYS restored, even on crashes
-- Falls back to the classic readline TUI on tiny terminals/pipes automatically; `--classic` forces it
+### The native app TUI
+- **Full-screen takeover** via the Windows Console API (`SetConsoleTextAttribute` + `WriteConsoleW` + `ReadConsoleInputW`) — zero ANSI, conhost-safe, and the Win7-safe glyph set (square box corners, ASCII spinner) is selected automatically
+- **Same layout language as the main CLI**: header (workspace · NATIVE chip · model · fallback chain · spinner/token counter), scrollable transcript, live status row, boxed multi-line editor with reverse-video cursor, shortcut footer
+- **ctrl+x menu** — arrow keys over typing: switch model, view the fallback chain, diagnostics, clear transcript, help, exit
+- **Slash palette**: type `/` — commands with descriptions, filter as you type, tab completes, enter runs
+- **esc interrupts** the running task through Go context cancellation — in-flight HTTP calls and bash commands stop, the conversation stays usable
+- **Multi-turn conversations** (context kept between tasks), token usage in the header, ↑/↓ history recall, pgup/pgdn scrollback with a new-lines indicator
+- CJK-aware word wrapping, terminal resize handling, and automatic fallback to a plain line-mode REPL when stdin/stdout is not a terminal
+- `/model` saves your pick straight into `~/.tagent/config.json` (unknown fields preserved — the file stays compatible with the full CLI)
+- Still **zero dependencies**: pure Go stdlib, one static ~5 MB file per platform
 
-### tagent uninstall
-- One command removes everything: the `tagent` command, `~/.tagent` (config, credentials, caches), the bun link registration, the source repo and/or the downloaded binary
-- The repo and binary each ask separately — they may contain your work; per-workspace `.tagent/` folders are reported, not touched
-
-### Fixes since v0.9.0
-- Source installs under proot/UserLAnd: `bun install --linker=hoisted` + post-install verification with a self-healing retry (the "Cannot find package 'socket.io'" trap)
-- Scripts and `bin/tagent` now carry their executable bit in git — `git pull` no longer breaks the command
+### Also in this release
+- `tagent-native diag` subcommand for terminal-free checks
+- The main CLI (Bun) is unchanged — it just carries version 0.11.0
 
 ---
 
 ## tagent-native — Windows 7 / 8 / 32-bit
 
 A from-scratch Go port (pure stdlib, `CGO_ENABLED=0`): true static single-file
-executables around 10-15 MB. Same agent DNA — REPL + one-shot `run`,
+executables around 5 MB. Same agent DNA — the full-screen app TUI + one-shot `run`,
 OpenAI-compatible providers (zai / openrouter / groq / openai built in, plus any
 custom endpoint), the multi-key fallback chain, five workspace-jailed tools
 (read / write / edit / list / bash) — no runtime, no installer.
@@ -97,12 +95,12 @@ embedded inside the binary and self-extracts on first run).
 
 | File | Platform |
 | --- | --- |
-| `tagent-v0.10.0-windows-x64.exe` | Windows 10+ (64-bit) |
-| `tagent-v0.10.0-windows-arm64.exe` | Windows 10+ on ARM |
-| `tagent-v0.10.0-linux-x64` | Linux (glibc, 64-bit) |
-| `tagent-v0.10.0-linux-arm64` | Linux ARM64 (incl. Raspberry Pi 5) |
-| `tagent-v0.10.0-macos-x64` | macOS Intel |
-| `tagent-v0.10.0-macos-arm64` | macOS Apple silicon |
+| `tagent-v0.11.0-windows-x64.exe` | Windows 10+ (64-bit) |
+| `tagent-v0.11.0-windows-arm64.exe` | Windows 10+ on ARM |
+| `tagent-v0.11.0-linux-x64` | Linux (glibc, 64-bit) |
+| `tagent-v0.11.0-linux-arm64` | Linux ARM64 (incl. Raspberry Pi 5) |
+| `tagent-v0.11.0-macos-x64` | macOS Intel |
+| `tagent-v0.11.0-macos-arm64` | macOS Apple silicon |
 
 Native edition (Go):
 
@@ -123,16 +121,16 @@ edition automatically.
 - The full builds run the full stack natively: TUI, daemon, web GUI, relay, the 40-provider catalog
 - The bash tool uses Git for Windows' bash.exe (auto-detected, override with `TAGENT_BASH`); `tagent doctor` tells you if it's missing
 - Home/config/sessions live in the real Windows user profile (`~/.tagent` via USERPROFILE)
-- Windows 7/8/32-bit: use the native edition above
+- Windows 7/8/32-bit: use the native edition above — now with the same app TUI
 
 **Install / upgrade**
 
 ```bash
 # Linux / macOS
-chmod +x tagent-v0.10.0-linux-x64 && ./tagent-v0.10.0-linux-x64 doctor
+chmod +x tagent-v0.11.0-linux-x64 && ./tagent-v0.11.0-linux-x64 doctor
 # Windows (PowerShell) — the .exe runs as-is
-.\tagent-v0.10.0-windows-x64.exe doctor
-# Windows 7 / 32-bit — native edition
+.\tagent-v0.11.0-windows-x64.exe doctor
+# Windows 7 / 32-bit — native edition (just run it: the app TUI opens)
 .\tagent-native-windows-386.exe
 ```
 
@@ -148,7 +146,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — the app TUI: full-screen, shortcut-driven · tagent uninstall" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — tagent-native gets the app TUI: full-screen on Windows 7" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")
