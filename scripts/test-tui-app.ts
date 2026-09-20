@@ -81,12 +81,13 @@ class FakeHost {
   responded: { id: string; approved: boolean; remember?: string }[] = []
   interrupted = 0
   approvedPlan: boolean | undefined
+  saved: Record<string, unknown>[] = []
   cfg = {
     version: 1,
     defaultProvider: 'zai',
     defaultModel: 'glm-4.7',
-    apiKeys: {},
-    customProviders: [],
+    apiKeys: {} as Record<string, string>,
+    customProviders: [] as { id: string; label: string; baseUrl: string; apiKey?: string; models: string[]; kind?: string }[],
     permissions: { defaultMode: 'ask', tools: {} },
     tools: { bash: true, browser: true },
     autoCheckpoint: true,
@@ -123,6 +124,26 @@ class FakeHost {
       this.session.mode = mode
       this.bus.emit('session:active', this.session)
     }
+  }
+  async pluginCommandRun(cmd: string): Promise<{ ok: boolean; error?: string }> {
+    return { ok: false, error: `no plugin command named ${cmd}` }
+  }
+  settingsSave(patch: Record<string, unknown>): { ok: true; config: unknown } {
+    this.saved.push(patch)
+    if (patch.defaultProvider) this.cfg.defaultProvider = patch.defaultProvider as string
+    if (patch.defaultModel) this.cfg.defaultModel = patch.defaultModel as string
+    const cp = patch.customProvider as { id: string } | undefined
+    if (cp) {
+      const i = this.cfg.customProviders.findIndex((p) => p.id === cp.id)
+      if (i >= 0) this.cfg.customProviders[i] = cp as never
+      else this.cfg.customProviders.push(cp as never)
+    }
+    const rm = patch.customProviderRemove as string | undefined
+    if (rm) this.cfg.customProviders = this.cfg.customProviders.filter((p) => p.id !== rm)
+    return { ok: true, config: this.sanitizeConfig() }
+  }
+  async providersRefresh(): Promise<{ ok: boolean; updated: string[]; failed: string[] }> {
+    return { ok: true, updated: [], failed: [] }
   }
   async chatSend(text: string): Promise<unknown> {
     this.sent.push({ text })
@@ -569,6 +590,209 @@ test('tool cards: one-line compact render with status icon + duration', async ()
   if (!plain.includes('ls -la')) throw new Error('tool card missing summarized input')
   if (!plain.includes('1.5s')) throw new Error('tool card missing duration')
   if (!plain.includes('file-a')) throw new Error('tool card missing output tail')
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+test('palette: enter RUNS the arrow-selected command (/, down, enter → /new flow opens)', async () => {
+  const host = new FakeHost(tmp)
+  const { app } = await started(host)
+  app.feed('/')
+  app.feed('\x1b[B') // cursor: help → new
+  await sleep(30)
+  app.feed('\r')
+  await sleep(60)
+  app.renderNow()
+  const plain = app.lastFrame.map(stripAnsi).join('\n')
+  if (plain.includes('unknown command')) throw new Error(`palette enter submitted the raw token: ${plain.split('\n').filter((l) => l.includes('unknown')).join(' | ')}`)
+  if (!plain.includes('build') || !plain.includes('plan')) throw new Error('palette enter did not open the /new mode picker')
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+test('palette: enter applies the selection and keeps the args (/mo zzz + down + enter → /model zzz)', async () => {
+  const host = new FakeHost(tmp)
+  const { app } = await started(host)
+  app.feed('/mo zzz')
+  await sleep(20)
+  app.feed('\x1b[B') // mode → model
+  await sleep(20)
+  app.feed('\r')
+  await sleep(60)
+  app.renderNow()
+  const plain = app.lastFrame.map(stripAnsi).join('\n')
+  if (plain.includes('unknown command')) throw new Error('palette enter submitted the raw partial token')
+  if (!plain.includes('nothing matches "zzz"')) throw new Error(`/model zzz search output missing — got: ${plain.split('\n').filter((l) => l.trim()).slice(-5).join(' | ')}`)
+  if (!plain.includes('/model custom')) throw new Error('no-match message should point at /model custom')
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+test('palette: typing more resets the cursor to the top item', async () => {
+  const host = new FakeHost(tmp)
+  const { app } = await started(host)
+  app.feed('/')
+  app.feed('\x1b[B\x1b[B') // move down twice
+  await sleep(20)
+  app.feed('he') // token changes → cursor resets
+  await sleep(20)
+  app.renderNow()
+  const rows = app.lastFrame.map(stripAnsi).filter((r) => r.includes('❯'))
+  if (!rows.some((r) => r.includes('/help'))) throw new Error('cursor did not reset to /help after token change')
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+test('borders: editor box has side rails and the palette is boxed', async () => {
+  const host = new FakeHost(tmp)
+  const { app } = await started(host)
+  app.feed('/')
+  app.renderNow()
+  const rows = app.lastFrame.map(stripAnsi)
+  if (!rows.some((r) => r.includes('╭─ commands'))) throw new Error('palette not boxed (top rule missing)')
+  if (!rows.some((r) => r.includes('╰─') && r.includes('enter run'))) throw new Error('palette box footer rule missing')
+  // the editor sits at the bottom of the frame — every row between its ╭…╮ and ╰…╯ rails
+  const topIdx = rows.findIndex((r) => r.startsWith('╭') && r.includes('─'))
+  const bottomIdx = rows.findIndex((r) => r.startsWith('╰') && r.includes('─'))
+  if (topIdx === -1 || bottomIdx === -1 || bottomIdx <= topIdx) throw new Error(`editor box rails not found (top=${topIdx} bottom=${bottomIdx})`)
+  for (let i = topIdx + 1; i < bottomIdx; i++) {
+    const r = rows[i]
+    if (!r.startsWith('│') || !r.trimEnd().endsWith('│')) throw new Error(`editor content row ${i} lacks side rails: ${JSON.stringify(r)}`)
+    const w = vis(r)
+    if (w > 80) throw new Error(`editor row ${i} overflows: ${w}`)
+  }
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+test('model picker: custom CTA pinned, empty search says "no matches" + keeps the CTA', async () => {
+  const host = new FakeHost(tmp)
+  const { app } = await started(host)
+  void (app as unknown as { modelPickerFlow: () => Promise<void> }).modelPickerFlow()
+  await sleep(40)
+  app.renderNow()
+  let plain = app.lastFrame.map(stripAnsi).join('\n')
+  if (!plain.includes('+ add custom provider')) throw new Error('provider picker missing the custom CTA')
+  if (!plain.includes('type to search')) throw new Error('search hint missing in footer')
+  // 'q' as the first search letter must NOT close the picker
+  app.feed('q')
+  await sleep(30)
+  app.renderNow()
+  plain = app.lastFrame.map(stripAnsi).join('\n')
+  if (plain.includes('cancelled')) throw new Error("'q' closed the filterable picker")
+  if (!plain.includes('/q▌')) throw new Error("typing 'q' did not start a search filter")
+  // search that matches nothing → no-matches state + CTA still visible
+  app.feed('\x7f')
+  app.feed('zzz')
+  await sleep(30)
+  app.renderNow()
+  plain = app.lastFrame.map(stripAnsi).join('\n')
+  if (!plain.includes('no matches for "zzz"')) throw new Error('no-matches state missing')
+  if (!plain.includes('+ add custom provider')) throw new Error('custom CTA did not survive the empty search')
+  // esc cancels
+  app.feed('\x1b')
+  await sleep(40)
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+test('model picker: custom model id CTA saves any id on a custom provider', async () => {
+  const host = new FakeHost(tmp)
+  host.cfg.customProviders = [{ id: 'my-ollama', label: 'My Ollama', baseUrl: 'http://localhost:11434/v1', apiKey: 'k', models: ['llama3.1'] }]
+  const { app } = await started(host)
+  void (app as unknown as { modelPickerFlow: () => Promise<void> }).modelPickerFlow()
+  await sleep(40)
+  // search filters down to the custom provider (cursor resets to 0)
+  app.feed('my ollama')
+  await sleep(30)
+  app.feed('\r')
+  await sleep(40)
+  app.renderNow()
+  let plain = app.lastFrame.map(stripAnsi).join('\n')
+  if (!plain.includes('llama3.1')) throw new Error('model picker for the custom provider missing its models')
+  if (!plain.includes('+ custom model id')) throw new Error('custom model CTA missing')
+  // empty search → CTA still there
+  app.feed('zzz')
+  await sleep(30)
+  app.renderNow()
+  plain = app.lastFrame.map(stripAnsi).join('\n')
+  if (!plain.includes('no matches for "zzz"')) throw new Error('model no-matches state missing')
+  if (!plain.includes('+ custom model id')) throw new Error('custom model CTA did not survive the empty search')
+  // clear filter, move down to the CTA, enter, type the id
+  app.feed('\x7f\x7f\x7f')
+  await sleep(20)
+  app.feed('\x1b[B')
+  await sleep(20)
+  app.feed('\r')
+  await sleep(40)
+  app.feed('llama-x\r')
+  await sleep(60)
+  const save = host.saved.find((p) => p.defaultModel === 'llama-x')
+  if (!save) throw new Error(`custom model id not saved: ${JSON.stringify(host.saved)}`)
+  if (save.defaultProvider !== 'my-ollama') throw new Error(`wrong provider: ${JSON.stringify(save)}`)
+  const cpPatch = host.saved.find((p) => p.customProvider) as { customProvider?: { models?: string[] } } | undefined
+  if (!cpPatch?.customProvider?.models?.includes('llama-x')) throw new Error(`custom provider model list not updated: ${JSON.stringify(cpPatch)}`)
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+test('custom provider wizard: /model custom saves the endpoint and selects it', async () => {
+  const host = new FakeHost(tmp)
+  const { app } = await started(host)
+  void (app as unknown as { customProviderWizard: () => Promise<void> }).customProviderWizard()
+  await sleep(40)
+  app.renderNow()
+  let plain = app.lastFrame.map(stripAnsi).join('\n')
+  if (!plain.includes('add a custom provider')) throw new Error('wizard banner missing')
+  app.feed('My Ollama\r')
+  await sleep(30)
+  app.feed('http://localhost:11434/v1\r')
+  await sleep(30)
+  app.feed('\r') // api kind: openai-compatible (cursor 0)
+  await sleep(30)
+  app.feed('\r') // api key: skip
+  await sleep(30)
+  app.feed('llama3.1, qwen2.5\r')
+  await sleep(60)
+  app.renderNow()
+  plain = app.lastFrame.map(stripAnsi).join('\n')
+  const cp = host.saved.find((p) => p.customProvider)?.customProvider as {
+    id: string; label: string; baseUrl: string; kind: string; models: string[]
+  } | undefined
+  if (!cp) throw new Error(`custom provider not saved: ${JSON.stringify(host.saved)}`)
+  if (cp.id !== 'my-ollama' || cp.label !== 'My Ollama') throw new Error(`bad id/label: ${JSON.stringify(cp)}`)
+  if (cp.baseUrl !== 'http://localhost:11434/v1' || cp.kind !== 'openai') throw new Error(`bad baseUrl/kind: ${JSON.stringify(cp)}`)
+  if (JSON.stringify(cp.models) !== JSON.stringify(['llama3.1', 'qwen2.5'])) throw new Error(`bad models: ${JSON.stringify(cp.models)}`)
+  const sel = host.saved.find((p) => p.defaultProvider === 'my-ollama')
+  if (!sel || sel.defaultModel !== 'llama3.1') throw new Error(`not selected as default: ${JSON.stringify(host.saved.filter((p) => p.defaultProvider))}`)
+  if (!plain.includes('saved and selected')) throw new Error('success line missing')
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+test('palette renders inside a box with the command descriptions aligned', async () => {
+  const host = new FakeHost(tmp)
+  const { app } = await started(host)
+  app.feed('/se')
+  await sleep(20)
+  app.renderNow()
+  const rows = app.lastFrame.map(stripAnsi)
+  const topIdx = rows.findIndex((r) => r.includes('╭─ commands'))
+  if (topIdx === -1) throw new Error('boxed palette missing')
+  const item = rows.slice(topIdx).find((r) => r.includes('/sessions'))
+  if (!item) throw new Error('/sessions not offered for token "se"')
+  for (const [i, row] of app.lastFrame.entries()) {
+    const w = vis(row)
+    if (w > 80) throw new Error(`palette row ${i} overflows: ${w} — ${JSON.stringify(stripAnsi(row))}`)
+  }
   app.exit()
   await sleep(10)
   app.destroy()

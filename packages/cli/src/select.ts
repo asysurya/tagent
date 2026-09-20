@@ -18,6 +18,8 @@ export interface SelectItem<T = string> {
   value: T
   /** shown but not enterable (e.g. provider without a key) */
   disabled?: boolean
+  /** pinned — always visible even when the filter matches nothing ("+ add custom…" CTAs) */
+  keep?: boolean
 }
 
 export interface SelectOptions<T> {
@@ -97,9 +99,20 @@ class Menu<T> {
   private get filtered(): SelectItem<T>[] {
     if (!this.filter) return this.opts.items
     const q = this.filter.toLowerCase()
+    const hay = (it: SelectItem<T>) => (it.label + ' ' + (it.hint ?? '') + ' ' + (it.detail ?? '')).toLowerCase()
+    const matched = this.opts.items.filter((it) => hay(it).includes(q))
+    // pinned CTAs survive every filter — "search found nothing? add a custom one"
+    const kept = this.opts.items.filter((it) => it.keep && !matched.includes(it))
+    return [...matched, ...kept]
+  }
+
+  /** how many items actually match (CTAs excluded) — drives the empty state */
+  private get matchCount(): number {
+    if (!this.filter) return this.opts.items.length
+    const q = this.filter.toLowerCase()
     return this.opts.items.filter((it) =>
-      (it.label + ' ' + (it.hint ?? '') + ' ' + (it.detail ?? '')).toLowerCase().includes(q),
-    )
+      !it.keep && (it.label + ' ' + (it.hint ?? '') + ' ' + (it.detail ?? '')).toLowerCase().includes(q),
+    ).length
   }
 
   show(): Promise<T | undefined> {
@@ -125,7 +138,8 @@ class Menu<T> {
   private key(s: string) {
     if (this.done) return
     if (s === '\x03') return this.finish(undefined) // Ctrl+C cancels, never exits
-    if (s === '\x1b' || s === 'q') {
+    if (s === '\x1b' || (s === 'q' && !this.filterable)) {
+      // 'q' quits ONLY on non-searchable menus — in a searchable one it's a letter
       if (this.filter) {
         this.filter = ''
         this.cursor = 0
@@ -210,6 +224,10 @@ class Menu<T> {
     const rows: string[] = []
     if (this.opts.title) rows.push(bold(cyan(`  ${this.opts.title}`)))
     if (this.filter) rows.push(dim(`  /${this.filter}▌`))
+    if (this.filter && this.matchCount === 0) {
+      rows.push(dim(`  no matches for "${this.filter}"`))
+      rows.push(dim('  nothing built in matches — a custom one probably will'))
+    }
 
     const max = this.maxVisible
     const win = this.visible.slice(this.offset, this.offset + max)

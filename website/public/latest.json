@@ -1,6 +1,6 @@
 {
-  "version": "0.11.0",
+  "version": "0.12.0",
   "date": "2026-09-20",
-  "notes": "The native Go build for Windows 7/8/32-bit machines now opens the same opencode-style full-screen app as the main CLI: header bar, boxed editor with a real cursor, transcript scrollback, ctrl+x menu, slash palette, colors via the Windows Console API (no ANSI needed — genuine conhost-safe), esc-to-interrupt and multi-turn conversations with token counting. The main CLI is unchanged underneath this release.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.11.0"
+  "notes": "The app TUI gets the fixes that matter: pressing Enter on a highlighted slash command now RUNS it (the palette used to silently submit the raw \"/\" you typed), every box gained proper side rails, the slash palette and @file completion render in real framed boxes, and typing a search that finds nothing now points you at the custom-provider wizard instead of a dead end. New: /model custom adds any OpenAI-compatible, Anthropic or Google endpoint right from the terminal — ollama, lm studio, openrouter, self-hosted gateways.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.12.0"
 }

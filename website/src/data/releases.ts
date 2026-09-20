@@ -17,9 +17,46 @@ export interface Release {
   stable?: boolean
 }
 
-export const LATEST = '0.11.0'
+export const LATEST = '0.12.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.12.0',
+    date: '2026-09-20',
+    title: 'The TUI polish pass — palette Enter works, custom providers in-terminal, cleaner borders',
+    summary:
+      'The app TUI gets the fixes that matter: pressing Enter on a highlighted slash command now RUNS it (the palette used to silently submit the raw "/" you typed), every box gained proper side rails, the slash palette and @file completion render in real framed boxes, and typing a search that finds nothing now points you at the custom-provider wizard instead of a dead end. New: /model custom adds any OpenAI-compatible, Anthropic or Google endpoint right from the terminal — ollama, lm studio, openrouter, self-hosted gateways.',
+    stable: true,
+    sections: [
+      {
+        name: 'Fixed — the things that were in the way',
+        items: [
+          'Slash palette Enter: selecting a command with the arrow keys and hitting Enter now runs the highlighted command and keeps any arguments you already typed (/mo zzz + ↓ + enter → /model zzz). Previously the selection was never applied and Enter submitted the raw "/" — the palette "did nothing"',
+          'Palette cursor resets to the top when you keep typing after moving through the list',
+          "Typing 'q' no longer instantly closes a searchable picker — it is a search letter like any other (quick-quit stays for non-searchable menus)",
+          'Editor box borders: content rows now carry the left/right │ rails that match the top and bottom rules — no more open-sided box',
+          'The slash palette and @file completion render inside proper framed boxes with title and footer rules, aligned columns and a scroll indicator',
+        ],
+      },
+      {
+        name: 'Custom providers — /model custom',
+        items: [
+          'Interactive wizard: label, base url, api kind (OpenAI-compatible · Anthropic · Google), optional api key, model ids — saved and selected in one pass',
+          'The provider picker leads with "+ add custom provider…" and the model picker ends with "+ custom model id…" for endpoints whose list is missing or wrong',
+          'Both CTAs stay pinned while you search, and an empty search shows "no matches for \\"xyz\\" — nothing built in matches, a custom one probably will" with the CTA one enter away',
+          'Custom model ids are remembered per custom provider, so the picker learns them',
+          'Same wizard in the classic readline TUI (tagent start --classic), including the keep-pinned CTAs and the no-matches state',
+        ],
+      },
+      {
+        name: 'Also in this release',
+        items: [
+          '31 automated app-TUI tests (up from 22) covering palette Enter behavior, border rails, pinned CTAs, empty-search states and the full custom-provider wizard',
+          'Pre-existing test marker bug fixed in the select PTY harness (expected Python-style True for a JS boolean)',
+        ],
+      },
+    ],
+  },
   {
     version: '0.11.0',
     date: '2026-09-20',

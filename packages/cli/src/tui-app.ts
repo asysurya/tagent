@@ -521,6 +521,8 @@ export interface PickItem<T> {
   disabled?: boolean
   /** section header in the ctrl+x menu */
   group?: string
+  /** pinned — always visible even when the filter matches nothing ("+ add custom…" CTAs) */
+  keep?: boolean
 }
 
 type Overlay =
@@ -556,7 +558,7 @@ const SLASH_COMMANDS: { name: string; desc: string }[] = [
   { name: 'relay', desc: 'live share [id|list|stop <code>]' },
   { name: 'timeline', desc: 'subagent runs of this session' },
   { name: 'mode', desc: 'build ↔ plan' },
-  { name: 'model', desc: 'pick a model' },
+  { name: 'model', desc: 'pick a model [custom]' },
   { name: 'caveman', desc: 'terse replies [on|off]' },
   { name: 'worklog', desc: 'journal + todos [on|off]' },
   { name: 'webgui', desc: 'start gui with tagent [on|off]' },
@@ -595,7 +597,7 @@ const SLASH_COMMANDS: { name: string; desc: string }[] = [
 const HELP_ROWS: [string, string][] = [
   ['sessions · new [plan] · open <id> · delete <id>', 'session management'],
   ['share [id] · relay [id|list|stop <code>] · timeline', 'HTML export · live share · subagent runs'],
-  ['mode [plan|build] · model [p[:m]]', 'planning vs build · pick llm (arrow keys)'],
+  ['mode [plan|build] · model [p[:m]|custom]', 'planning vs build · pick llm · add your own endpoint'],
   ['agents · mcp · plugins', 'custom subagents · MCP servers · plugin manager'],
   ['fallback [add <p> <m> [key]|rm <n>|clear]', 'provider failover chain'],
   ['diag [cmd|off|test]', 'auto-diagnostics gate (lint/typecheck loop)'],
@@ -690,6 +692,7 @@ export class TuiApp {
   private edScroll = 0
   private overlayStack: Overlay[] = []
   private palCursor = 0
+  private palToken: string | null = null
   private palDismissed: string | null = null
   private fileCursor = 0
   private fileDismissed: string | null = null
@@ -1405,9 +1408,18 @@ export class TuiApp {
 
   private slashPalette(): { token: string; items: { name: string; desc: string }[] } | undefined {
     const first = this.editor.lines[0] ?? ''
-    if (!first.startsWith('/') || this.editor.lines.length > 1) return undefined
+    if (!first.startsWith('/') || this.editor.lines.length > 1) {
+      this.palToken = null
+      return undefined
+    }
     const token = first.split(' ')[0].slice(1)
     if (this.palDismissed === '/' + token) return undefined
+    // a fresh token (or a re-opened palette) restarts the cursor at the top —
+    // otherwise the selection lingers on an item that no longer exists
+    if (this.palToken !== token) {
+      this.palToken = token
+      this.palCursor = 0
+    }
     const items = SLASH_COMMANDS.filter((cmd) => cmd.name.startsWith(token))
     if (items.length === 0) return undefined
     return { token, items }
@@ -1418,14 +1430,16 @@ export class TuiApp {
     if (!pal) return this.submit()
     const sel = pal.items[Math.min(this.palCursor, pal.items.length - 1)]
     const first = this.editor.lines[0] ?? ''
-    let line = first
-    if (sel && '/' + pal.token !== first.split(' ')[0]) {
-      line = '/' + sel.name + first.slice(1 + pal.token.length)
-    }
-    const rest = this.editor.lines.slice(1).join('\n')
-    const text = (rest ? line + '\n' + rest : line).trim()
+    const firstWord = first.split(' ')[0]
+    const rest = first.slice(firstWord.length) // leading space + args, kept as typed
+    // ALWAYS apply the highlighted command — the user picked it with the arrows.
+    // (the old "already complete" check could never be true and made Enter a no-op)
+    const line = sel && firstWord !== '/' + sel.name ? '/' + sel.name + rest : first
+    const tail = this.editor.lines.slice(1).join('\n')
+    const text = (tail ? line + '\n' + tail : line).trim()
     this.editor.pushHistory(text)
     this.editor.clear()
+    this.palToken = null
     void this.handleLine(text)
   }
 
@@ -1590,7 +1604,18 @@ export class TuiApp {
   private listVisible(ov: Extract<Overlay, { kind: 'list' }>): PickItem<any>[] {
     if (!ov.filter) return ov.items
     const q = ov.filter.toLowerCase()
-    return ov.items.filter((it) => (it.label + ' ' + (it.hint ?? '') + ' ' + (it.detail ?? '')).toLowerCase().includes(q))
+    const hay = (it: PickItem<any>) => (it.label + ' ' + (it.hint ?? '') + ' ' + (it.detail ?? '')).toLowerCase()
+    const matched = ov.items.filter((it) => hay(it).includes(q))
+    // pinned CTAs survive every filter — "search found nothing? add a custom one"
+    const kept = ov.items.filter((it) => it.keep && !matched.includes(it))
+    return [...matched, ...kept]
+  }
+
+  /** how many items actually match the filter (CTAs excluded) — for the empty state */
+  private listMatchCount(ov: Extract<Overlay, { kind: 'list' }>): number {
+    if (!ov.filter) return ov.items.length
+    const q = ov.filter.toLowerCase()
+    return ov.items.filter((it) => !it.keep && (it.label + ' ' + (it.hint ?? '') + ' ' + (it.detail ?? '')).toLowerCase().includes(q)).length
   }
 
   private listMove(ov: Extract<Overlay, { kind: 'list' }>, delta: number): void {
@@ -1652,7 +1677,9 @@ export class TuiApp {
         return
       }
       case 'print': {
-        if (k.ch === 'q' && !ov.filter) return this.settle(ov, undefined)
+        // quick-quit ONLY on non-searchable lists — 'q' is a search letter
+        // (try typing "qwen" in a filterable picker otherwise…)
+        if (k.ch === 'q' && !ov.filter && !ov.filterable) return this.settle(ov, undefined)
         if (ov.filterable && k.ch.length > 0 && (k.ch.codePointAt(0) ?? 0) >= 0x20) {
           ov.filter += k.ch.toLowerCase()
           ov.cursor = 0
@@ -2231,6 +2258,8 @@ export class TuiApp {
         }
         // no arg → the interactive picker (providers, then models)
         if (!arg) return this.modelPickerFlow()
+        // /model custom → straight into the custom-provider wizard
+        if (arg === 'custom' || arg === 'add') return this.customProviderWizard()
         // "provider/model" (opencode style) or legacy "provider:model"
         const ref = parseModelRef(arg, host.cfg)
         if (ref) {
@@ -2256,7 +2285,9 @@ export class TuiApp {
         const infos = listProviderInfos(host.cfg)
         const provHits = infos.filter((p) => p.id.includes(q) || p.label.toLowerCase().includes(q))
         const modelHits = infos.flatMap((p) => p.models.filter((m) => m.id.toLowerCase().includes(q)).map((m) => ({ p, m })))
-        if (provHits.length + modelHits.length === 0) return this.println(red(`  nothing matches "${arg}" — /model to list everything`))
+        if (provHits.length + modelHits.length === 0) {
+          return this.println(red(`  nothing matches "${arg}" — /model to list everything · /model custom to add your own`))
+        }
         if (provHits.length + modelHits.length === 1) {
           const hit = provHits.length ? { provider: provHits[0].id, model: provHits[0].models[0]?.id } : { provider: modelHits[0].p.id, model: modelHits[0].m.id }
           if (!hit.model) return this.println(red(`  ${hit.provider} has no models — /model refresh`))
@@ -2657,9 +2688,13 @@ export class TuiApp {
     const ready = infos.filter((p) => !p.needsKey || p.hasKey)
     const locked = infos.filter((p) => p.needsKey && !p.hasKey)
     const provItems: PickItem<string>[] = [
+      {
+        label: '+ add custom provider…', hint: 'any endpoint', value: '__add_custom__', keep: true,
+        detail: 'OpenAI-compatible · Anthropic · Google — your base url, your models',
+      },
       ...ready.map((p) => ({
         label: p.label,
-        hint: `${!p.needsKey ? 'free' : 'key ✓'} · ${p.models.length} models`,
+        hint: `${!p.needsKey ? 'free' : 'key ✓'} · ${p.models.length} models${p.custom ? ' · custom' : ''}`,
         detail: `${p.id}${p.id === host.cfg.defaultProvider ? ' · current' : ''}`,
         value: p.id,
       })),
@@ -2671,8 +2706,13 @@ export class TuiApp {
       })),
     ]
     const cur = provItems.findIndex((i) => i.value === host.cfg.defaultProvider)
-    const provId = await this.pick(provItems, 'provider', { filterable: true, selected: cur >= 0 ? cur : 0 })
+    const provId = await this.pick(provItems, 'provider', {
+      filterable: true,
+      selected: Math.max(0, cur),
+      footer: 'type to search · esc cancel',
+    })
     if (!provId) return this.println(dim('  cancelled'))
+    if (provId === '__add_custom__') return this.customProviderWizard()
     const info = infos.find((p) => p.id === provId)
     if (!info) return this.println(red(`  unknown provider "${provId}"`))
     if (info.needsKey && !info.hasKey) {
@@ -2683,24 +2723,92 @@ export class TuiApp {
       host.settingsSave({ apiKey: { provider: provId, key } })
       this.println(green(`  ✔ key saved for ${provId}`))
     }
-    if (info.models.length === 0) {
+    if (info.models.length === 0 && !info.custom) {
       const wantRefresh = await this.askYesNo(`  no cached models for ${provId} — discover now?`, true)
       if (!wantRefresh) return this.println(dim('  cancelled — try /model refresh later'))
       this.println(dim('  discovering models…'))
       await host.providersRefresh()
       const again = listProviderInfos(host.cfg).find((p) => p.id === provId)
-      if (!again || again.models.length === 0) return this.println(red(`  discovery found nothing for ${provId}`))
+      if (!again || again.models.length === 0) return this.println(red(`  discovery found nothing for ${provId} — /model ${provId.split('/')[0]} <model-id> to set one by hand`))
       info.models = again.models
     }
     const mcur = info.models.findIndex((m) => m.id === host.cfg.defaultModel && provId === host.cfg.defaultProvider)
     const modelId = await this.pick(
-      info.models.map((m) => ({ label: m.id, hint: m.label, value: m.id })),
+      [
+        ...info.models.map((m) => ({ label: m.id, hint: m.label, value: m.id })),
+        {
+          label: '+ custom model id…', hint: 'type any id', value: '__custom_model__', keep: true,
+          detail: `for endpoints whose list is missing or wrong — saved as ${provId}/<id>`,
+        },
+      ],
       `${provId} — model`,
-      { filterable: true, selected: mcur >= 0 ? mcur : 0 },
+      { filterable: true, selected: Math.max(0, mcur), footer: 'type to search · esc cancel' },
     )
     if (!modelId) return this.println(dim('  cancelled'))
+    if (modelId === '__custom_model__') {
+      const custom = (await this.ask(`model id for ${provId} (e.g. llama3.1, gemini-2.0-flash)`))?.trim()
+      if (!custom) return this.println(dim('  cancelled'))
+      // persist into a custom provider's list so the picker learns it
+      const cp = host.cfg.customProviders?.find((p) => p.id === provId)
+      if (cp && !(cp.models ?? []).includes(custom)) {
+        host.settingsSave({ customProvider: { ...cp, models: [...(cp.models ?? []), custom] } })
+      }
+      host.settingsSave({ defaultProvider: provId, defaultModel: custom })
+      this.println(green(`  ✔ ${provId} · ${custom}`))
+      return
+    }
     host.settingsSave({ defaultProvider: provId, defaultModel: modelId })
     this.println(green(`  ✔ ${provId} · ${modelId}`))
+  }
+
+  /**
+   * The custom-provider wizard — any OpenAI-compatible / Anthropic / Google
+   * endpoint (ollama, lm studio, openrouter proxies, self-hosted gateways…).
+   * Reachable from /model custom, the "+ add custom provider…" picker entry,
+   * and it stays visible when a picker search comes up empty.
+   */
+  private async customProviderWizard(): Promise<void> {
+    const host = this.host
+    this.println(bold('  add a custom provider'))
+    this.println(dim('    works with ollama, lm studio, openrouter, any /chat/completions endpoint'))
+    const label = (await this.ask('label — how it shows in lists (e.g. "My Ollama")'))?.trim()
+    if (!label) return this.println(dim('  cancelled'))
+    const baseUrl = (await this.ask('base url (e.g. http://localhost:11434/v1)'))?.trim()
+    if (!baseUrl) return this.println(dim('  cancelled — a base url is required'))
+    const kind = await this.pick<{ kind: 'openai' | 'anthropic' | 'google' }>(
+      [
+        { label: 'openai-compatible', hint: '/chat/completions — ollama · lm studio · vllm · most providers', value: { kind: 'openai' as const } },
+        { label: 'anthropic', hint: '/v1/messages — claude-style endpoints', value: { kind: 'anthropic' as const } },
+        { label: 'google', hint: 'gemini generateContent endpoints', value: { kind: 'google' as const } },
+      ],
+      'api kind',
+      { maxVisible: 3 },
+    )
+    if (!kind) return this.println(dim('  cancelled'))
+    const apiKey = (await this.askHidden('api key — enter to skip (local endpoints usually need none)')).trim()
+    const modelsRaw = (await this.ask('models, comma separated (e.g. llama3.1, qwen2.5)')) ?? ''
+    const models = modelsRaw.split(/[,\s]+/).map((m) => m.trim()).filter(Boolean)
+    // unique id: slug of the label, suffixed when taken
+    const base = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'custom'
+    const taken = new Set<string>([
+      ...(host.cfg.customProviders ?? []).map((p) => p.id),
+      ...listProviderInfos(host.cfg).map((p) => p.id),
+    ])
+    let id = base
+    for (let n = 2; taken.has(id); n++) id = `${base}-${n}`
+    const r = host.settingsSave({
+      customProvider: { id, label, baseUrl, kind: kind.kind, apiKey: apiKey || undefined, models },
+      defaultProvider: id,
+      defaultModel: models[0] ?? '',
+    })
+    if ('error' in r && r.error) return this.println(red(`  ✗ ${r.error}`))
+    this.println(green(`  ✔ ${label} (${id}) saved and selected`))
+    if (models[0]) {
+      this.println(green(`  ✔ ${id} · ${models[0]}`))
+    } else {
+      this.println(yellow(`  ⚠ no models yet — /model to pick one, or /model ${id} <model-id>`))
+    }
+    this.println(dim(`    manage later: /model · failover: /fallback add ${id} <model> [key]`))
   }
 
   /** mode switch banner — tells the user (and the next prompt run) what the job is */
@@ -3163,7 +3271,6 @@ export class TuiApp {
     const allSegs = this.editor.lines.map((l) => wrapSegments(l, innerW))
     const totalVis = allSegs.reduce((n, a) => n + a.length, 0)
     const contentRows = Math.min(6, Math.max(2, totalVis))
-
     // cursor visual position
     let rowsBefore = 0
     for (let i = 0; i < this.editor.row; i++) rowsBefore += allSegs[i]?.length ?? 0
@@ -3181,6 +3288,7 @@ export class TuiApp {
     const border = this.running ? orange : dim
     const top = border('╭' + '─'.repeat(innerW + 2) + '╮')
     const bottom = border('╰' + '─'.repeat(innerW + 2) + '╯')
+    const rail = (s: string) => `${border('│')} ${s} ${border('│')}`
     const rows: string[] = [top]
 
     let vis = 0
@@ -3192,9 +3300,9 @@ export class TuiApp {
         if (at < this.edScroll || at >= this.edScroll + contentRows) continue
         if (this.editor.isEmpty) {
           if (placeholderDone) {
-            rows.push(fitStyled('', innerW))
+            rows.push(rail(fitStyled('', innerW)))
           } else {
-            rows.push(fitStyled(dim(truncateStyled(EDITOR_PLACEHOLDER, innerW)), innerW))
+            rows.push(rail(fitStyled(dim(truncateStyled(EDITOR_PLACEHOLDER, innerW)), innerW)))
             placeholderDone = true
           }
           continue
@@ -3207,14 +3315,14 @@ export class TuiApp {
           const after = text.slice(pos.vcol + (at2 === ' ' && pos.vcol >= text.length ? 0 : at2.length))
           text = before + (USE_COLOR ? `\x1b[7m${at2}\x1b[27m` : at2) + after
         }
-        rows.push(fitStyled(text, innerW))
+        rows.push(rail(fitStyled(text, innerW)))
       }
     }
     while (rows.length < contentRows + 1) {
       if (this.editor.isEmpty && !placeholderDone) {
-        rows.push(fitStyled(dim(truncateStyled(EDITOR_PLACEHOLDER, innerW)), innerW))
+        rows.push(rail(fitStyled(dim(truncateStyled(EDITOR_PLACEHOLDER, innerW)), innerW)))
         placeholderDone = true
-      } else rows.push(fitStyled('', innerW))
+      } else rows.push(rail(fitStyled('', innerW)))
     }
     rows.push(bottom)
     return rows
@@ -3252,8 +3360,8 @@ export class TuiApp {
     }
   }
 
-  private box(title: string, inner: string[], footer: string, W: number): string[] {
-    const boxW = Math.min(W - 2, 78)
+  private box(title: string, inner: string[], footer: string, W: number, width = Math.min(W - 2, 78)): string[] {
+    const boxW = width
     const innerW = Math.max(4, boxW - 4)
     const rows: string[] = []
     const titleCut = truncateStyled(title, Math.max(1, innerW - 2))
@@ -3281,6 +3389,10 @@ export class TuiApp {
 
     const inner: string[] = []
     if (ov.filter) inner.push(dim(`/${ov.filter}▌`))
+    if (ov.filter && this.listMatchCount(ov) === 0) {
+      inner.push(dim(`  no matches for "${ov.filter}"`))
+      inner.push(dim('  nothing built in matches — a custom one probably will'))
+    }
     const win = vis.slice(ov.offset, ov.offset + maxVis)
     let lastGroup = ''
     for (let i = 0; i < win.length; i++) {
@@ -3303,7 +3415,7 @@ export class TuiApp {
       inner.push(dim(`  ${ov.offset > 0 ? '↑' : ' '} ${ov.offset + maxVis < vis.length ? '↓' : ' '} ${ov.offset + 1}–${Math.min(ov.offset + maxVis, vis.length)} of ${vis.length}`))
     }
     const footer = ov.footer ?? (ov.filterable ? 'type to filter' : '')
-    return this.box(ov.title, inner, `↑↓ move · enter select · esc cancel${footer ? ` · ${footer}` : ''}`, W)
+    return this.box(ov.title, inner, `${footer ? `↑↓ move · enter select · ${footer}` : '↑↓ move · enter select · esc cancel'}`, W)
   }
 
   private renderInputOverlay(ov: Extract<Overlay, { kind: 'input' }>, W: number): string[] {
@@ -3392,37 +3504,38 @@ export class TuiApp {
   /* ---------------- attached overlays (palette + @files) ---------------- */
 
   private renderPalette(pal: { token: string; items: { name: string; desc: string }[] }, W: number, viewportH: number): string[] {
-    const width = Math.min(W - 4, 64)
     if (this.palCursor >= pal.items.length) this.palCursor = Math.max(0, pal.items.length - 1)
-    const maxVis = Math.max(1, Math.min(8, viewportH - 3))
+    const maxVis = Math.max(1, Math.min(8, viewportH - 5))
     const off = Math.min(Math.max(0, this.palCursor - maxVis + 1), Math.max(0, pal.items.length - maxVis))
-    const rows: string[] = []
-    rows.push(' ' + dim(truncateStyled(`commands${' ' + '·'.repeat(Math.max(0, width - 9))}`, width)))
+    const inner: string[] = []
+    if (pal.token) inner.push(dim(`commands matching "${pal.token}"`))
     const win = pal.items.slice(off, off + maxVis)
     for (let i = 0; i < win.length; i++) {
       const isCursor = off + i === this.palCursor
       const mark = isCursor ? cyan('❯') : ' '
       const name = truncateStyled('/' + win[i].name, 18)
       const pad = ' '.repeat(Math.max(1, 18 - vwidthANSI(name)))
-      rows.push(truncateStyled(` ${mark} ${isCursor ? bold(cyan(name)) : name}${pad}${dim(win[i].desc)}`, width))
+      inner.push(`${mark} ${isCursor ? bold(cyan(name)) : name}${pad}${dim(win[i].desc)}`)
     }
-    rows.push(' ' + dim('↑↓ select · enter run · tab complete · esc hide'))
-    return rows.slice(0, viewportH)
+    if (pal.items.length > maxVis) {
+      inner.push(dim(`  ${off > 0 ? '↑' : ' '} ${off + maxVis < pal.items.length ? '↓' : ' '} ${off + 1}–${Math.min(off + maxVis, pal.items.length)} of ${pal.items.length}`))
+    }
+    const rows = this.box('commands', inner, '↑↓ select · enter run · tab complete · esc hide', W, Math.min(W - 2, 66))
+    return rows.slice(0, Math.max(1, viewportH))
   }
 
   private renderFileCompletion(file: { token: string; items: string[] }, W: number, viewportH: number): string[] {
-    const width = Math.min(W - 4, 64)
     if (this.fileCursor >= file.items.length) this.fileCursor = Math.max(0, file.items.length - 1)
-    const maxVis = Math.max(1, Math.min(8, viewportH - 3))
-    const rows: string[] = []
-    rows.push(' ' + dim(truncateStyled(`@ files — ${file.token}${' ' + '·'.repeat(Math.max(0, width - 14))}`, width)))
+    const maxVis = Math.max(1, Math.min(8, viewportH - 5))
+    const inner: string[] = []
     for (let i = 0; i < Math.min(file.items.length, maxVis); i++) {
       const isCursor = i === this.fileCursor
       const mark = isCursor ? cyan('❯') : ' '
-      rows.push(truncateStyled(` ${mark} ${isCursor ? bold(cyan(file.items[i])) : file.items[i]}`, width))
+      inner.push(`${mark} ${isCursor ? bold(cyan(file.items[i])) : file.items[i]}`)
     }
-    rows.push(' ' + dim('↑↓ select · enter/tab insert · esc hide'))
-    return rows.slice(0, viewportH)
+    if (file.items.length > maxVis) inner.push(dim(`  ↓ ${Math.min(file.items.length, maxVis)} of ${file.items.length}`))
+    const rows = this.box(`@ files — ${file.token}`, inner, '↑↓ select · enter/tab insert · esc hide', W, Math.min(W - 2, 66))
+    return rows.slice(0, Math.max(1, viewportH))
   }
 }
 

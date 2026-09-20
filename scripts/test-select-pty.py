@@ -43,6 +43,6 @@ while time.time() < deadline:
 text = out.decode('utf8', 'replace')
 tail = text.replace('\x1b', 'ESC')
 print(tail[-600:])
-for marker in ('CHOICE=cherry', 'CONFIRM=True'):
+for marker in ('CHOICE=cherry', 'CONFIRM=true'):
     print(f"{marker}: {'OK' if marker in text else 'MISSING'}")
-sys.exit(0 if ('CHOICE=cherry' in text and 'CONFIRM=True' in text) else 1)
+sys.exit(0 if ('CHOICE=cherry' in text and 'CONFIRM=true' in text) else 1)

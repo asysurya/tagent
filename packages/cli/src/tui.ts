@@ -603,7 +603,7 @@ export class Tui {
         const rows: [string, string][] = [
           ['sessions · new [plan] · open <id> · delete <id>', 'session management'],
           ['share [id] · relay [id|list|stop <code>] · timeline', 'HTML export · live share · subagent runs'],
-          ['mode [plan|build] · model [p[:m]]', 'planning vs build · pick llm (arrow keys)'],
+          ['mode [plan|build] · model [p[:m]|custom]', 'planning vs build · pick llm · add your own endpoint'],
           ['agents · mcp · plugins', 'custom subagents · MCP servers · plugin manager'],
           ['fallback [add <p> <m> [key]|rm <n>|clear]', 'provider failover chain'],
           ['diag [cmd|off|test]', 'auto-diagnostics gate (lint/typecheck loop)'],
@@ -789,6 +789,8 @@ export class Tui {
           this.println(dim('  interactive: /model · set: /model <provider>/<model> · search: /model <text>'))
           return
         }
+        // /model custom → straight into the custom-provider wizard
+        if (arg === 'custom' || arg === 'add') return this.customProviderWizard()
         // no arg → the interactive picker (providers, then models)
         if (!arg) {
           const infos = listProviderInfos(host.cfg)
@@ -796,9 +798,13 @@ export class Tui {
           const ready = infos.filter((p) => !p.needsKey || p.hasKey)
           const locked = infos.filter((p) => p.needsKey && !p.hasKey)
           const provItems: SelectItem<string>[] = [
+            {
+              label: '+ add custom provider…', hint: 'any endpoint', value: '__add_custom__', keep: true,
+              detail: 'OpenAI-compatible · Anthropic · Google — your base url, your models',
+            },
             ...ready.map((p) => ({
               label: p.label,
-              hint: `${!p.needsKey ? 'free' : 'key ✓'} · ${p.models.length} models`,
+              hint: `${!p.needsKey ? 'free' : 'key ✓'} · ${p.models.length} models${p.custom ? ' · custom' : ''}`,
               detail: `${p.id}${p.id === host.cfg.defaultProvider ? ' · current' : ''}`,
               value: p.id,
             })),
@@ -811,8 +817,11 @@ export class Tui {
             })),
           ]
           const cur = provItems.findIndex((i) => i.value === host.cfg.defaultProvider)
-          const provId = await this.pick(provItems, 'provider', { filterable: true, selected: cur >= 0 ? cur : 0 })
+          const provId = await this.pick(provItems, 'provider', {
+            filterable: true, selected: Math.max(0, cur), footer: 'type to search · esc cancel',
+          })
           if (!provId) return this.println(dim('  cancelled'))
+          if (provId === '__add_custom__') return this.customProviderWizard()
           const info = infos.find((p) => p.id === provId)
           if (!info) return this.println(red(`  unknown provider "${provId}"`))
           if (info.needsKey && !info.hasKey) {
@@ -823,22 +832,40 @@ export class Tui {
             host.settingsSave({ apiKey: { provider: provId, key } })
             this.println(green(`  ✔ key saved for ${provId}`))
           }
-          if (info.models.length === 0) {
+          if (info.models.length === 0 && !info.custom) {
             const wantRefresh = await this.askYesNo(`  no cached models for ${provId} — discover now?`, true)
             if (!wantRefresh) return this.println(dim('  cancelled — try /model refresh later'))
             this.println(dim('  discovering models…'))
             await host.providersRefresh()
             const again = listProviderInfos(host.cfg).find((p) => p.id === provId)
-            if (!again || again.models.length === 0) return this.println(red(`  discovery found nothing for ${provId}`))
+            if (!again || again.models.length === 0) return this.println(red(`  discovery found nothing for ${provId} — /model ${provId} <model-id> to set one by hand`))
             info.models = again.models
           }
           const mcur = info.models.findIndex((m) => m.id === host.cfg.defaultModel && provId === host.cfg.defaultProvider)
           const modelId = await this.pick(
-            info.models.map((m) => ({ label: m.id, hint: m.label, value: m.id })),
+            [
+              ...info.models.map((m) => ({ label: m.id, hint: m.label, value: m.id })),
+              {
+                label: '+ custom model id…', hint: 'type any id', value: '__custom_model__', keep: true,
+                detail: `for endpoints whose list is missing or wrong — saved as ${provId}/<id>`,
+              },
+            ],
             `${provId} — model`,
-            { filterable: true, selected: mcur >= 0 ? mcur : 0 },
+            { filterable: true, selected: Math.max(0, mcur), footer: 'type to search · esc cancel' },
           )
           if (!modelId) return this.println(dim('  cancelled'))
+          if (modelId === '__custom_model__') {
+            const custom = (await this.ask('  model id ❯ ')).trim()
+            if (!custom) return this.println(dim('  cancelled'))
+            // persist into a custom provider's list so the picker learns it
+            const cp = host.cfg.customProviders?.find((p) => p.id === provId)
+            if (cp && !(cp.models ?? []).includes(custom)) {
+              host.settingsSave({ customProvider: { ...cp, models: [...(cp.models ?? []), custom] } })
+            }
+            host.settingsSave({ defaultProvider: provId, defaultModel: custom })
+            this.println(green(`  ✔ ${provId} · ${custom}`))
+            return
+          }
           host.settingsSave({ defaultProvider: provId, defaultModel: modelId })
           this.println(green(`  ✔ ${provId} · ${modelId}`))
           return
@@ -868,7 +895,9 @@ export class Tui {
         const infos = listProviderInfos(host.cfg)
         const provHits = infos.filter((p) => p.id.includes(q) || p.label.toLowerCase().includes(q))
         const modelHits = infos.flatMap((p) => p.models.filter((m) => m.id.toLowerCase().includes(q)).map((m) => ({ p, m })))
-        if (provHits.length + modelHits.length === 0) return this.println(red(`  nothing matches "${arg}" — /model to list everything`))
+        if (provHits.length + modelHits.length === 0) {
+          return this.println(red(`  nothing matches "${arg}" — /model to list everything · /model custom to add your own`))
+        }
         if (provHits.length + modelHits.length === 1) {
           const hit = provHits.length ? { provider: provHits[0].id, model: provHits[0].models[0]?.id } : { provider: modelHits[0].p.id, model: modelHits[0].m.id }
           if (!hit.model) return this.println(red(`  ${hit.provider} has no models — /model refresh`))
@@ -1253,6 +1282,55 @@ export class Tui {
         this.println(dim(`  unknown command /${cmd} — /help`))
       }
     }
+  }
+
+  /**
+   * The custom-provider wizard — any OpenAI-compatible / Anthropic / Google
+   * endpoint (ollama, lm studio, openrouter, self-hosted gateways…).
+   * /model custom, or the "+ add custom provider…" picker entry.
+   */
+  private async customProviderWizard(): Promise<void> {
+    const host = this.host
+    this.println(bold('  add a custom provider'))
+    this.println(dim('    works with ollama, lm studio, openrouter, any /chat/completions endpoint'))
+    const label = (await this.ask('  label (e.g. "My Ollama") ❯ ')).trim()
+    if (!label) return this.println(dim('  cancelled'))
+    const baseUrl = (await this.ask('  base url (e.g. http://localhost:11434/v1) ❯ ')).trim()
+    if (!baseUrl) return this.println(dim('  cancelled — a base url is required'))
+    const kind = await this.pick(
+      [
+        { label: 'openai-compatible', hint: '/chat/completions — ollama · lm studio · vllm · most providers', value: 'openai' },
+        { label: 'anthropic', hint: '/v1/messages — claude-style endpoints', value: 'anthropic' },
+        { label: 'google', hint: 'gemini generateContent endpoints', value: 'google' },
+      ],
+      'api kind',
+      { maxVisible: 3 },
+    )
+    if (!kind) return this.println(dim('  cancelled'))
+    const apiKey = (await this.askHidden('  api key — enter to skip ❯ ')).trim()
+    const modelsRaw = await this.ask('  models, comma separated (e.g. llama3.1, qwen2.5) ❯ ')
+    const models = modelsRaw.split(/[,\s]+/).map((m) => m.trim()).filter(Boolean)
+    // unique id: slug of the label, suffixed when taken
+    const base = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'custom'
+    const taken = new Set<string>([
+      ...(host.cfg.customProviders ?? []).map((p) => p.id),
+      ...listProviderInfos(host.cfg).map((p) => p.id),
+    ])
+    let id = base
+    for (let n = 2; taken.has(id); n++) id = `${base}-${n}`
+    const r = host.settingsSave({
+      customProvider: { id, label, baseUrl, kind, apiKey: apiKey || undefined, models },
+      defaultProvider: id,
+      defaultModel: models[0] ?? '',
+    })
+    if ('error' in r && r.error) return this.println(red(`  ✗ ${r.error}`))
+    this.println(green(`  ✔ ${label} (${id}) saved and selected`))
+    if (models[0]) {
+      this.println(green(`  ✔ ${id} · ${models[0]}`))
+    } else {
+      this.println(yellow(`  ⚠ no models yet — /model to pick one, or /model ${id} <model-id>`))
+    }
+    this.println(dim(`    manage later: /model · failover: /fallback add ${id} <model> [key]`))
   }
 
   /* ---------------- MCP manager (/mcp) ---------------- */
