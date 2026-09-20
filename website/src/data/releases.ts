@@ -28,9 +28,44 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.13.1'
+export const LATEST = '0.14.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.14.0',
+    date: '2026-09-20',
+    title: 'GitHub login via web connect — the browser, not the terminal',
+    summary:
+      '`tagent auth` in a terminal now offers web connect: a one-time page opens in your browser (loopback only, one-time secret URL), you create a GitHub token with the repo scope pre-selected and paste it there — the terminal handles the rest. Works on UserLAnd/Termux too, where the printed URL opens in the phone\u2019s own browser. The paste and device flows stay; scripted pipes are unchanged.',
+    stable: true,
+    sections: [
+      {
+        name: 'Web connect',
+        items: [
+          '`tagent auth` in a terminal shows a picker — Web connect (recommended) or paste the PAT right there; `tagent auth --web` goes straight to the browser flow',
+          'the flow: a tiny HTTP server binds 127.0.0.1, the browser opens on a one-time secret URL, you create a token (repo scope pre-selected via the link) and paste it on the page — the CLI validates it against the GitHub API and prints the login',
+          'no typing in the terminal at all; nothing is sent anywhere except the GitHub API itself, and the server dies right after the login',
+          'headless boxes / UserLAnd / Termux: no opener? the URL is printed — on UserLAnd the phone browser reaches it (proot shares 127.0.0.1 with Android)',
+        ],
+      },
+      {
+        name: 'Security shape',
+        items: [
+          'loopback-only bind (never 0.0.0.0), random port, one-time 128-bit secret in the URL path — a drive-by page on some website can\u2019t hit an endpoint it can\u2019t name',
+          'Origin/Referer checked on submit (same host only); the page is served no-store; the endpoint is one-shot and refuses everything after a successful login',
+          'the token lands in ~/.tagent/credentials.json exactly like the paste flow (chmod 600, never in config.json or your repos)',
+        ],
+      },
+      {
+        name: 'Under the hood',
+        items: [
+          'packages/cli/src/web-auth.ts — a UI-free module (injectable validator) so the whole flow is testable hermetically over real HTTP: routing, CSRF gates, retry, one-shot teardown, timeout',
+          '19 hermetic tests in scripts/test-web-auth.ts + the auth/sync RPC suites re-run green',
+          'teardown choreography: close() stops new connections at once; lingering keep-alives are swept 2s later so a parked browser socket can never hold the CLI process hostage',
+        ],
+      },
+    ],
+  },
   {
     version: '0.13.1',
     date: '2026-09-20',

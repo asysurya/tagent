@@ -49,35 +49,37 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — updater honesty fix (source installs)
+## v__VER__ — `tagent auth` via web connect
 
-`tagent update` on a **source install** could lie: it pulled whatever repo
-happened to be the current directory, printed "✔ source updated", and left the
-running tagent untouched (caught from a live report — thanks!). v__VER__
-updates the checkout that actually provides the running code — and proves it.
+GitHub login without typing in the terminal: `tagent auth` now offers **web
+connect** — a one-time page opens in your browser, you create a token (the
+`repo` scope is pre-selected by the link) and paste it there; the CLI
+validates it against the GitHub API and prints your login. `tagent auth --web`
+jumps straight to it; pasting a PAT in the terminal and the device flow
+remain, and scripted pipes (`echo "$GH_TOKEN" | tagent auth`) are unchanged.
 
-### What changed
-- The updater walks up from the **running entry file** (through symlinks and
-  wrappers — `bun link`, `~/.local/bin/tagent`) to find the tagent checkout and
-  pulls **that**, never whatever repo you happen to be standing in
-- After pulling it reads the new version back and prints it — a stale branch
-  or a second install can no longer fake a successful update
-- When `which tagent` resolves somewhere else than the updated checkout, a
-  warning names both paths (old installs can be removed with `tagent uninstall`)
-- **UserLAnd / proot**: updates run `bun install --linker=hoisted` so socket.io
-  loads correctly afterwards
-- Not near a tagent checkout? The updater says so and prints the manual fix
-  instead of touching the repo you are in
+### How it works
+- a tiny HTTP server binds **127.0.0.1** (loopback only) and the browser
+  opens on a one-time secret URL
+- you create the token via the page's link — the `repo` scope is already
+  ticked, nothing to configure
+- the CLI validates the token against the GitHub API and stores it exactly
+  like the paste flow (`~/.tagent/credentials.json`, chmod 600, never in
+  config.json and never in your repos)
+- the server dies right after the login — it only ever existed for that page
 
-### Getting this fix when you're on v0.13.0 or older
-The old updater is the broken part — update once manually:
+### Security shape
+- loopback-only bind (never 0.0.0.0), random port, one-time 128-bit secret
+  in the URL path — a drive-by page on some website can't hit an endpoint
+  it can't name
+- Origin/Referer checked on submit (same host only); the page is served
+  `no-store`
+- one-shot endpoint — after a successful login it accepts nothing more
 
-```bash
-cd <your tagent clone> && git pull && bun install
-tagent --version   # -> 0.13.1
-```
-
-(or download a single-file binary below and skip source entirely)
+### UserLAnd / Termux / headless boxes
+No `xdg-open`? The URL is simply printed — on UserLAnd the phone's own
+browser reaches it (proot shares 127.0.0.1 with Android), so logging in
+works there too.
 
 ---
 
@@ -124,9 +126,9 @@ edition automatically.
 # Linux / macOS
 chmod +x tagent-v__VER__-linux-x64 && ./tagent-v__VER__-linux-x64 doctor
 # Windows (PowerShell) — the .exe runs as-is
-.	agent-v__VER__-windows-x64.exe doctor
+.\tagent-v__VER__-windows-x64.exe doctor
 # Windows 7 / 32-bit — native edition (just run it: the app TUI opens)
-.	agent-native-windows-386.exe
+.\tagent-native-windows-386.exe
 ```
 
 **Verify a download**
@@ -142,7 +144,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — updater honesty fix (source installs update the checkout that runs)" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — GitHub login via web connect" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")

@@ -1,6 +1,6 @@
 {
-  "version": "0.13.1",
+  "version": "0.14.0",
   "date": "2026-09-20",
-  "notes": "`tagent update` on a source install now updates the checkout that actually provides the running code (resolved through wrappers and symlinks), verifies the new version afterwards, warns when PATH resolves tagent elsewhere, and uses the hoisted linker on UserLAnd/proot. Before this fix, running the update from any other directory could pull the wrong repo and still print \"source updated\".",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.13.1"
+  "notes": "`tagent auth` in a terminal now offers web connect: a one-time page opens in your browser (loopback only, one-time secret URL), you create a GitHub token with the repo scope pre-selected and paste it there — the terminal handles the rest. Works on UserLAnd/Termux too, where the printed URL opens in the phone’s own browser. The paste and device flows stay; scripted pipes are unchanged.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.14.0"
 }
