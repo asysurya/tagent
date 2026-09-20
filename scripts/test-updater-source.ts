@@ -1,0 +1,155 @@
+/**
+ * test-updater-source.ts — verifies the v0.13.1 updater fix.
+ *
+ * The bug (reported live by the owner): `tagent update` on a *source* install
+ * printed "✔ source updated" but `tagent --version` stayed old. Root cause:
+ * v0.13.0 and earlier ran `git pull` in the CURRENT DIRECTORY — when the user
+ * runs the command from anywhere else (their own repo, a second clone), the
+ * wrong tree gets pulled (or the user's own repo!) and success is printed
+ * anyway.
+ *
+ * The fix: the updater resolves the checkout that provides the RUNNING code
+ * (realpath of argv[1] walked up to a tagent-shaped repo with our remote),
+ * pulls THAT, and verifies the version file afterwards. PATH shadowing is
+ * warned about.
+ *
+ * Scenarios:
+ *   A. stale clone on PATH via wrapper, cwd = unrelated repo → stale clone is
+ *      updated to the new version; the unrelated repo is untouched.
+ *   B. running from a non-tagent location → graceful "can't locate checkout",
+ *      the unrelated repo is untouched.
+ *
+ * Hermetic: git remotes are redirected with `url.<dir>.insteadOf`, the update
+ * feed is a local file:// latest.json, and a `bun` shim in PATH swallows
+ * `bun install` (no network, no node_modules churn).
+ */
+import { spawnSync } from 'node:child_process'
+import fs from 'node:fs'
+import path from 'node:path'
+import os from 'node:os'
+
+const ROOT = '/home/z/my-project'
+const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'tagent-upd-'))
+const ORIGIN = path.join(WORK, 'origin')
+const CLONE = path.join(WORK, 'tagent-A') // the stale install the user "runs"
+const DECOY = path.join(WORK, 'user-project') // the repo the user stands in
+const SHIM = path.join(WORK, 'shim')
+const FEED = path.join(WORK, 'latest.json')
+
+let pass = 0
+let fail = 0
+function ok(cond: boolean, label: string, extra = ''): void {
+  if (cond) { pass++; console.log(`  ok   ${label}`) }
+  else { fail++; console.log(`  FAIL ${label}${extra ? ` — ${extra}` : ''}`) }
+}
+function git(cwd: string, ...args: string[]): string {
+  const r = spawnSync('git', args, { cwd, encoding: 'utf8' })
+  if (r.status !== 0) throw new Error(`git ${args.join(' ')} in ${cwd}: ${r.stderr}`)
+  return r.stdout.trim()
+}
+function sh(cmd: string, opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): { code: number | null; out: string } {
+  const r = spawnSync('bash', ['-c', cmd], { encoding: 'utf8', ...opts })
+  return { code: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` }
+}
+
+/* ---------------- setup ---------------- */
+console.log('setting up fixtures (origin · stale clone · decoy repo)…')
+
+// 1. origin: a copy of this repo's history, plus two commits on top:
+//    STALE (v0.11.0 marker) ← FRESH (v0.13.0 marker)  [main]
+sh(`git clone -q ${ROOT} ${ORIGIN}`)
+const OLD = '0.11.0'
+const NEW = '0.13.0'
+function setVersion(dir: string, v: string): void {
+  const f = path.join(dir, 'packages/core/src/version.ts')
+  const src = fs.readFileSync(f, 'utf8')
+  fs.writeFileSync(f, src.replace(/CURRENT_VERSION = '[^']+'/, `CURRENT_VERSION = '${v}'`))
+}
+setVersion(ORIGIN, OLD)
+git(ORIGIN, 'add', '-A'); git(ORIGIN, 'commit', '-qm', 'chore: marker stale v0.11.0')
+setVersion(ORIGIN, NEW)
+git(ORIGIN, 'add', '-A'); git(ORIGIN, 'commit', '-qm', 'chore: marker fresh v0.13.0')
+const STALE_SHA = git(ORIGIN, 'rev-parse', 'HEAD~1')
+
+// 2. the stale clone the user actually runs (wrapper in PATH → bun <clone>)
+sh(`git clone -q ${ORIGIN} ${CLONE}`)
+git(CLONE, 'reset', '--hard', STALE_SHA) // main sits at STALE, tracks origin/main=FRESH
+// make the remote LOOK like github (what the updater requires) but redirect via insteadOf
+git(CLONE, 'remote', 'set-url', 'origin', 'https://github.com/asysurya/tagent.git')
+git(CLONE, 'config', `url.${ORIGIN}.insteadOf`, 'https://github.com/asysurya/tagent.git')
+// minimal node_modules so the clone can actually RUN: its own workspace core
+// (version = STALE) + socket.io borrowed from the real install
+fs.mkdirSync(path.join(CLONE, 'node_modules/@tagent'), { recursive: true })
+fs.symlinkSync('../../packages/core', path.join(CLONE, 'node_modules/@tagent/core'))
+try { fs.symlinkSync(path.join(ROOT, 'node_modules/socket.io'), path.join(CLONE, 'node_modules/socket.io')) } catch { /* optional */ }
+
+// 3. the decoy: the user's own repo they run the update from
+fs.mkdirSync(DECOY, { recursive: true })
+git(DECOY, 'init', '-q', '-b', 'main')
+fs.writeFileSync(path.join(DECOY, 'project.txt'), 'user data\n')
+git(DECOY, 'add', '-A'); git(DECOY, 'commit', '-qm', 'user project')
+const DECOY_HEAD = git(DECOY, 'rev-parse', 'HEAD')
+
+// 4. bun shim: swallow `bun install` (assert it's called), exec real bun otherwise
+fs.mkdirSync(SHIM, { recursive: true })
+fs.writeFileSync(path.join(SHIM, 'bun'), [
+  '#!/bin/sh',
+  'if [ "$1" = "install" ]; then echo "shim: bun install skipped"; exit 0; fi',
+  `exec ${process.execPath} "$@"`,
+  '',
+].join('\n'))
+fs.chmodSync(path.join(SHIM, 'bun'), 0o755)
+
+// 5. `tagent` wrapper in PATH → runs the STALE clone (argv[1] lands in the clone)
+const BIN = path.join(WORK, 'bin')
+fs.mkdirSync(BIN, { recursive: true })
+fs.writeFileSync(path.join(BIN, 'tagent'), [
+  '#!/bin/sh',
+  `exec bun ${path.join(CLONE, 'packages/cli/src/index.ts')} "$@"`,
+  '',
+].join('\n'))
+fs.chmodSync(path.join(BIN, 'tagent'), 0o755)
+
+// 6. local update feed
+fs.writeFileSync(FEED, JSON.stringify({ version: NEW, date: '2026-09-20', notes: 'test feed', url: 'https://x' }))
+
+const CHILD_ENV = {
+  ...process.env,
+  PATH: `${BIN}:${SHIM}:${process.env.PATH}`,
+  TAGENT_UPDATE_URL: `file://${FEED}`,
+  HOME: path.join(WORK, 'home'), // isolated ~/.tagent
+}
+fs.mkdirSync(CHILD_ENV.HOME, { recursive: true })
+
+/* ---------------- scenario A: user's exact bug ---------------- */
+console.log('\nscenario A — stale clone on PATH, update run from the user’s repo:')
+const A = sh('tagent update --yes', { cwd: DECOY, env: CHILD_ENV })
+const cloneVer = /CURRENT_VERSION\s*=\s*'([^']+)'/.exec(
+  fs.readFileSync(path.join(CLONE, 'packages/core/src/version.ts'), 'utf8'),
+)?.[1]
+const decoyHeadAfter = git(DECOY, 'rev-parse', 'HEAD')
+ok(A.code === 0, 'update exits 0', `code=${A.code}\n${A.out}`)
+ok(A.out.includes(`source updated → v${NEW}`), 'reports the real new version', A.out)
+ok(A.out.includes('tagent-A'), 'names the checkout it updated', A.out)
+ok(cloneVer === NEW, `stale clone bumped ${OLD} → ${cloneVer}`, `clone version.ts = ${cloneVer}`)
+ok(decoyHeadAfter === DECOY_HEAD, 'decoy repo untouched')
+ok(A.out.includes('bun install skipped'), 'bun install ran (shimmed)')
+
+// and the version command now reads the updated tree
+const V = sh('tagent --version', { cwd: DECOY, env: CHILD_ENV })
+ok(V.out.trim().endsWith(NEW), 'tagent --version now reports the new version', V.out)
+
+/* ---------------- scenario B: no checkout anywhere ---------------- */
+console.log('\nscenario B — updater can’t find a checkout (runs from a foreign dir):')
+// a driver whose argv[1] lives in the decoy (not a tagent checkout) — the
+// updater must refuse gracefully instead of pulling the decoy
+const driver = path.join(DECOY, 'run-update.ts')
+fs.writeFileSync(driver, `import { selfUpdate } from '${ROOT}/packages/cli/src/updater.ts'\nconst ok = await selfUpdate({ current: '${OLD}', latest: '${NEW}', url: '', notes: '' } as never)\nprocess.exit(ok ? 0 : 1)\n`)
+const B = sh(`bun ${driver}`, { cwd: DECOY, env: CHILD_ENV })
+ok(B.code === 1, 'refuses (exit 1) when no checkout is found', `code=${B.code}\n${B.out}`)
+ok(B.out.includes("can't locate your tagent source checkout"), 'prints the manual fix', B.out)
+ok(git(DECOY, 'rev-parse', 'HEAD') === DECOY_HEAD, 'decoy still untouched')
+
+/* ---------------- report ---------------- */
+console.log(`\nupdater-source tests: ${pass} passed, ${fail} failed`)
+process.exit(fail ? 1 : 0)

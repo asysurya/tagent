@@ -120,24 +120,96 @@ export async function selfUpdate(info: UpdateInfo): Promise<boolean> {
     console.log(r.ok ? `  ✔ updated via bun — restart Tagent` : `  ✗ ${r.output}\n    manual: bun add -g tagent@latest`)
     return r.ok
   }
-  // source checkout — only pull when cwd really is the tagent repo
-  // (a misdetection must never `git pull` the USER's project)
-  const remote = run('git', ['config', '--get', 'remote.origin.url'])
-  if (!remote.ok || !/asysurya\/tagent(\.git)?$/i.test(remote.output)) {
-    console.log(`  ✗ not a tagent source checkout (cwd: ${process.cwd()})`)
-    console.log(`    manual: git pull in your tagent checkout — https://github.com/${REPO}`)
+  // source checkout — update the checkout that provides THIS running code.
+  // The user may run `tagent update` from anywhere (their own project, another
+  // clone): pulling whatever repo happens to be the CWD is how v0.13.0 and
+  // earlier "updated" the wrong tree and still printed success.
+  const repoDir = findTagentCheckout()
+  if (!repoDir) {
+    console.log(`  ✗ can't locate your tagent source checkout (running from ${process.argv[1] ?? '?'}, cwd ${process.cwd()})`)
+    console.log(`    manual: cd <your tagent clone> && git pull && bun install`)
+    console.log(`    or download a binary: https://github.com/${REPO}/releases/latest`)
     return false
   }
-  const top = run('git', ['rev-parse', '--show-toplevel'])
-  const repoDir = top.ok ? top.output || undefined : undefined
   const r = run('git', ['pull', '--ff-only'], repoDir)
   if (!r.ok) {
-    console.log(`  ✗ ${r.output || 'git pull failed'} — update manually with git pull`)
+    console.log(`  ✗ ${r.output || 'git pull failed'} in ${repoDir}`)
+    console.log(`    fix conflicts/divergence manually, or re-clone from https://github.com/${REPO}`)
     return false
   }
-  run('bun', ['install'], repoDir)
-  console.log(`  ✔ source updated — restart Tagent`)
+  // UserLAnd/proot needs the hoisted linker or socket.io fails to load at runtime
+  const proot = /android/i.test(os.release()) || fs.existsSync('/.proot') || !!process.env.USERLAND
+  run('bun', proot ? ['install', '--linker=hoisted'] : ['install'], repoDir)
+
+  // verify the update actually landed — read the version file we just pulled.
+  // A stale PATH entry / a second clone / a diverged branch must never print
+  // "updated" when the running code is still old.
+  const nowVer = readRepoVersion(repoDir)
+  if (nowVer && nowVer !== info.latest) {
+    console.log(`  ✔ pulled ${repoDir} — checkout is at v${nowVer} (release: v${info.latest})`)
+    console.log(`    your branch may lag main; if this repeats: git -C "${repoDir}" checkout main`)
+  } else if (nowVer) {
+    console.log(`  ✔ source updated → v${nowVer} (${repoDir}) — restart Tagent`)
+  } else {
+    console.log(`  ✔ pulled ${repoDir} — restart Tagent (couldn't read the new version)`)
+  }
+  // the `tagent` on PATH may point elsewhere than the repo we just updated
+  const which = run('which', ['tagent'])
+  if (which.ok && which.output && !which.output.includes(repoDir) && !isSubpathOrLinked(which.output, repoDir)) {
+    console.log(`  ⚠ PATH resolves tagent to ${which.output}`)
+    console.log(`    that is NOT the checkout we just updated — check for a second install (tagent uninstall removes old ones)`)
+  }
   return true
+}
+
+/** walk up from the running entry file to find a tagent source checkout.
+ *  argv[1] is resolved through symlinks so `bun link` / wrapper scripts land
+ *  on the real clone. */
+export function findTagentCheckout(): string | undefined {
+  const seen = new Set<string>()
+  let dir: string | undefined
+  try {
+    dir = path.dirname(fs.realpathSync(process.argv[1] ?? '.'))
+  } catch {
+    return undefined
+  }
+  for (let i = 0; dir && i < 12; i++) {
+    if (seen.has(dir)) break
+    seen.add(dir)
+    const isGit = fs.existsSync(path.join(dir, '.git'))
+    const looksTagent =
+      fs.existsSync(path.join(dir, 'packages', 'cli', 'package.json')) &&
+      fs.existsSync(path.join(dir, 'packages', 'core', 'package.json'))
+    if (isGit && looksTagent) {
+      const remote = run('git', ['config', '--get', 'remote.origin.url'], dir)
+      if (remote.ok && /asysurya\/tagent(\.git)?$/i.test(remote.output)) return dir
+      return undefined // a tagent-like repo, but not ours — don't touch it
+    }
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return undefined
+}
+
+function readRepoVersion(repoDir: string): string | undefined {
+  try {
+    const src = fs.readFileSync(path.join(repoDir, 'packages', 'core', 'src', 'version.ts'), 'utf8')
+    const m = /CURRENT_VERSION\s*=\s*['"]([^'"]+)['"]/.exec(src)
+    return m?.[1]
+  } catch {
+    return undefined
+  }
+}
+
+/** is `exe` a symlink into / the same tree as `repoDir`? (bun link, wrappers) */
+function isSubpathOrLinked(exe: string, repoDir: string): boolean {
+  try {
+    const real = fs.realpathSync(exe)
+    return real.startsWith(repoDir + path.sep) || real === repoDir || repoDir.startsWith(path.dirname(real) + path.sep)
+  } catch {
+    return false
+  }
 }
 
 /**
