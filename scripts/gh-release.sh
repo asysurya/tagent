@@ -36,41 +36,63 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — update fixes: dirty checkouts, doctor, MCP cold starts
+## v__VER__ — context window bar + deterministic memory compaction
 
-A live report straight from a Codespace: `tagent update` died with
-"Your local changes … would be overwritten by merge", doctor flagged a
-perfectly connected GitHub account, and all four npx-based MCP servers timed
-out. All three are fixed.
+The context window is now a first-class citizen: a live opencode-style usage
+bar under the chat input, a 80% compact prompt, and a `/compact` that
+summarizes old turns with **zero AI calls** — nothing invented, everything
+copied from the transcript. Updates also became bulletproof: stuck merges
+self-recover and `~/.tagent` is snapshotted before every update.
 
-### `tagent update` never blocks on local changes anymore
+### The context bar
 
-Source installs sometimes end up with a dirty checkout — `bun.lock` churn from
-a different bun version, a stray edit — and `git pull` refuses to run when the
-incoming commits touch the same files:
+```
+build · glm-4.7 · 12.3k/131.1k [██████░░░░] 9% · 14m
+```
 
-- the updater now **auto-stashes local changes before pulling** (labelled
-  `tagent update v… — backup of local changes`, so it's recoverable forever)
-- the output tells you exactly **where the stash lives** and how to review or
-  restore it (`git stash show -p` / `git stash pop`) — nothing is ever lost
-- if stashing itself fails, the update still refuses to touch your tree
+- live every turn — provider token usage when the API reports it, a local
+  CJK-aware estimate otherwise; color-coded green / yellow / red at 60% / 80%
+- model windows resolve from `~/.tagent/zai-models.json` (new `contextWindow`
+  field per model), provider seeds, or id heuristics — `TAGENT_CONTEXT_WINDOW`
+  overrides everything
+- `/stats` and the boot banner show it too
 
-### doctor tells the truth again
+### `/compact` — ringkas memory, tanpa AI
 
-- **`✗ github: connected as <user>`** on healthy installs — the token moved to
-  `~/.tagent/credentials.json` in the auth rework, but the check still read
-  `config.json` (which keeps only the login). It reads the credential store
-  now, with config as a legacy fallback
-- a **timed-out MCP server gets an explanation**: the first `npx` run
-  downloads the package — retry once warm, or raise the budget
+- at **80%** (configurable: `compact.threshold`) the run ends with a one-key
+  y/N prompt; `/compact [keep-tokens]` any time, also in the ctrl+x menu
+- old turns become ONE structured digest — who asked what, which tools ran on
+  which paths, statuses, decisions — while the newest ~10k tokens stay
+  verbatim. A 100k-token history lands near 10k
+- **deterministic local code, no AI call, nothing generated** — every digest
+  line is copied from the transcript, so nothing can be hallucinated and the
+  compaction itself costs zero tokens (it must never spend your model to save
+  your tokens)
+- `@file` attachment bodies drop out of old turns (files live on disk);
+  re-compaction folds the prior digest in, history never duplicates
 
-### MCP cold starts: 25s → 60s
+### Caveman mode, reworked — summarize, never blind-cut
 
-A fresh Codespace/CI box easily spends 30–50s on the first `npx` download of
-each server, which blew the old 25s initialize budget — every server showed as
-timed out. The budget is now 60s, overridable with
-`TAGENT_MCP_INIT_TIMEOUT_MS=<millis>` (values under 1s are ignored). Servers
-still start in parallel, so it's one wait, not four.
+- big tool outputs become **head+tail digests** with explicit
+  `…[compacted: N chars elided]…` markers instead of a silent mid-cut — the
+  model always knows exactly what it did not see
+- repeated lines collapse (`(×N)`), pretty JSON minifies losslessly
+- old `write_file`/`edit_file` echoes are slimmed to path + preview — whole
+  file contents stopped being re-sent forever (the newest 2 turns stay full)
+- old tool results become per-tool digests (tool + input + status); caveman
+  starts dieting at 80k instead of 150k
+
+### Updates — never blocks, never loses data
+
+- a **stuck conflicted merge** ("bun.lock: needs merge" / "you have unmerged
+  files" — the state that killed both `git stash` and `git pull`) now
+  self-recovers: the in-progress operation is aborted, the index cleared,
+  your files kept
+- a diverged branch no longer blocks the update: fetch + reset to the upstream
+  tip, with the reflog recovery path printed
+- `~/.tagent` (auth, MCP, config, models, memory) is snapshotted into
+  `~/.tagent/backups/update-<timestamp>/` before EVERY update and verified +
+  restored after — the 5 newest snapshots are kept
 
 ---
 
@@ -123,7 +145,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — update fixes: dirty checkouts, doctor, MCP cold starts" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — context window bar + deterministic memory compaction" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")

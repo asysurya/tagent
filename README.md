@@ -51,19 +51,21 @@ process when you want a browser. Same engine, same sessions, same permissions.
 | 🧩 **Plugins v2** | Hook into the loop AND contribute custom agent tools (`plugin_<name>_<tool>`) and slash commands — hot-reloading `.mjs` files |
 | 🖥️ **App TUI** | Claude Code-style inline terminal app: the transcript lives in your terminal's own scrollback (scroll with mouse wheel / touch / shift+pgup), a rounded editor box + hint row redraw at the bottom, slash-command palette with tab completion, `@file` mentions, `?` shortcuts, `ctrl+x` quick-action menu (`--classic` for the readline TUI) |
 | 🎛️ **Classic TUI** | Arrow-key menus everywhere — model picker with type-to-filter, session browser, permission prompts, y/N confirms — like opencode |
-| ⬆️ **Self-update** | Checks for releases on startup and offers an arrow-key y/N update — binary installs swap in place (`tagent update` too) |
+| ⬆️ **Self-update** | Checks for releases on startup and offers an arrow-key y/N update — binary installs swap in place (`tagent update` too). Source installs auto-recover a stuck merge/conflict state, auto-stash local changes, never block on divergence, and snapshot `~/.tagent` (auth · MCP · config) before every update |
 | 🔐 **Permissions** | Per-tool ask/allow/deny, remember once/session/always — every write asks first |
 | 💾 **Checkpoints** | Auto-snapshot before writes; one-click `/undo` |
 | 🧠 **Memory** | `AGENTS.md` (global + workspace) + durable facts, injected into every system prompt |
 | 📚 **Skills** | `SKILL.md` playbooks with progressive disclosure (name+description in prompt, full body on demand) |
 | 🌐 **Web tools** | `web_fetch`, `ddg_search` (no API key), `browser` (Playwright — full e2e signal: click/type/screenshot/audit) |
 | 🧪 **Test mode** | `tagent test` — QA agent: serves the project, clicks through it with a real browser, screenshots + audits responsive/typography/contrast, writes `TEST-REPORT.md` (vision models see the screenshots) |
+| 📊 **Context window** | Live usage bar under the chat input (`12.3k/131.1k [██████░░░░] 9%`, color-coded, opencode-style) tracks the model's window every turn; at 80% you get a one-key prompt to compact |
+| 🧹 **Deterministic compaction** | `/compact` summarizes old turns into a structured digest (a 100k-token history lands ≈10k) — 100% local code, NO AI call, nothing invented: facts, paths, tool outcomes and decisions are copied, never generated. Re-compaction folds the prior digest in |
 | 📝 **AI ask forms** | `ask_user` tool — the agent interviews you through interactive forms: option / multi-option / input fields, add your own options, optional notes box; answers flow back into the run (TUI overlay · GUI dialog · headless-safe) |
 | 🛠 **Z.ai models config** | The built-in provider's model list is data: edit `~/.tagent/zai-models.json` (or `<workspace>/.tagent/zai-models.json`) to add/relabel/flag models — no release wait |
 | 🗄️ **Storage adapters** | Local today, MEGA.nz (E2E-encrypted snapshots & memory) implemented as an experimental adapter |
 | 🐙 **GitHub** | PAT, web-connect or device-flow auth (`tagent auth`) → auto private repo + one-click workspace push · multi-device safe (fetch+rebase before push) |
 | 📋 **Worklog + todos** | Live todo list + timestamped WORKLOG.md journal the agent keeps as it works |
-| 🦴 **Caveman mode** | Omni-route style token saver — terse replies, compact prompts, tighter budgets |
+| 🦴 **Caveman mode** | Token saver that SUMMARIZES instead of truncating: big tool outputs become head+tail digests with explicit elision markers, repeated lines collapse (`×N`), JSON gets minified, old write_file echoes are slimmed to path+preview, replies go terse — no information silently lost |
 | 🔗 **Share links** | Export any session as a standalone read-only HTML file |
 | 📡 **Relay mode** | Share a session LIVE over the network — a read-only viewer page that streams messages, tool calls and todos as they happen |
 | 🕸️ **Timelines** | Subagent runs persist as sessions — inspect the multi-agent timeline after the fact |
@@ -392,6 +394,51 @@ asks sequentially, and headless runs (pipes, subagents) get an honest
 "no interactive user" answer so the model proceeds with stated assumptions
 instead of hanging. Plan mode's interview step uses it by default.
 
+## Context window — the usage bar + deterministic compaction
+
+The hint row under the chat input always shows how much of the model's context
+window the session eats, opencode-style:
+
+```
+build · glm-4.7 · 12.3k/131.1k [██████░░░░] 9% · 14m
+```
+
+- the percentage is **live** — every turn reports either the provider's real
+  token usage or a local CJK-aware estimate
+- the bar is color-coded: green < 60% · yellow 60–80% · red ≥ 80%
+- model windows resolve from the catalog (`~/.tagent/zai-models.json` carries a
+  `contextWindow` field per model), the provider seeds, id heuristics — or set
+  `TAGENT_CONTEXT_WINDOW=<tokens>` to override
+
+### `/compact` — ringkas memory, tanpa AI
+
+When the bar crosses **80%** (configurable), you get a one-key prompt to
+compact; `/compact [keep-tokens]` works any time. Compaction summarizes old
+turns into ONE structured digest message while the most recent turns stay
+verbatim — a 100k-token history typically lands near 10k.
+
+The whole thing is **deterministic local code — no AI call, ever**:
+
+- every digest line is *copied* from the transcript (who asked what, which
+  tools ran on which paths, statuses, decisions) — nothing is generated, so
+  nothing can be hallucinated
+- `@file` attachment bodies drop out of old turns (the files are on disk —
+  re-read when the exact bytes matter)
+- re-compaction folds the prior digest into the new one — history never
+  duplicates
+- the compaction itself costs zero tokens: it must never spend the user's
+  model to save the user's tokens
+
+Related diet that runs automatically on every request: old `write_file` /
+`edit_file` action echoes are slimmed to path + preview (whole-file contents
+stopped being re-sent forever), and old tool results become per-tool digests.
+Thresholds tighten further in caveman mode.
+
+```jsonc
+// .tagent/config.json
+"compact": { "threshold": 80, "keepTokens": 10000 }  // threshold 0 = never prompt
+```
+
 ## MCP servers — Model Context Protocol
 
 Tagent speaks MCP over stdio — connect any server and its tools become agent-callable
@@ -470,6 +517,9 @@ export const hooks = {
 - [x] Plugins v2 — custom tools + slash commands, hot-reload (v0.8.0)
 - [x] Interactive TUI — arrow-key menus, type-to-filter model picker (v0.8.0)
 - [x] Self-update — y/N prompt on startup, in-place binary swap (v0.8.0)
+- [x] Context window — live usage bar under the chat input, 80% compact prompt (v0.17.0)
+- [x] Deterministic compaction — `/compact` summarizes old turns with zero AI calls (v0.17.0)
+- [x] Update never blocks / never loses data — conflict-state recovery + `~/.tagent` snapshots (v0.17.0)
 
 Ideas for the next versions (unordered, unpromised):
 

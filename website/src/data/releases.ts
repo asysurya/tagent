@@ -28,9 +28,54 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.16.1'
+export const LATEST = '0.17.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.17.0',
+    date: '2026-09-20',
+    title: 'Context window bar + deterministic memory compaction',
+    summary:
+      'The opencode-style context bar under the chat input (12.3k/131.1k [██████░░░░] 9%) shows how much of the model\u2019s window your session eats — and at 80% you get a one-key prompt to compact. /compact summarizes old turns into a structured digest with ZERO AI calls: nothing invented, everything copied from the transcript. Updates also became bulletproof: stuck merge states self-recover, divergence never blocks, and ~/.tagent (auth · MCP · config) is snapshotted before every update.',
+    stable: true,
+    sections: [
+      {
+        name: 'Context window — the usage bar',
+        items: [
+          'live bar under the chat input, updated every turn: provider token usage when the API reports it, a local CJK-aware estimate otherwise',
+          'color-coded: green under 60%, yellow 60–80%, red at 80%+ — /stats and the boot banner show it too',
+          'model windows resolve from the editable zai-models.json (new contextWindow field per model), provider seeds and id heuristics; TAGENT_CONTEXT_WINDOW=<tokens> overrides everything',
+        ],
+      },
+      {
+        name: 'Compaction — ringkas memory, tanpa AI',
+        items: [
+          'at 80% (configurable via compact.threshold) the run ends with a one-key y/N prompt; /compact [keep-tokens] any time, also in the ctrl+x menu and the classic TUI',
+          'old turns become ONE structured digest — who asked what, which tools ran on which paths, statuses, decisions — while the most recent ~10k tokens stay verbatim; a 100k-token history lands near 10k',
+          '100% deterministic local code: no AI call, nothing generated, nothing hallucinated — every digest line is copied from the transcript, so prompt quality survives (the trail stays auditable)',
+          'compaction costs zero tokens by design — it must never spend your model to save your tokens',
+          '@file attachment bodies drop out of old turns (files live on disk, re-read when bytes matter); re-compaction folds the prior digest in, history never duplicates',
+        ],
+      },
+      {
+        name: 'Caveman mode, reworked — summarize, never blind-cut',
+        items: [
+          'big tool outputs become head+tail digests with explicit "…[compacted: N chars elided]…" markers instead of a silent mid-cut — the model always knows exactly what it did not see',
+          'repeated lines collapse ("(×N)"), pretty JSON gets losslessly minified, 3+ blank lines collapse',
+          'old write_file/edit_file action echoes are slimmed to path + preview — whole-file contents stopped being re-sent to the model on every turn forever (the newest 2 turns keep full inputs)',
+          'old tool results become per-tool digests (tool + key input + status) instead of a generic placeholder; caveman mode starts dieting at 80k instead of 150k',
+        ],
+      },
+      {
+        name: 'Updates — never blocks, never loses data',
+        items: [
+          'stuck conflicted merge ("bun.lock: needs merge" / "you have unmerged files" — the state that killed both git stash and git pull) is auto-recovered: the in-progress operation is aborted, the index cleared, your files kept',
+          'a diverged branch (local commits) no longer blocks the update: fetch + hard reset to the upstream tip, with the reflog recovery path printed',
+          '~/.tagent (config, credentials/auth, models, MCP, workspace registry, memory instructions) is snapshotted into ~/.tagent/backups/update-<timestamp>/ before EVERY update and verified+restored after — the 5 newest snapshots are kept',
+        ],
+      },
+    ],
+  },
   {
     version: '0.16.1',
     date: '2026-09-20',

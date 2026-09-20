@@ -1,6 +1,6 @@
 {
   "name": "@tagent/core",
-  "version": "0.16.1",
+  "version": "0.17.0",
   "description": "Tagent agent engine — loop, tools, providers, sessions, permissions, memory, skills, plugins",
   "type": "module",
   "main": "src/index.ts",
