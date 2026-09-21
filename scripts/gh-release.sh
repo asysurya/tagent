@@ -36,64 +36,68 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — background tools, mode toolsets, multi-line input
+## v__VER__ — projects that sync themselves
 
-The agent can now RUN things in the background and keep working. Modes
-ship exactly the tools their job needs. And the input editor finally
-writes real multi-line messages.
+Linked projects now push and pull automatically every few seconds while
+tagent runs — every device stays converged. Config, API keys, providers,
+MCP servers and memory can ride along inside an AES-256-GCM encrypted
+vault that lives in the repo. And the menus got an audit: nothing eats
+your keys anymore.
 
 ```
-╭─ ✻ Tagent v__VER__ ── 💬 running the dev server ──────────╮
-╰─ 🤖 build · glm-4.7 · 🔌 2✓ 31 · [██░░░░░░] 9% · 4m ────╯
+╭─ ✻ Tagent v__VER__ ── 💬 porting the checkout flow ────────╮
+╰─ 🤖 build · glm-4.7 · 🔌 2✓ 31 · [██░░░░] 9% · 4m ───────╯
 
-  💻 bg_run      dev — bun run dev
-    ⎿ ✓ running (pid 4821, 12s, 38 output lines)
-
-  💻 bg_logs     dev
-    ⎿ ✓ tick 14 · compiled successfully
+  ⎇ auto-sync pushed a41f2e1 → you/my-shop
+  ⎇ auto-sync pulled — 3 files · vault: apikey:openrouter
+? shortcuts · / commands · @ files       build · glm-4.7 · ⎇ you/my-shop ⇅15s
 ```
 
-### New: background processes (bg_run · bg_logs · bg_stop)
+### New: auto-sync (5–15s, per project)
 
-- `bg_run` spawns ANY long-running command in its own process group and
-  returns immediately — dev servers, watchers, soak tests, slow installs
-  keep running across turns while the agent keeps working
-- `bg_logs` polls the process: status, uptime, output line count and the
-  tail — a growing line count is the "still working" signal; `bg_stop`
-  kills the whole tree. Early-crash detection returns the output when a
-  command dies instantly. Nothing leaks past exit.
+- SyncEngine pushes and pulls linked projects on a timer while tagent
+  runs: a dirty tree commits and pushes; a clean tree fast-forwards when
+  another device moved; conflicts are rebased, never lost
+- the interval is per project (5s–1h, default 15s) and lives in
+  .tagent-sync/ inside the repo — every device agrees
+- auto-sync only engages for projects you already linked — a fresh
+  folder is never surprise-uploaded
+- the hint row shows the live engine: `⎇ owner/repo ⇅15s ↑sha`
 
-### Modes that know their job
+### New: encrypted settings vault (/repo)
 
-- build mode ships only project-affecting tools — the QA report
-  (test_report) is test mode's deliverable, not the builder's
-- plan mode: investigate + interview — read/search/web/ask_user plus
-  explore subagents (task is back in plan)
-- test mode (QA) knows the workflow: PRD.md is the spec, WORKLOG.md is
-  what actually shipped; it teaches bg_run for non-web processes
-- MCP and plugin tools stay available in plan AND test mode — the
-  permission gate still asks the human for every risky call
+- pick what rides along: API keys, custom providers, MCP servers, saved
+  memory — sealed with AES-256-GCM (scrypt key), so the repo never leaks
+  secrets even if it leaks
+- the passphrase lives per device in ~/.tagent/credentials.json; rotate
+  it with /repo passphrase (re-seals the vault); fresh clones apply the
+  vault automatically on boot
+- first run generates a strong passphrase and shows it once — save it,
+  other devices need it to unlock
 
-### Multi-line input, paste that behaves
+### New: tagent projects — the manager
 
-- **Enter inserts a newline; shift+enter sends** (alt+enter and
-  ctrl+enter too — works on legacy terminals, kitty keyboards report
-  shift+enter natively)
-- bracketed paste: multi-line pastes land as text in the editor — never
-  an Enter-submit per line; pastes route into whatever editor owns
-  focus, and a single trailing newline is dropped
-- the editor box grows to 8 rows with cursor-following scroll
+- interactive cockpit over every linked project: sync now · edit (repo
+  name, auto-sync, interval, vault shares, passphrase) · clone · unlink
+  this device · delete from GitHub (double confirm, delete_repo PAT)
+- scriptable: `tagent projects list | sync <name> | rm <name>`;
+  `tagent clone` with no argument opens a picker of your repos
 
-### Agent-set timeouts + readable errors
+### The menu audit — options that used to error when selected
 
-- bash timeout ceiling 5min → 60min, serve ready-wait likewise — the
-  agent budgets long builds/installs itself instead of watching them die
-  at the default; `TAGENT_MCP_CALL_TIMEOUT_MS` for slow MCP tools
-- provider HTTP errors render for humans: an OpenRouter 402 now reads
-  "add credits at …" instead of a triple raw-JSON dump
-- markdown: inline `code` renders as a padded chip, fenced blocks get a
-  cyan [lang] tag; banner/user cards clamp to the transcript width so
-  narrow terminals (odd widths, split panes) never wrap box rails
+- ESC followed by another key was swallowed as an unknown escape
+  sequence — menus appeared not to close and the first letter typed
+  after ESC was eaten. Both resolve cleanly now
+- slash commands and ctrl+x menu actions catch their own errors — a
+  broken option prints one red line instead of an unhandled rejection
+- /exit force-exits after cleanup: a live sync-engine timer can never
+  leave a restored-but-hung process
+
+### The editor sits at the bottom
+
+- fullscreen pads the transcript viewport to the full screen height, so
+  the input box is pinned to the bottom edge — the navbar's mirror
+  image — instead of floating mid-screen on short transcripts
 
 ---
 
@@ -147,7 +151,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — background tools, mode toolsets, multi-line input" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — project auto-sync, encrypted settings vault, projects manager" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")

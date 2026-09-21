@@ -28,9 +28,58 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.19.0'
+export const LATEST = '0.20.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.20.0',
+    date: '2026-09-21',
+    title: 'Projects that sync themselves — and settings that travel encrypted',
+    summary:
+      'Linked projects now push and pull automatically every few seconds while tagent runs, so every device stays converged. Config, API keys, providers, MCP servers and memory can ride along inside an AES-256-GCM encrypted vault that lives in the repo — only devices holding the passphrase can read it. /repo is the sync cockpit, tagent projects manages every linked project (sync · edit · clone · delete), the ESC key no longer eats the first letter typed after it, and the input box is pinned to the bottom edge of the screen.',
+    stable: true,
+    sections: [
+      {
+        name: 'New: auto-sync (5–15s, per project)',
+        items: [
+          'SyncEngine pushes and pulls linked projects on a timer while tagent runs — dirty tree commits & pushes; a clean tree fast-forwards when another device moved; conflicts are rebased, never lost',
+          'the interval is per project (5s–1h, default 15s) and lives in .tagent-sync/ inside the repo — every device agrees; /repo interval changes travel with the project',
+          'auto-sync only engages for projects you already linked and stays quiet offline — a fresh folder is never surprise-uploaded',
+          'the hint row shows the live engine: ⎇ owner/repo ⇅15s ↑sha — pushes, pulls and errors each get one transcript line',
+        ],
+      },
+      {
+        name: 'New: encrypted settings vault (/repo)',
+        items: [
+          'choose what rides along: API keys, custom providers, MCP servers, saved memory — sealed with AES-256-GCM (scrypt key), so the repo can be public-read without leaking secrets',
+          'the passphrase lives per device in ~/.tagent/credentials.json — set it via /repo passphrase (rotating re-seals the vault so other devices pick it up), and a fresh clone applies the vault automatically on boot',
+          'first run with nothing set generates a strong passphrase and shows it once — save it, other devices need it to unlock',
+        ],
+      },
+      {
+        name: 'New: tagent projects — the manager',
+        items: [
+          'interactive cockpit over every linked project: sync now, edit (repo name, auto-sync, interval, vault shares, passphrase), clone to another folder, unlink this device, or delete the GitHub repo (double confirm, needs a delete_repo PAT)',
+          'scriptable too: tagent projects list | sync <name> | rm <name>; tagent clone with no argument now opens a picker of your repos',
+        ],
+      },
+      {
+        name: 'Menu audit — options that used to error when selected',
+        items: [
+          'ESC followed by another key was swallowed as an "unknown escape sequence" — menus appeared not to close and the first letter typed after ESC was eaten. Both now resolve cleanly',
+          'slash commands and ctrl+x menu actions catch their own errors: a broken option prints one red line instead of an unhandled rejection',
+          '/exit force-exits after cleanup — a live sync-engine timer can never leave a restored-but-hung process',
+          'new test-menu-audit walks all 44 commands and the whole menu grid after every change',
+        ],
+      },
+      {
+        name: 'The editor sits at the bottom',
+        items: [
+          'fullscreen pads the transcript viewport to the full screen height — the input box is pinned to the bottom edge, the navbar\u2019s mirror image, instead of floating mid-screen on short transcripts',
+        ],
+      },
+    ],
+  },
   {
     version: '0.19.0',
     date: '2026-09-20',

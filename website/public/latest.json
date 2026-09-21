@@ -1,6 +1,6 @@
 {
-  "version": "0.19.0",
-  "date": "2026-09-20",
-  "notes": "The agent can now run long processes in the background and check on them while it keeps working (bg_run / bg_logs / bg_stop). Build/plan/test modes each ship exactly the tools their job needs — plan and test keep MCP. The input editor is genuinely multi-line: Enter inserts a newline, shift+enter sends, and multi-line pastes land as text instead of an Enter-submit per line. The agent also sets its own tool timeouts, provider errors read like errors, and markdown code renders as chips.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.19.0"
+  "version": "0.20.0",
+  "date": "2026-09-21",
+  "notes": "Linked projects now push and pull automatically every few seconds while tagent runs, so every device stays converged. Config, API keys, providers, MCP servers and memory can ride along inside an AES-256-GCM encrypted vault that lives in the repo — only devices holding the passphrase can read it. /repo is the sync cockpit, tagent projects manages every linked project (sync · edit · clone · delete), the ESC key no longer eats the first letter typed after it, and the input box is pinned to the bottom edge of the screen.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.20.0"
 }
