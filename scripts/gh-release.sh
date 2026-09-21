@@ -36,68 +36,62 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — the chat that survives the exit
+## v__VER__ — the agent that asks properly, and enter that sends
 
-Closing tagent no longer closes the conversation: boot replays the last
-chat under the banner, and /clear [count|all] wipes only the text on
-screen while the agent's memory stays. Every running sync engine
-heartbeats into the repo, so the navbar shows when another device is
-online — and /repo status grows a per-project sync history. The agent
-can budget each MCP call itself with __timeout_ms.
+Three directives reshape how the agent works in every mode: questions
+always go through the ask_user form, connected MCP tools are used on the
+agent's own initiative, and build mode carries a professional quality
+bar — "build a blog" means Blogger/Ghost-level work, never one bare HTML
+file unless you explicitly asked for simple. And the input keys are back
+to the natural convention: enter sends, shift+enter makes a newline.
 
 ```
 ╭─ ✻ Tagent v__VER__ ── 💬 porting the checkout flow ───────╮
 ╰─ 🤖 build · glm-4.7 · 🔌 2✓ 31 · ◉ laptop-b25 online ────╯
 
-  ↩ resumed "porting the checkout flow" · 12 messages in memory
-    — /clear [n|all] wipes the text only
-  ⎇ auto-sync pulled — 3 files · history: 42 rounds
+  ❯ build me a blog for my coffee shop
+  ● on it — full site: theme, posts, search, RSS, responsive.
+    picking the stack (ask form follows)…
 ? shortcuts · / commands · @ files       build · glm-4.7 · ⎇ you/my-shop ⇅15s
 ```
 
-### New: chat memory across restarts
+### Directive: ask through the form
 
-- each session keeps a transcript sidecar — the rendered chat text
-  exactly as you read it, ANSI included
-- boot replays the newest session's text right under the banner (the
-  chat is simply back, like tagent was never closed); tagent start
-  --fresh boots empty instead
-- /open and /new swap the display to the switched session
+- whenever something material is unknown, the agent calls ask_user —
+  the interactive form with options and input fields — never a
+  plain-text question that ends the turn and stalls the run
+- works in every mode, any time mid-run; the answers flow straight back
+  into the work
+- the action protocol itself now points mid-run questions to ask_user
+  instead of "reply with text only"
 
-### /clear [count|all] — text only, memory stays
+### Directive: MCP tools used unprompted
 
-- clears the screen AND the native scrollback AND the saved transcript;
-  the session's messages (the agent's memory) are untouched
-- /clear 2 removes the last 2 rendered chat messages, /clear all wipes
-  the text, /clear alone asks what you meant
+- when MCP servers are connected, the prompt names them and teaches
+  auto-detecting each tool from its [mcp:<server>] prefix and
+  description
+- docs lookups, web reading, knowledge graphs — the agent reaches for
+  them the moment they fit, in every mode, without being told
 
-### New: device presence
+### Directive: professional quality bar
 
-- every running sync engine heartbeats into the committed
-  .tagent-sync/presence.json (45s, pruned by TTL) — presence travels
-  with the repo like any other file
-- the navbar and hint row show "◉ <device> online" while another device
-  is fresh — close the lid, the badge fades within a minute
+- the default is professional-grade, production-quality work —
+  simplifying only when you explicitly ask for simple/minimal/prototype
+- "build a blog" means a real polished product on the level of
+  Blogger/Ghost — theme and layout system, navigation, post pages,
+  search, tags, RSS, SEO meta, responsive down to mobile — NOT one bare
+  HTML file
+- no placeholders where real work belongs: no TODO stubs, no lorem ipsum
+  where real copy is expected
 
-### /repo status — the full picture
+### Keys: enter sends again
 
-- link state · engine (interval, last round, ahead/behind) · devices
-  with heartbeats · vault shares — one card
-- per-project sync history, newest first: auto ticks and manual syncs
-  land in .tagent/sync-history.json (when, direction, files, commit)
-
-### Agent-budgeted MCP calls
-
-- every mcp_* tool accepts __timeout_ms (1000–3600000, clamped): slow
-  scrapers and pipeline tools get the budget they need per call
-- the param is stripped before the payload reaches the server;
-  TAGENT_MCP_CALL_TIMEOUT_MS stays the global default
-
-### Fixed
-
-- sessions born in the same millisecond (scripted flows, fast /new) tied
-  in the boot-resume sort and readdir order decided which chat came back
-  — session timestamps are now strictly increasing per store
+- bare enter SUBMITS — chat muscle memory everywhere; shift+enter (also
+  alt/ctrl+enter) inserts a newline for long messages
+- menus and dialogs keep enter=accept; the ask-form notes box follows
+  the same swap (bare enter newlines, modified moves on)
+- bracketed paste unchanged — multi-line pastes still land as text,
+  never an Enter-submit per line
 
 ---
 
@@ -151,7 +145,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — chat memory across restarts, device presence, /repo status" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — ask_user always, MCP on own initiative, professional quality bar, enter=send" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")

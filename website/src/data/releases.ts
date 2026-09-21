@@ -28,9 +28,50 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.21.0'
+export const LATEST = '0.22.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.22.0',
+    date: '2026-09-21',
+    title: 'The agent that asks properly — and enter that sends',
+    summary:
+      'Three directives reshape how the agent works in every mode: questions always go through the ask_user form instead of a plain-text question that stalls the run, connected MCP tools are used on the agent\u2019s own initiative, and build mode carries a professional quality bar — "build a blog" means Blogger/Ghost-level work, never one bare HTML file unless you explicitly asked for simple. The input keys are back to the natural convention: enter sends, shift/alt/ctrl+enter makes a newline.',
+    stable: true,
+    sections: [
+      {
+        name: 'Directive: ask through the form',
+        items: [
+          'whenever something material is unknown, the agent calls ask_user — the interactive form with options and input fields — never a plain-text question ending the turn',
+          'works in every mode, any time mid-run; the form waits for the answer and the structured reply flows straight back into the work',
+          'the action protocol itself now points mid-run questions to ask_user instead of "reply with text only"',
+        ],
+      },
+      {
+        name: 'Directive: MCP tools used unprompted',
+        items: [
+          'when MCP servers are connected, the prompt lists them and teaches auto-detecting each tool from its [mcp:<server>] prefix and description',
+          'docs lookups, web reading, knowledge graphs — the agent reaches for them the moment they fit, in every mode',
+        ],
+      },
+      {
+        name: 'Directive: professional quality bar',
+        items: [
+          'the default is professional-grade, production-quality work — simplifying only when you explicitly ask for simple/minimal/quick/prototype',
+          '"build a blog" means a real polished product on the level of Blogger/Ghost — theme and layout system, navigation, post pages, search, tags, RSS, SEO meta, responsive down to mobile — NOT one bare HTML file',
+          'no placeholders where real work belongs: no TODO stubs, no lorem ipsum where real copy is expected',
+        ],
+      },
+      {
+        name: 'Keys: enter sends again',
+        items: [
+          'bare enter SUBMITS — chat muscle memory everywhere; shift+enter (also alt/ctrl+enter) inserts a newline for long messages',
+          'menus and dialogs keep enter=accept; the ask-form notes box follows the same swap (bare enter newlines, modified moves on)',
+          'bracketed paste unchanged — multi-line pastes still land as text, never an Enter-submit per line',
+        ],
+      },
+    ],
+  },
   {
     version: '0.21.0',
     date: '2026-09-21',

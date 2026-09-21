@@ -1,6 +1,6 @@
 {
-  "version": "0.21.0",
+  "version": "0.22.0",
   "date": "2026-09-21",
-  "notes": "Closing tagent no longer closes the conversation: boot replays the last chat under the banner, and /clear [count|all] wipes only the text on screen while the agent’s memory stays. Every running sync engine heartbeats into the repo, so the navbar shows when another device is online; /repo status grows a per-project sync history. The agent can now budget each MCP call itself with __timeout_ms, and same-millisecond sessions no longer confuse the boot-resume picker.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.21.0"
+  "notes": "Three directives reshape how the agent works in every mode: questions always go through the ask_user form instead of a plain-text question that stalls the run, connected MCP tools are used on the agent’s own initiative, and build mode carries a professional quality bar — \"build a blog\" means Blogger/Ghost-level work, never one bare HTML file unless you explicitly asked for simple. The input keys are back to the natural convention: enter sends, shift/alt/ctrl+enter makes a newline.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.22.0"
 }
