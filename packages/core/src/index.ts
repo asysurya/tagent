@@ -70,7 +70,7 @@ export {
 } from './relay'
 export {
   startDeviceLogin, pollDeviceToken, validatePat, ensureRepo, ensureRepoDetailed,
-  pushWorkspace, defaultRepoName, authUrl, DEFAULT_REMOTE_BASE,
+  pushWorkspace, defaultRepoName, authUrl, DEFAULT_REMOTE_BASE, deleteRepo,
   type DeviceCodeStart, type EnsureRepoResult, type PushResult, type PushOpts,
 } from './github'
 export {
@@ -79,6 +79,19 @@ export {
   syncProject, restoreProject, saveGithubLogin,
   type ProjectReg, type SyncOpts,
 } from './projects'
+export {
+  SyncEngine, manualSync, readSyncSettings, writeSyncSettings, defaultSyncSettings,
+  exportVaultPayload, applyVaultPayload, hashPayload, vaultNeedsPassphrase,
+  syncDirOf, syncSettingsFile, vaultFileOf,
+  SYNC_DIR, MIN_INTERVAL_MS, MAX_INTERVAL_MS, DEFAULT_INTERVAL_MS,
+  type RepoSyncSettings, type VaultSettings, type VaultPayload,
+  type SyncEvent, type SyncEngineStatus, type SyncEngineOpts,
+} from './sync'
+export {
+  encryptVaultJSON, decryptVaultJSON, parseVaultFile,
+  getVaultPassphrase, setVaultPassphrase, generatePassphrase, passphraseEquals,
+  type VaultFile,
+} from './vault'
 export {
   getStorageAdapter, LocalAdapter, MegaAdapter, syncMemoryToMega, pullMemoryFromMega,
   type StorageAdapter,

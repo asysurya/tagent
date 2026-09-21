@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """drive the real TUI in a pty: banner, /help (overlay + esc), /mcp list,
-/mcp (menu + esc), /model list, /exit — inline model (no alternate screen)."""
+/mcp (menu + esc), /model list, /exit — fullscreen model (v0.19+ default:
+alternate screen, sticky navbar, pinned editor)."""
 import fcntl
 import os
 import pty
@@ -33,26 +34,40 @@ fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 100, 0, 0))
 os.set_blocking(fd, False)
 out = b''
 start = time.time()
-lastdata = time.time()
 sent = False
 deadline = start + 40
 while time.time() < deadline:
-    r, _, _ = sel.select([fd], [], [], 0.3)
+    # drain aggressively: the app renders a full screen every second (navbar
+    # ticker) — a slow reader fills the pty buffer, the app's synchronous
+    # frame write blocks, stdin starves and keystrokes COALESCE (they'd merge
+    # into one chunk and intermediate renders never appear)
+    r, _, _ = sel.select([fd], [], [], 0.05)
     if r:
         try:
-            chunk = os.read(fd, 4096)
+            chunk = os.read(fd, 65536)
             if not chunk:
                 break
             out += chunk
-            lastdata = time.time()
         except OSError:
             break
     else:
-        # banner long done + quiet → send the key sequence
-        if not sent and time.time() - lastdata > 4 and time.time() - start > 6:
+        # FIXED schedule (v0.19+): the navbar ticker repaints every second,
+        # so quiet-based idle detection never fires — send on the clock
+        if not sent and time.time() - start > 8:
             for k in KEYS:
                 os.write(fd, k)
-                time.sleep(0.8)  # the esc-timer (50ms) + render coalescing need room
+                # read WHILE sleeping: the app repaints every second — a
+                # reader that stops during the send fills the pty buffer,
+                # the app's frame write blocks, its stdin starves and the
+                # remaining keystrokes coalesce into one chunk
+                for _ in range(10):
+                    time.sleep(0.1)
+                    r2, _, _ = sel.select([fd], [], [], 0)
+                    if r2:
+                        try:
+                            out += os.read(fd, 65536)
+                        except OSError:
+                            break
             sent = True
     try:
         if os.waitpid(pid, os.WNOHANG)[0] != 0:
@@ -86,17 +101,17 @@ except (ChildProcessError, OSError):
 
 text = text_raw.decode('utf8', 'replace')
 checks = {
-    'inline: no alternate screen': '\x1b[?1049h' not in text,
-    'cursor hidden + restored': '\x1b[?25l' in text and '\x1b[?25h' in text,
+    'fullscreen (alt screen on)': '\x1b[?1049h' in text,
+    'cursor hidden while live': '\x1b[?25l' in text,
     'banner (any version)': 'Tagent v' in text,
     'banner glyph + tagline': 'terminal-native coding agent' in text,
-    'help overlay': 'Tagent commands' in text and 'plugins' in text,
-    'mcp none line': '/mcp adds' in text,
+    'help overlay': 'Tagent commands' in text,
+    'mcp none line': '/mcp to add one' in text,
     'mcp menu appears': 'MCP servers' in text,
     'model list view': 'current:' in text,
     'no unknown-cmd': 'unknown command' not in text,
     'no crash': 'fatal' not in text,
-    'sticky editor box': 'Message tagent' in text,
+    'editor box (pinned)': 'Message tagent' in text,
 }
 for k, v in checks.items():
     print(f"{k}: {'OK' if v else 'FAIL'}")

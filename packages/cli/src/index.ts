@@ -13,8 +13,9 @@
  *   tagent auth [--web]    GitHub login — web connect (browser page), or
  *                           a PAT pasted in the terminal (--device: OAuth)
  *   tagent sync [message]   link + push this project to GitHub
- *   tagent projects         list linked projects (name, repo, last sync)
- *   tagent clone <repo>     restore a project from GitHub
+ *   tagent projects         manage linked projects — list · sync · edit ·
+ *                           delete · clone (all interactive)
+ *   tagent clone [repo]     restore a project from GitHub (picks when bare)
  *   tagent logout           remove the stored GitHub token
  *   tagent whoami           print the current login (or guest)
  *   tagent config …         get / set / list settings
@@ -63,13 +64,20 @@ import {
   listProjects,
   getLinkedProject,
   linkProject,
+  unlinkProject,
   syncProject,
   restoreProject,
+  deleteRepo,
+  readSyncSettings,
+  writeSyncSettings,
+  getVaultPassphrase,
+  setVaultPassphrase,
   workspaceHasWork,
   refuseLink,
   isLinkRefused,
   type SessionData,
   type ToolCallRecord,
+  type ProjectReg,
 } from '@tagent/core'
 
 import { GUI_BUNDLE_FILES } from './generated/gui-bundle'
@@ -395,6 +403,10 @@ async function mainStart(dirArg?: string, boot?: { mode?: 'test'; url?: string |
     host.close() // kill MCP servers
     await stopDaemon?.().catch(() => undefined)
   }
+  // the TUI was quit — exit NOW. handles with long lifetimes (a running
+  // project-sync engine, paused raw stdin on some bun builds) must not
+  // keep the process alive after the terminal is already restored
+  process.exit(0)
 }
 
 /* ------------------------------------------------------------------ */
@@ -758,6 +770,70 @@ async function mainSync() {
 
 async function mainProjects() {
   const list = listProjects()
+  const sub = plain[1]
+
+  // `tagent projects list` (and every non-TTY run) → the plain table
+  if (sub === 'list' || !process.stdout.isTTY || !process.stdin.isTTY) {
+    printProjectsTable()
+    if (!process.stdout.isTTY || !process.stdin.isTTY) return
+    return // TTY + explicit list → done
+  }
+
+  // direct actions: `tagent projects sync|rm <name>` (scriptable)
+  if (sub === 'sync' || sub === 'rm' || sub === 'remove' || sub === 'delete') {
+    const name = plain[2]
+    if (!name) die(`usage: tagent projects ${sub} <name> — see tagent projects list`)
+    const p = findProject(name)
+    if (!p) die(`no linked project matches "${name}"`)
+    if (sub === 'sync') {
+      await syncOneProject(p)
+    } else {
+      unlinkProject(p.root)
+      console.log(green(`  ✔ unlinked ${p.name} (${p.repo}) — files stay on disk`))
+    }
+    return
+  }
+
+  if (list.length === 0) {
+    console.log(`\n  ${bold('tagent projects')} · 0 linked\n`)
+    console.log(dim('  nothing linked yet — open a project and run `tagent sync`,'))
+    console.log(dim('  or log in (`tagent auth`) and take the sync offer\n'))
+    return
+  }
+
+  // interactive manager — list · sync · edit · delete · clone
+  for (;;) {
+    const items = listProjects().map((p) => ({
+      label: `${fs.existsSync(p.root) ? '' : yellow('⚠ ')}${bold(p.name)}`,
+      hint: p.lastSyncAt ? relTime(p.lastSyncAt) : 'never synced',
+      detail: `${p.root} · ${p.repo}${fs.existsSync(p.root) ? '' : red(' · missing on this device')}`,
+      value: p,
+    }))
+    items.push({
+      label: `+ clone…`,
+      hint: 'restore a repo',
+      detail: 'bring a synced project to this device',
+      value: undefined as unknown as ProjectReg,
+    })
+    const pick = await select<ProjectReg | undefined>({
+      title: `tagent projects · ${items.length - 1} linked`,
+      items,
+      footer: 'enter = manage · esc = quit',
+    })
+    if (pick === undefined) {
+      console.log(dim('\n  bye — projects stay as they are\n'))
+      return
+    }
+    if (!pick.root) {
+      await mainClone()
+      continue
+    }
+    await manageProject(pick)
+  }
+}
+
+function printProjectsTable(): void {
+  const list = listProjects()
   console.log(`\n  ${bold('tagent projects')} · ${list.length} linked\n`)
   if (list.length === 0) {
     console.log(dim('  nothing linked yet — open a project and run `tagent sync`,'))
@@ -775,13 +851,200 @@ async function mainProjects() {
   console.log(`\n  ${dim('▸ = this directory · restore anywhere: tagent clone <name>')}\n`)
 }
 
-async function mainClone() {
-  const arg = plain[1]
-  if (!arg) die('usage: tagent clone <owner/name | name> [dir]')
+/** name / repo / path prefix match against the registry */
+function findProject(name: string): ProjectReg | undefined {
+  const n = name.replace(/\.git$/, '').toLowerCase()
+  return listProjects().find(
+    (p) =>
+      p.name.toLowerCase() === n ||
+      p.repo.toLowerCase() === n ||
+      p.repo.toLowerCase().endsWith('/' + n) ||
+      p.root.toLowerCase().endsWith(n) ||
+      p.root.toLowerCase() === n,
+  )
+}
+
+async function syncOneProject(p: ProjectReg): Promise<void> {
+  if (!fs.existsSync(p.root)) die(`folder is gone: ${p.root} — clone it back: tagent clone ${p.repo}`)
+  if (!authStatus().logged) die('not logged in — run `tagent auth` first')
+  const cfg = loadConfig(p.root)
+  console.log(`\n  ${bold(p.name)} → ${p.repo}\n`)
+  try {
+    const r = await syncProject(p.root, cfg, {
+      message: 'sync: manual from tagent projects',
+      onLog: (l) => console.log(`  ${dim(l)}`),
+    })
+    console.log(green(`\n  ✔ synced → ${r.url} (${r.commit})\n`))
+  } catch (e) {
+    console.log(red(`\n  ✗ sync failed: ${(e as Error).message}`))
+    console.log(dim('    nothing was lost — try again any time\n'))
+  }
+}
+
+/** one project's cockpit: sync · edit · delete */
+async function manageProject(p: ProjectReg): Promise<void> {
+  for (;;) {
+    const s = fs.existsSync(p.root) ? readSyncSettings(p.root) : null
+    const syncState = s
+      ? `${s.auto ? green('auto') : 'off'}${s.auto ? ` · every ${Math.round(s.intervalMs / 1000)}s` : ''}`
+      : yellow('folder missing')
+    const act = await select<string>({
+      title: `${bold(p.name)} · ${p.repo}`,
+      items: [
+        { label: 'sync now', value: 'sync', hint: 'push + pull, right away', detail: p.root },
+        { label: 'edit', value: 'edit', hint: 'repo name · auto-sync · vault', detail: `auto-sync: ${syncState}` },
+        { label: 'clone to…', value: 'clone', hint: 'this repo, another folder' },
+        { label: 'unlink', value: 'unlink', hint: 'forget on this device', detail: 'files stay, syncing stops' },
+        { label: 'delete from GitHub…', value: 'delete', hint: red('removes the repo'), detail: 'needs a delete_repo token' },
+        { label: 'back', value: 'back' },
+      ],
+      footer: p.lastSyncAt ? `last sync ${relTime(p.lastSyncAt)}` : 'never synced',
+    })
+    if (!act || act === 'back') return
+
+    if (act === 'sync') {
+      await syncOneProject(p)
+      const again = getLinkedProject(p.root)
+      if (again) Object.assign(p, again)
+      continue
+    }
+    if (act === 'edit') {
+      await editProject(p)
+      const again = getLinkedProject(p.root)
+      if (again) Object.assign(p, again)
+      continue
+    }
+    if (act === 'clone') {
+      await mainClone(p.repo)
+      continue
+    }
+    if (act === 'unlink') {
+      const sure = await confirm(`  unlink ${bold(p.name)}? (files stay, syncing stops)`, { default: true })
+      if (!sure) continue
+      unlinkProject(p.root)
+      console.log(green(`\n  ✔ unlinked — /push or tagent sync links it again any time\n`))
+      return
+    }
+    if (act === 'delete') {
+      console.log(red(`\n  this deletes ${bold(p.repo)} on GitHub — the local folder stays`))
+      console.log(dim('    a delete_repo-scoped PAT is required\n'))
+      const sure1 = await confirm(`  delete ${bold(p.repo)}?`, { default: false })
+      if (!sure1) { console.log(dim('  cancelled — nothing touched')); continue }
+      const sure2 = await confirm(red(`  really delete ${p.repo}? this cannot be undone`), { default: false })
+      if (!sure2) { console.log(dim('  cancelled — nothing touched')); continue }
+      const token = getCredential('github') || readGlobalConfig().github?.token
+      if (!token) { console.log(red('  not logged in — tagent auth first')); continue }
+      try {
+        await deleteRepo(token, p.repo)
+        unlinkProject(p.root)
+        console.log(green(`\n  ✔ ${p.repo} deleted from GitHub\n`))
+        return
+      } catch (e) {
+        console.log(red(`\n  ✗ ${(e as Error).message}`))
+        console.log(dim('    the PAT may lack the delete_repo scope — delete it in the browser instead\n'))
+      }
+    }
+  }
+}
+
+/** edit: repo name · auto-sync on/off · interval · vault shares · passphrase */
+async function editProject(p: ProjectReg): Promise<void> {
+  for (;;) {
+    const s = readSyncSettings(p.root)
+    const pick = await select<string>({
+      title: `edit · ${bold(p.name)}`,
+      items: [
+        { label: 'repo name', value: 'repo', hint: p.repo, detail: 're-links; the next sync pushes to the new name' },
+        { label: `${s.auto ? green('⦿') : '○'} auto-sync`, value: 'auto', hint: s.auto ? `on · every ${Math.round(s.intervalMs / 1000)}s` : 'off', detail: 'push + pull in the background while tagent runs' },
+        { label: 'interval', value: 'interval', hint: `every ${Math.round(s.intervalMs / 1000)}s`, detail: 'min 5s · max 1h' },
+        { label: `${s.vault.apiKeys ? green('☑') : '☐'} api keys`, value: 'v:apiKeys', hint: 'encrypted in the repo', detail: 'provider keys travel with the project' },
+        { label: `${s.vault.customProviders ? green('☑') : '☐'} custom providers`, value: 'v:customProviders', hint: 'encrypted' },
+        { label: `${s.vault.mcp ? green('☑') : '☐'} mcp servers`, value: 'v:mcp', hint: 'encrypted' },
+        { label: `${s.vault.memory ? green('☑') : '☐'} memory`, value: 'v:memory', hint: 'saved facts' },
+        { label: 'passphrase', value: 'pass', hint: getVaultPassphrase() ? 'saved here → set a new one' : 'set this device\'s passphrase' },
+        { label: 'back', value: 'back' },
+      ],
+      footer: 'settings live in .tagent-sync/ inside the project — every device agrees',
+    })
+    if (!pick || pick === 'back') return
+
+    if (pick === 'repo') {
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+      const next = (await new Promise<string>((r) => rl.question(`  new repo name [${p.repo.split('/').pop()}]: `, (a) => r(a ?? '')))).trim()
+      rl.close()
+      if (!next || next === p.repo.split('/').pop()) { console.log(dim('  unchanged')); continue }
+      const owner = p.repo.includes('/') ? p.repo.split('/')[0] : readGlobalConfig().github?.login || 'you'
+      linkProject(p.root, `${owner}/${next}`)
+      Object.assign(p, getLinkedProject(p.root))
+      console.log(green(`  ✔ re-linked as ${p.repo} — the next sync creates/pushes there`))
+      continue
+    }
+    if (pick === 'auto') {
+      writeSyncSettings(p.root, { ...s, auto: !s.auto })
+      console.log(s.auto ? dim('  auto-sync off') : green(`  ✔ auto-sync on — every ${Math.round(s.intervalMs / 1000)}s`))
+      continue
+    }
+    if (pick === 'interval') {
+      const secs = [5, 10, 15, 30, 60, 300]
+      const t = await select<number>({
+        title: 'sync interval',
+        items: secs.map((v) => ({ label: v < 60 ? `${v}s` : `${v / 60}m`, value: v, hint: v * 1000 === s.intervalMs ? green('current') : '' })),
+      })
+      if (!t) continue
+      writeSyncSettings(p.root, { ...s, intervalMs: t * 1000 })
+      console.log(green(`  ✔ sync interval → every ${t < 60 ? t + 's' : t / 60 + 'm'}`))
+      continue
+    }
+    if (pick.startsWith('v:')) {
+      const key = pick.slice(2) as keyof typeof s.vault
+      writeSyncSettings(p.root, { ...s, vault: { ...s.vault, [key]: !s.vault[key] } })
+      continue
+    }
+    if (pick === 'pass') {
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+      const next = (await new Promise<string>((r) => rl.question('  new passphrase: ', (a) => r(a ?? '')))).trim()
+      rl.close()
+      if (!next) { console.log(dim('  unchanged — empty passphrase skipped')); continue }
+      setVaultPassphrase(next)
+      console.log(green('  ✔ passphrase saved on this device — other devices need it to unlock the vault'))
+      console.log(dim('    the vault is re-encrypted on the next sync tick'))
+      continue
+    }
+  }
+}
+
+async function mainClone(repoOverride?: string) {
+  let arg = repoOverride ?? plain[1]
   const st = authStatus()
   if (!st.logged) die('not logged in — run `tagent auth` first')
   const token = getCredential('github')
   if (!token) die('no stored token — run `tagent auth` again')
+  // interactive: no repo given → offer linked projects + free-form owner/name
+  if (!arg) {
+    if (!process.stdin.isTTY) die('usage: tagent clone <owner/name | name> [dir]')
+    const linked = listProjects()
+    const items: { label: string; hint?: string; detail?: string; value: string }[] = linked.map((p) => ({
+      label: p.repo,
+      hint: p.name,
+      detail: p.root,
+      value: p.repo,
+    }))
+    items.push({ label: 'other…', hint: 'owner/name', value: '', detail: 'type the repo yourself' })
+    const pick = await select<string>({
+      title: 'clone — pick a repo',
+      items,
+      footer: 'tagent clone <owner/name> works too',
+    })
+    if (pick === undefined) return
+    if (pick) {
+      arg = pick
+    } else {
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+      arg = (await new Promise<string>((r) => rl.question('  repo (owner/name): ', (a) => r(a ?? '')))).trim()
+      rl.close()
+      if (!arg) return console.log(dim('  cancelled'))
+    }
+  }
 
   // 'owner/name' is used as-is; a bare name matches a linked project, else the login owns it
   let repo = arg.includes('/') ? arg.replace(/\.git$/, '') : undefined
@@ -1439,6 +1702,7 @@ function bold(s: string): string { return process.stdout.isTTY ? `\x1b[1m${s}\x1
 function dim(s: string): string { return process.stdout.isTTY ? `\x1b[2m${s}\x1b[0m` : s }
 function green(s: string): string { return process.stdout.isTTY ? `\x1b[32m${s}\x1b[0m` : s }
 function red(s: string): string { return process.stdout.isTTY ? `\x1b[31m${s}\x1b[0m` : s }
+function yellow(s: string): string { return process.stdout.isTTY ? `\x1b[33m${s}\x1b[0m` : s }
 
 init().catch((e: unknown) => {
   console.error('[tagent] fatal:', e)

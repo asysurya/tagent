@@ -127,6 +127,18 @@ export async function ensureRepo(
   return (await ensureRepoDetailed(token, login, name)).repo
 }
 
+/** Delete a repo — the "remove it from GitHub too" arm of `tagent projects`.
+ *  Needs a classic PAT with the delete_repo scope; 404 counts as done. */
+export async function deleteRepo(token: string, repo: string): Promise<void> {
+  const res = await fetch(`${GH_API}/repos/${repo}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json' },
+  })
+  if (res.status !== 204 && res.status !== 404) {
+    throw new Error(`HTTP ${res.status} ${(await res.text().catch(() => '')).slice(0, 120)}`)
+  }
+}
+
 /* ------------------------------ push ------------------------------ */
 
 async function git(root: string, ...args: string[]): Promise<string> {

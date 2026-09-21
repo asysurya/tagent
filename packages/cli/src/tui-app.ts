@@ -54,11 +54,21 @@ import {
   checkUpdate,
   syncProject,
   getLinkedProject,
+  unlinkProject,
   authStatus,
   getCredential,
   readGlobalConfig,
   renderContextBar,
   contextPct,
+  SyncEngine,
+  readSyncSettings,
+  writeSyncSettings,
+  vaultNeedsPassphrase,
+  setVaultPassphrase,
+  getVaultPassphrase,
+  defaultSyncSettings,
+  MIN_INTERVAL_MS,
+  DEFAULT_INTERVAL_MS,
   type LoopSummary,
   type PermissionRequest,
   type AskFormRequest,
@@ -69,6 +79,9 @@ import {
   type ToolCallRecord,
   type UpdateInfo,
   type AgentMode,
+  type SyncEvent,
+  type SyncEngineStatus,
+  type RepoSyncSettings,
 } from '@tagent/core'
 
 import type { AgentHost } from './host'
@@ -625,6 +638,7 @@ const SLASH_COMMANDS: { name: string; desc: string }[] = [
   { name: 'grep', desc: 'search the workspace' },
   { name: 'sh', desc: 'run a shell command' },
   { name: 'auth', desc: 'GitHub login' },
+  { name: 'repo', desc: 'auto-sync · interval · encrypted settings' },
   { name: 'push', desc: 'push to GitHub [msg]' },
   { name: 'checkpoints', desc: 'snapshot list' },
   { name: 'undo', desc: 'rollback last snapshot' },
@@ -649,7 +663,7 @@ const HELP_ROWS: [string, string][] = [
   ['todos · log [n]', 'live plan · journal tail'],
   ['apikey <provider> · permissions · allow/deny/ask <tool>', 'access'],
   ['files [path] · read <f> · grep <pat> · sh <cmd>', 'workspace'],
-  ['auth · push [msg]', 'GitHub'],
+  ['auth · repo · push [msg]', 'GitHub · auto-sync · shared settings'],
   ['checkpoints · undo · memory · skills · skill <n>', 'memory & history'],
   ['stats · settings · update · webgui [on|off]', 'info · self-update'],
   ['stop · clear · exit', 'run control'],
@@ -811,6 +825,10 @@ export class TuiApp {
   private relayServer?: DaemonHandle
   private relayBase?: string
 
+  /* project auto-sync engine (/repo — push + pull every few seconds) */
+  private sync?: SyncEngine
+  private syncHint = ''
+
   private busCleanup: (() => void)[] = []
   private resizeBound = false
   private destroyed = false
@@ -849,6 +867,7 @@ export class TuiApp {
       this.refreshSyncBadge()
       this.startStatsTicker()
       this.startNavTicker()
+      this.startSyncEngine()
       this.banner()
       // MCP servers connect at BOOT now (they used to wait for the first
       // chat — the navbar reads their live state every second, so "connecting"
@@ -910,6 +929,10 @@ export class TuiApp {
     if (this.statsTimer) {
       clearInterval(this.statsTimer)
       this.statsTimer = undefined
+    }
+    if (this.sync) {
+      this.sync.stop()
+      this.sync = undefined
     }
     if (this.escTimer) {
       clearTimeout(this.escTimer)
@@ -973,7 +996,6 @@ export class TuiApp {
       this.io.output.write(s)
     } catch { /* EPIPE — terminal gone */ }
   }
-
   onResize = (): void => {
     this.requestRender()
   }
@@ -1358,6 +1380,9 @@ export class TuiApp {
    *  here: pasted bytes NEVER become keypresses — a multi-line paste lands
    *  as text with its newlines intact instead of an Enter-submit per line. */
   feed(data: string): void {
+    if (process.env.TAGENT_FEED_LOG) {
+      try { fs.appendFileSync(process.env.TAGENT_FEED_LOG, `FEED ${Date.now()} ${JSON.stringify(data)}\n`) } catch { /* dbg */ }
+    }
     if (this.pasting) {
       // inside a paste: everything is literal until the end marker
       const combined = this.pasteBuf + data
@@ -1504,7 +1529,17 @@ export class TuiApp {
         }
         return { skip }
       }
-      // alt + other → unsupported combo, drop
+      // ESC + printable — a human pressed esc and typed on (or the bytes
+      // coalesced in one read while the app was busy). Swallowing the pair
+      // (the old `skip: 2` fallback) made menus "not close" and ate the
+      // first letter of whatever was typed next. Emit the esc, let the
+      // printable re-parse as its own keypress. alt+letter is unused here,
+      // and pastes ride the bracketed-paste path instead.
+      {
+        const cp = n.codePointAt(0) ?? 32
+        if (cp >= 0x20 && cp !== 0x7f) return { key: { t: 'esc' }, skip: 1 }
+      }
+      // alt + other (control bytes we don't know) → unsupported combo, drop
       return { skip: 2 }
     }
     if (ch === '\r') return { key: { t: 'enter' }, skip: 1 }
@@ -1754,7 +1789,14 @@ export class TuiApp {
 
   private async handleLine(text: string): Promise<void> {
     if (text.startsWith('/')) {
-      await this.command(text)
+      try {
+        await this.command(text)
+      } catch (e) {
+        // a broken menu/command must never kill the app — the user just
+        // sees the error line and keeps going
+        this.println(red(`  ✗ ${(e as Error)?.message ?? e}`))
+        this.println(dim('    /help lists every command · report the broken one'))
+      }
       return
     }
     if (this.running) {
@@ -2379,6 +2421,16 @@ export class TuiApp {
   }
 
   private async menuAction(action: string): Promise<void> {
+    try {
+      await this.menuActionInner(action)
+    } catch (e) {
+      // menus must never crash the app — same contract as slash commands
+      this.println(red(`  ✗ ${(e as Error)?.message ?? e}`))
+      this.println(dim('    pick another option, or report the broken one'))
+    }
+  }
+
+  private async menuActionInner(action: string): Promise<void> {
     switch (action) {
       case 'continue':
         return this.sendViaQueue('continue')
@@ -3172,6 +3224,11 @@ export class TuiApp {
         return
       }
 
+      case 'repo': case 'sync': {
+        await this.repoManager(arg)
+        return
+      }
+
       case 'push': {
         // v0.13: routed through core syncProject — the same path as daemon
         // sync:push and `tagent sync` — so the project registry (link +
@@ -3603,6 +3660,222 @@ export class TuiApp {
     this.println(dim('    tools: mcp_<server>_<tool> · permissions: /allow mcp_<server> · manage: /mcp'))
   }
 
+  /* ---------------- repo manager (/repo) ---------------- */
+
+  /** /repo — the project-sync cockpit: auto-sync on/off + interval, the
+   *  encrypted settings vault (api keys / providers / mcp / memory), the
+   *  device passphrase, and a one-shot "sync now". Settings live in
+   *  .tagent-sync/repo.json INSIDE the project — every device agrees. */
+  private async repoManager(arg: string) {
+    const host = this.host
+    const sub = arg.split(/\s+/)[0]?.trim() ?? ''
+    const rest = arg.slice(sub.length).trim()
+
+    // quick args first — scriptable without the menu
+    if (sub === 'on' || sub === 'off') {
+      const s = readSyncSettings(host.root)
+      writeSyncSettings(host.root, { ...s, auto: sub === 'on' })
+      this.syncEngineRestart()
+      return this.println(sub === 'on'
+        ? green(`  ✔ auto-sync on (every ${Math.round(readSyncSettings(host.root).intervalMs / 1000)}s)`)
+        : dim('  auto-sync off — /push still works any time'))
+    }
+    if (sub === 'interval' || sub === 'every') {
+      const secs = Number(rest)
+      if (!secs || secs < 5) return this.println(dim('  usage: /repo interval <seconds≥5>'))
+      const s = readSyncSettings(host.root)
+      writeSyncSettings(host.root, { ...s, intervalMs: secs * 1000 })
+      this.syncEngineRestart()
+      return this.println(green(`  ✔ sync interval → every ${secs}s`))
+    }
+    if (sub === 'sync' || sub === 'now') {
+      return this.repoSyncNow()
+    }
+    if (sub === 'passphrase') {
+      return this.repoPassphraseFlow()
+    }
+
+    // interactive dashboard
+    for (;;) {
+      const s = readSyncSettings(host.root)
+      const linked = getLinkedProject(host.root)
+      const logged = authStatus().logged || !!host.cfg?.github?.token
+      const eng = this.sync?.status()
+
+      const vaultItems: PickItem<string>[] = [
+        { label: `${s.vault.apiKeys ? green('☑') : '☐'} api keys`, hint: 'provider keys, encrypted', value: 'v:apiKeys' },
+        { label: `${s.vault.customProviders ? green('☑') : '☐'} custom providers`, hint: 'endpoints + their keys', value: 'v:customProviders' },
+        { label: `${s.vault.mcp ? green('☑') : '☐'} mcp servers`, hint: 'server defs + env', value: 'v:mcp' },
+        { label: `${s.vault.memory ? green('☑') : '☐'} memory`, hint: 'saved facts', value: 'v:memory' },
+      ]
+
+      const actions: PickItem<string>[] = [
+        {
+          label: `${s.auto ? green('⦿ auto-sync: on') : '○ auto-sync: off'}${linked ? '' : yellow('  (not linked yet)')}`,
+          hint: `every ${Math.round(s.intervalMs / 1000)}s · push + pull`,
+          value: 'auto',
+        },
+        { label: 'interval', hint: `every ${Math.round(s.intervalMs / 1000)}s → change`, value: 'interval' },
+        ...vaultItems,
+        { label: 'passphrase', hint: getVaultPassphrase() ? 'saved on this device → rotate' : 'set this device\'s passphrase', value: 'pass' },
+        { label: 'sync now', hint: 'one full round, right away', value: 'sync' },
+      ]
+      if (linked) actions.push({ label: 'unlink', hint: `forget ${linked.repo} on this device`, value: 'unlink' })
+      actions.push({ label: 'done', hint: 'esc', value: 'done' })
+
+      const lastSync = eng?.lastSyncAt ? ` · last ${fmtWhen(eng.lastSyncAt)}` : ''
+      const errs = eng?.lastError ? red(` · ${eng.lastError.slice(0, 50)}`) : ''
+      const pick = await this.pick(actions, 'repo sync', {
+        footer: `${linked ? linked.repo : 'not linked'}${lastSync}${errs}${s.auto && eng?.running ? green(` · running ⇅${Math.round(eng.intervalMs / 1000)}s`) : ''}`,
+      })
+      if (!pick || pick === 'done') return
+
+      if (pick === 'auto') {
+        if (!linked && !logged) {
+          this.println(yellow('  link this project first — /auth then /push'))
+          continue
+        }
+        writeSyncSettings(host.root, { ...s, auto: !s.auto })
+        this.syncEngineRestart()
+        this.println(s.auto
+          ? dim('  auto-sync off — /push still works any time')
+          : green(`  ✔ auto-sync on — every ${Math.round(readSyncSettings(host.root).intervalMs / 1000)}s`))
+        continue
+      }
+
+      if (pick === 'interval') {
+        const opts: { label: string; value: number }[] = [
+          { label: '5s', value: 5000 }, { label: '10s', value: 10000 },
+          { label: '15s', value: 15000 }, { label: '30s', value: 30000 },
+          { label: '60s', value: 60000 }, { label: '5m', value: 300000 },
+          { label: 'custom…', value: -1 },
+        ]
+        const t = await this.pick(
+          opts.map((o) => ({ label: o.label, hint: o.value === s.intervalMs ? green('current') : '', value: o.value })),
+          'sync interval',
+          { selected: Math.max(0, opts.findIndex((o) => o.value === s.intervalMs)) },
+        )
+        let ms = t
+        if (t === undefined) continue
+        if (t === -1) {
+          const raw = (await this.ask('interval in seconds (5-3600)')) ?? ''
+          const secs = Number(raw.trim())
+          if (!secs || secs < 5) { this.println(dim('  cancelled')); continue }
+          ms = Math.min(secs * 1000, 3_600_000)
+        }
+        if (!ms) continue
+        writeSyncSettings(host.root, { ...s, intervalMs: ms })
+        this.syncEngineRestart()
+        this.println(green(`  ✔ sync interval → every ${Math.round(ms / 1000)}s`))
+        continue
+      }
+
+      if (pick.startsWith('v:')) {
+        const key = pick.slice(2) as keyof typeof s.vault
+        writeSyncSettings(host.root, { ...s, vault: { ...s.vault, [key]: !s.vault[key] } })
+        this.syncEngineRestart()
+        continue
+      }
+
+      if (pick === 'pass') {
+        await this.repoPassphraseFlow()
+        continue
+      }
+
+      if (pick === 'sync') {
+        await this.repoSyncNow()
+        continue
+      }
+
+      if (pick === 'unlink') {
+        const sure = await this.askYesNo(`  unlink ${bold(linked!.repo)}? (files stay, auto-sync stops)`, true)
+        if (!sure) continue
+        try {
+          unlinkProject(host.root)
+        } catch { /* ignore */ }
+        this.syncEngineRestart()
+        this.refreshSyncBadge()
+        this.println(green('  ✔ unlinked — /push links it again any time'))
+        continue
+      }
+    }
+  }
+
+  /** one full sync round right now (dirty or not). */
+  private async repoSyncNow(): Promise<void> {
+    const host = this.host
+    const token = getCredential('github') || host.cfg?.github?.token || readGlobalConfig().github?.token
+    if (!token) return this.println(red('  not logged in — /auth first (or run `tagent auth`)'))
+    this.println(dim('  syncing…'))
+    try {
+      const r = await syncProject(host.root, host.cfg, {
+        message: `sync: manual ${new Date().toISOString().slice(11, 19)}`,
+        onLog: (l) => this.println(dim(`  ${l}`)),
+      })
+      this.println(green(`  ✔ synced → ${r.repo} (${r.commit})`))
+      this.refreshSyncBadge()
+    } catch (e) {
+      this.refreshSyncBadge()
+      this.println(red(`  ✗ ${(e as Error).message}`))
+    }
+  }
+
+  /** set / rotate this device's vault passphrase. Rotating re-seals the
+   *  project vault with the new passphrase (decrypt with the old key first),
+   *  so every other device picks up the change on its next pull. */
+  private async repoPassphraseFlow(): Promise<void> {
+    const host = this.host
+    const old = getVaultPassphrase()
+    const a = await this.ask(old ? 'new passphrase (empty = keep)' : 'passphrase for this project\'s shared settings', { masked: true })
+    if (a === undefined) return this.println(dim('  cancelled'))
+    const next = a.trim()
+    if (!next) return this.println(dim('  unchanged'))
+    const b = await this.ask('repeat passphrase', { masked: true })
+    if ((b ?? '').trim() !== next) return this.println(red('  ✗ passphrases differ — nothing changed'))
+
+    // an existing vault this device could open gets re-sealed NOW so the
+    // new passphrase travels with the next sync tick
+    const vaultPath = path.join(host.root, '.tagent-sync', 'vault.json')
+    let resealed = false
+    if (fs.existsSync(vaultPath) && old) {
+      try {
+        const { decryptVaultJSON, encryptVaultJSON, parseVaultFile } = await import('@tagent/core')
+        const raw = JSON.parse(fs.readFileSync(vaultPath, 'utf8'))
+        const vault = parseVaultFile(raw)
+        if (vault) {
+          const payload = decryptVaultJSON(vault, old)
+          fs.writeFileSync(vaultPath, JSON.stringify(encryptVaultJSON(payload, next), null, 2))
+          resealed = true
+        }
+      } catch (e) {
+        return this.println(red(`  ✗ could not re-seal the vault: ${(e as Error).message}`))
+      }
+    }
+    setVaultPassphrase(next)
+    this.println(green('  ✔ passphrase saved on this device'))
+    if (resealed) this.println(dim('    vault re-encrypted — other devices need the new passphrase'))
+    else this.println(dim('    the vault is (re)encrypted on the next sync tick'))
+  }
+
+  /** apply current sync settings to the live engine (start/stop/restart). */
+  private syncEngineRestart(): void {
+    try {
+      if (!this.sync) {
+        // starting lazily (e.g. first link) — the same gating as boot
+        return this.startSyncEngine()
+      }
+      const s = readSyncSettings(this.host.root)
+      if (!s.auto) {
+        this.sync.stop()
+        this.println(dim('  engine stopped'))
+        return
+      }
+      this.sync.restart()
+    } catch {
+      /* settings I/O must never crash the TUI */
+    }
+  }
+
   /* ---------------- plugin manager (/plugins) ---------------- */
 
   private async pluginManager(arg: string) {
@@ -3861,7 +4134,12 @@ export class TuiApp {
     const transAvail = Math.max(0, avail - ovRows.length)
     for (const r of head) rows.push(safeRow(r))
     if (this.fullscreen) {
-      for (const r of this.transcriptRows(W, transAvail)) rows.push(safeRow(r))
+      // the viewport is ALWAYS exactly transAvail tall — blank rows pad the
+      // top, so the transcript anchors to the editor and the EDITOR anchors
+      // to the bottom edge of the screen (the navbar's mirror image)
+      const body = this.transcriptRows(W, transAvail)
+      for (let i = body.length; i < transAvail; i++) rows.push('')
+      for (const r of body) rows.push(safeRow(r))
     } else {
       // inline: the transcript lives in the terminal's native scrollback —
       // the sticky region carries the live stream tail, and swaps to the
@@ -4030,7 +4308,19 @@ export class TuiApp {
     } else if (this.tokensIn + this.tokensOut > 0) {
       ctx = `${fmtTok(this.tokensIn)}${SYM.arrowUp} ${fmtTok(this.tokensOut)}${SYM.arrowDown}`
     }
-    const badge = this.syncBadge ? ` · ⎇ ${this.syncBadge}` : ''
+    // ⎇ repo · live engine state (interval + last action) when it's running
+    let badge = ''
+    if (this.syncBadge) {
+      badge = ` · ⎇ ${this.syncBadge}`
+      if (this.sync) {
+        const s = this.sync.status()
+        if (s.running) {
+          badge += ` ${dim(`⇅${Math.round(s.intervalMs / 1000)}s`)}`
+          if (this.syncHint) badge += ` ${this.syncHint}`
+          if (s.lastError) badge += ` ${red('!')}`
+        }
+      }
+    }
     const right = `${this.mode} · ${shortModelName(cfg.defaultModel)}${ctx ? ` · ${ctx}` : ''} · ${fmtElapsed(Date.now() - this.startedAt)}${badge}`
     const room = W - vwidthANSI(keys) - 2
     const rightCut = room > 10 ? dim(truncateStyled(right, Math.max(4, room))) : ''
@@ -4057,6 +4347,54 @@ export class TuiApp {
         this.mdRender = m.renderMarkdown
       })
       .catch(() => undefined)
+  }
+
+  /** boot the project auto-sync engine. Engages only when the project is
+   *  LINKED + logged in (a repo the user already synced once) and settings
+   *  say auto — a fresh folder is never surprise-uploaded. The vault
+   *  catch-up applies synced settings on devices that haven't seen them. */
+  private startSyncEngine(): void {
+    try {
+      if (!getLinkedProject(this.host.root)) return
+      if (!authStatus().logged && !this.host.cfg?.github?.token) return
+      const st = readSyncSettings(this.host.root)
+      if (!st.auto) return
+      this.sync = new SyncEngine({
+        root: this.host.root,
+        getConfig: () => this.host.cfg,
+        onEvent: (e) => this.onSyncEvent(e),
+      })
+      this.sync.restart()
+      void this.sync!.applyVaultOnce().then((changed) => {
+        if (changed.length) {
+          this.println(green(`  🔐 vault applied — ${changed.join(', ')}`))
+        } else if (vaultNeedsPassphrase(this.host.root)) {
+          this.println(yellow('  🔐 this project shares encrypted settings — set the passphrase to unlock them (/repo)'))
+        }
+      })
+    } catch {
+      /* never break boot over sync */
+    }
+  }
+
+  /** engine events → one transcript line each + a fresh badge */
+  private onSyncEvent(e: SyncEvent): void {
+    if (e.type === 'pushed') {
+      this.syncHint = `↑ ${e.commit}`
+      this.println(green(`  ⎇ auto-sync pushed ${e.commit} → ${e.repo}`))
+    } else if (e.type === 'pulled') {
+      this.syncHint = `↓ ${e.files || ''}${e.applied.length ? ' 🔐' : ''}`.trim()
+      const bits: string[] = []
+      if (e.files > 0) bits.push(`${e.files} file${e.files === 1 ? '' : 's'}`)
+      if (e.applied.length) bits.push(`vault: ${e.applied.join(', ')}`)
+      this.println(cyan(`  ⎇ auto-sync pulled${bits.length ? ` — ${bits.join(' · ')}` : ''}`))
+    } else if (e.type === 'vault-passphrase') {
+      this.println(yellow('  🔐 shared settings are locked — set this device\'s passphrase (/repo) to unlock'))
+    } else if (e.type === 'error') {
+      this.syncHint = red('sync error')
+      this.println(red(`  ⎇ sync: ${e.message}`))
+    }
+    this.refreshSyncBadge()
   }
 
   /** refresh the cached GitHub sync badge (stats row '⎇ owner/repo').
