@@ -225,7 +225,7 @@ function mkApp(host: FakeHost, opts: { fullscreen?: boolean; noResume?: boolean 
   await sleep(60)
 
   // a chat turn: user box + assistant reply, all recorded
-  app.feed('hello agent\n')
+  app.feed('hello agent\r')
   await sleep(80)
   const sid = host.session!.id
   ok('recording: session exists after first message', !!sid)
@@ -237,7 +237,7 @@ function mkApp(host: FakeHost, opts: { fullscreen?: boolean; noResume?: boolean 
   ok('recording: banner not recorded', !tr1.some((e) => e.t.includes('terminal-native coding agent')))
 
   // second turn → two user boundaries total
-  app.feed('second question\n')
+  app.feed('second question\r')
   await sleep(80)
   const tr2 = host.store.readTranscript(sid)
   const userMarks = tr2.filter((e) => e.m === 1 && e.t === '').length
@@ -246,7 +246,7 @@ function mkApp(host: FakeHost, opts: { fullscreen?: boolean; noResume?: boolean 
   ok('memory: two turns = four messages', memBefore === 4, `got ${memBefore}`)
 
   // /clear all → text gone (screen + sidecar), memory intact
-  app.feed('/clear all\n')
+  app.feed('/clear all\r')
   await sleep(120)
   const tr3 = host.store.readTranscript(sid)
   const flat = (app as unknown as { log: { raw: string }[] }).log.map((l) => l.raw).join('\n')
@@ -256,14 +256,14 @@ function mkApp(host: FakeHost, opts: { fullscreen?: boolean; noResume?: boolean 
   ok('/clear all: MEMORY stays', host.session!.messages.length === memBefore)
 
   // rebuild: two turns again, then /clear 1 drops only the last one
-  app.feed('turn A\n')
+  app.feed('turn A\r')
   await sleep(60)
-  app.feed('turn B\n')
+  app.feed('turn B\r')
   await sleep(80)
   const tr4 = host.store.readTranscript(sid)
   const bounds = tr4.map((e, i) => (e.m ? i : -1)).filter((i) => i >= 0)
   ok('/clear 1: boundaries present before clear', bounds.length >= 4, `got ${bounds.length}`)
-  app.feed('/clear 1\n')
+  app.feed('/clear 1\r')
   await sleep(120)
   const tr5 = host.store.readTranscript(sid)
   ok('/clear 1: last message text dropped', !tr5.some((e) => e.t.includes('answer to turn B')), 'turn B text still there')
@@ -336,7 +336,7 @@ function mkApp(host: FakeHost, opts: { fullscreen?: boolean; noResume?: boolean 
   ok('boot: newest session replays (B)', out.text().includes('B-body-line'))
 
   // /open <A-prefix> — display follows
-  app.feed(`/open ${a.id.slice(0, 6)}\n`)
+  app.feed(`/open ${a.id.slice(0, 6)}\r`)
   await sleep(120)
   const t1 = out.text()
   ok('/open: A text swapped in', t1.includes('A-body-line'))

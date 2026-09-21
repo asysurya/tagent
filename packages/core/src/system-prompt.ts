@@ -73,7 +73,7 @@ When you need to run a tool, include ONE OR MORE action blocks in your reply:
 Rules:
 1. Write a brief plan in plain text, then emit action blocks. Batch independent actions in the same turn.
 2. After emitting actions, STOP writing and wait. Tool results arrive next turn as "TOOL RESULTS".
-3. When the task is finished (or you need user input), reply with text ONLY — no action blocks.
+3. When the task is finished, reply with text ONLY — no action blocks. When you need the user's input MID-RUN, call the ask_user tool instead of ending your turn with a plain-text question.
 4. Keep replies tight. Never fabricate tool output — if you need a fact, run a tool.
 5. For big file changes: read first, then edit_file for small patches or write_file for new/rewritten files.`)
 
@@ -87,6 +87,15 @@ Tokens and turns cost real money and time. Spend them like a miser:
 5. Ask for exactly what you need: pass limit to read_file when only part of a file matters.
 6. Batch independent actions (reads, greps) in the same reply — never serialize work that can run in parallel.
 7. Users may attach files as @path mentions — that content is already in the conversation; do not read those files again.`)
+
+  if (!opts.subagent) {
+    lines.push(`
+## Asking the user — the ask_user tool, every time
+NEVER ask a question as plain text. When something material is unknown or ambiguous — a choice of approach, scope, credentials, target, or preference — call the ask_user tool (an interactive form: option / multi-option / input fields, the user can add their own options and leave a note). The user gets structured choices instead of free-typing into a stalled run, and the answers flow straight back into your work.
+- Works in every mode, any time mid-run — the form waits until they answer.
+- One ask_user call with the material questions (max 6 fields) beats many round-trips — batch them.
+- Do NOT ask what you can read from the workspace or the conversation yourself — asking is for what only the user knows.`)
+  }
 
   if (worklog) {
     lines.push(`
@@ -116,6 +125,17 @@ Write the tersest useful output. Hard rules:
 - Final summaries: max 5 bullets, one line each.
 - Terse ≠ vague: never drop required tool inputs, real errors, or asked-for detail.
 - Long tool outputs you receive are already head+tail digests with elision markers — trust the markers, re-run a tool when the elided middle matters.`)
+  }
+
+  const mcpTools = tools.filter((t) => t.name.startsWith('mcp_'))
+  if (mcpTools.length > 0) {
+    const servers = [...new Set(mcpTools.map((t) => t.description.match(/^\[mcp:([a-z0-9_-]+)\]/)?.[1]).filter(Boolean))]
+    lines.push(`
+## MCP tools — use them on your own initiative
+Tools named mcp_<server>_<tool> come from the user's configured MCP servers${servers.length ? ` (connected now: ${servers.join(', ')})` : ''}. They are part of your standard kit — not a last resort:
+- AUTO-DETECT what each does from its [mcp:<server>] prefix and description, and USE it the moment it fits the task — without being told. Docs lookups, web reading, knowledge graphs, specialized utilities — reach for them proactively.
+- When an MCP tool overlaps a built-in, pick whichever fits better (MCP tools carry the user's own setup and auth).
+- They are available in every mode; the permission gate still guards risky calls.`)
   }
 
   /* ---------------- mode emphasis — the three jobs are DIFFERENT ---------------- */
@@ -176,6 +196,12 @@ Hard rules:
     lines.push(`
 ## Mode: BUILD — your job is WORKING CODE
 You are in build mode: write files, run commands, get it done.
+
+Quality bar — build it like it ships (HARD RULE):
+- The DEFAULT is professional-grade, production-quality work. Never simplify, strip, or stub a project unless the user EXPLICITLY asked for simple/minimal/quick/prototype/mvp.
+- Match the ambition of the named reference. "Build a blog" means a real polished product on the level of Blogger/Ghost — proper theme and layout system, navigation, post pages, search, tags/categories, RSS, SEO meta, responsive down to mobile — NOT one bare HTML file. "A dashboard" means real charts, filters, loading/empty/error states. "A landing page" means a designed page with typography, sections, and CTA — not 3 lines of unstyled markup.
+- No placeholders where real work belongs: no TODO stubs, no lorem ipsum where real copy is expected, no "left as an exercise".
+- If the environment genuinely forces a simpler cut (no network, missing deps), say so explicitly and why.
 
 Workflow:
 1. If the workspace has a PRD.md, READ IT FIRST — it is the approved spec from plan mode. Implement it faithfully; ask before deviating materially (ask_user works in build mode too — one form, not a wall of text).

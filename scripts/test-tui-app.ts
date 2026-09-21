@@ -278,11 +278,11 @@ test('editor: typing echoes in the boxed input', async () => {
   app.destroy()
 })
 
-test('shift+enter sends: host.chatSend receives the text, user line + done line flush to the scrollback', async () => {
+test('enter sends: host.chatSend receives the text, user line + done line flush to the scrollback', async () => {
   const host = new FakeHost(tmp)
   const { app, out } = await started(host)
-  // \n = ctrl+enter — one of the modified-enter submits; bare \r is a newline now
-  app.feed('ping the agent\n')
+  // bare enter submits (the v0.22 convention); \n would be a ctrl+enter newline
+  app.feed('ping the agent\r')
   await sleep(30)
   app.renderNow()
   if (host.sent.length !== 1 || host.sent[0].text !== 'ping the agent') throw new Error(`chatSend not called once: ${JSON.stringify(host.sent)}`)
@@ -300,20 +300,23 @@ test('shift+enter sends: host.chatSend receives the text, user line + done line 
   app.destroy()
 })
 
-test('enter inserts a newline; editor grows; shift+enter sends both lines', async () => {
+test('shift/alt/ctrl+enter insert a newline; bare enter sends the whole message', async () => {
   const host = new FakeHost(tmp)
   const { app } = await started(host)
-  // bare enter = newline (the v0.19 flip); alt+enter submits here
-  app.feed('line one\rline two')
+  // the v0.22 convention: modified enters newline, bare enter submits
+  app.feed('line one\x1b\rline two')  // alt+enter → newline
   app.renderNow()
   const rows = app.lastFrame.map(stripAnsi)
   const l1 = rows.findIndex((r) => r.includes('line one'))
   const l2 = rows.findIndex((r) => r.includes('line two'))
   if (l1 === -1 || l2 === -1 || l1 === l2) throw new Error('multiline not rendered on distinct rows')
-  if (host.sent.length !== 0) throw new Error('bare enter must NOT submit')
-  app.feed('\x1b\r')
+  if (host.sent.length !== 0) throw new Error('alt+enter must NOT submit')
+  app.feed('\nthird')  // \n = ctrl+enter → another newline, still no submit
+  await sleep(10)
+  if (host.sent.length !== 0) throw new Error('ctrl+enter must NOT submit')
+  app.feed('\r')  // bare enter → submit everything
   await sleep(30)
-  if (host.sent.length !== 1 || host.sent[0].text !== 'line one\nline two') throw new Error(`multiline send wrong: ${JSON.stringify(host.sent)}`)
+  if (host.sent.length !== 1 || host.sent[0].text !== 'line one\nline two\nthird') throw new Error(`multiline send wrong: ${JSON.stringify(host.sent)}`)
   app.exit()
   await sleep(10)
   app.destroy()

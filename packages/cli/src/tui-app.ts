@@ -716,7 +716,7 @@ export interface TuiAppOptions {
   noResume?: boolean
 }
 
-const EDITOR_PLACEHOLDER = 'Message tagent… (enter newline · shift+enter send · / @ ?)'
+const EDITOR_PLACEHOLDER = 'Message tagent… (enter send · shift+enter newline · / @ ?)'
 const HINT_KEYS = `? shortcuts · / commands · @ files`
 
 /* ------------------------------------------------------------------ */
@@ -1703,7 +1703,7 @@ export class TuiApp {
     }
     if (ch === '\r') return { key: { t: 'enter' }, skip: 1 }
     // \n is what many terminals send for ctrl+enter — under the
-    // enter=newline convention it must submit, not make another newline
+    // enter=submit convention it inserts a newline, never a second submit
     if (ch === '\n') return { key: { t: 'enter', mod: 'ctrl' }, skip: 1 }
     if (ch === '\t') return { key: { t: 'tab' }, skip: 1 }
     if (ch === '\x7f' || ch === '\b') return { key: { t: 'backspace' }, skip: 1 }
@@ -1790,16 +1790,17 @@ export class TuiApp {
         return
       }
       case 'enter': {
-        // the inverted convention: bare enter makes a NEWLINE (pastes and
-        // long messages flow naturally); modified enters (shift/alt/ctrl)
-        // SUBMIT. Completion menus keep bare-enter accept — menu muscle memory.
+        // the natural convention: bare enter SUBMITS (chat muscle memory
+        // everywhere); modified enters (shift/alt/ctrl) make a NEWLINE for
+        // long messages. Completion menus keep bare-enter accept — menu muscle
+        // memory.
         if (file) {
           this.insertFileCandidate()
           return
         }
         if (pal) return this.paletteEnter()
-        if (k.mod === 'shift' || k.mod === 'alt' || k.mod === 'ctrl') return this.submit()
-        return this.editor.newline()
+        if (k.mod === 'shift' || k.mod === 'alt' || k.mod === 'ctrl') return this.editor.newline()
+        return this.submit()
       }
       case 'tab': {
         if (file) return this.insertFileCandidate()
@@ -2409,11 +2410,17 @@ export class TuiApp {
         return
       }
       case 'enter': {
-        if (k.mod === 'shift' || k.mod === 'alt') {
-          if (row.kind === 'notes' && ed) {
-            ed.newline()
+        // the notes box is multi-line — bare enter inserts a newline there
+        // (the chat convention); modified enters (and every enter on input
+        // rows) move on to the next field
+        if (row.kind === 'notes' && ed) {
+          if (k.mod === 'shift' || k.mod === 'alt' || k.mod === 'ctrl') {
+            clearMissing()
+            move(1)
             return
           }
+          ed.newline()
+          return
         }
         if (row.kind === 'submit') return this.askFormSubmit(ov)
         if (row.kind === 'option' && field) {
@@ -2431,7 +2438,7 @@ export class TuiApp {
           return
         }
         if (row.kind === 'add') return this.askFormAddOption(ov, row.fieldIndex)
-        // input / notes rows: enter moves on
+        // input rows: enter moves on
         clearMissing()
         move(1)
         return
@@ -2826,7 +2833,7 @@ export class TuiApp {
     const lines: string[] = ['', bold('  Tagent commands'), '']
     for (const [k, v] of HELP_ROWS) lines.push(`    ${'/' + padCol(k, 46)} ${dim(v)}`)
     lines.push('')
-    lines.push(dim('    type to talk · enter newline · shift+enter send · ctrl+x menu'))
+    lines.push(dim('    type to talk · enter send · shift+enter newline · ctrl+x menu'))
     this.overlayStack.push({ kind: 'text', title: 'help', lines, scroll: 0, resolve: () => undefined })
     this.requestRender()
   }
@@ -2841,8 +2848,8 @@ export class TuiApp {
       k('/', 'command palette'),
       k('@', 'file mention + completion'),
       k('↑ / ↓', 'input history (single line)'),
-      k('enter', 'newline — write multi-line messages'),
-      k('shift+enter', 'send (alt+enter / ctrl+enter too)'),
+      k('enter', 'send'),
+      k('shift+enter', 'newline — write multi-line messages (alt/ctrl+enter too)'),
       k('paste', 'multi-line paste — lands as text, never submits'),
       k('ctrl+a/e/u/k/w', 'line editing (home/end/kill)'),
       k('ctrl+x', 'main menu'),
