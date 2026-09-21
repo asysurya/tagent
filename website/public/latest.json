@@ -1,6 +1,6 @@
 {
-  "version": "0.20.0",
+  "version": "0.21.0",
   "date": "2026-09-21",
-  "notes": "Linked projects now push and pull automatically every few seconds while tagent runs, so every device stays converged. Config, API keys, providers, MCP servers and memory can ride along inside an AES-256-GCM encrypted vault that lives in the repo — only devices holding the passphrase can read it. /repo is the sync cockpit, tagent projects manages every linked project (sync · edit · clone · delete), the ESC key no longer eats the first letter typed after it, and the input box is pinned to the bottom edge of the screen.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.20.0"
+  "notes": "Closing tagent no longer closes the conversation: boot replays the last chat under the banner, and /clear [count|all] wipes only the text on screen while the agent’s memory stays. Every running sync engine heartbeats into the repo, so the navbar shows when another device is online; /repo status grows a per-project sync history. The agent can now budget each MCP call itself with __timeout_ms, and same-millisecond sessions no longer confuse the boot-resume picker.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.21.0"
 }

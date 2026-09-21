@@ -63,10 +63,12 @@ process when you want a browser. Same engine, same sessions, same permissions.
 | 🔼 **Multi-line input** | Enter inserts a newline, shift/alt/ctrl+enter sends; bracketed paste — multi-line pastes land as text, never an Enter-submit per line (v0.19.0) |
 | 🔺 **Background processes** | `bg_run` / `bg_logs` / `bg_stop` — the agent spawns long-running commands (dev servers, watchers, soak tests) in their own process group, keeps working, polls the output, and kills the tree when done (v0.19.0) |
 | 🧰 **Mode toolsets** | build = project-affecting tools, plan = investigate + interview (with explore subagents), test = QA — and MCP/plugin tools stay available in every mode (v0.19.0) |
-| ⏱️ **Agent-set timeouts** | bash/serve budgets go up to 60 minutes, `TAGENT_MCP_CALL_TIMEOUT_MS` for slow MCP tools — the agent decides how long to wait (v0.19.0) |
+| ⏱️ **Agent-set timeouts** | bash/serve budgets go up to 60 minutes; every `mcp_*` call takes `__timeout_ms` (1s–1h, clamped) — the agent decides how long to wait, per call (v0.21.0) |
 | 🔄 **Auto-sync projects** | Linked projects push + pull every 5–15s while tagent runs — every device stays converged; conflicts rebase, never lose work; `⏇ repo ⇅15s` rides the hint row (v0.20.0) |
 | 🔐 **Encrypted settings vault** | API keys · providers · MCP servers · memory travel inside the project in an AES-256-GCM sealed vault — only devices holding the passphrase can read it; `/repo` manages what rides along (v0.20.0) |
 | 📁 **tagent projects** | The manager: list · sync · edit · clone · delete every linked project, from any directory (v0.20.0) |
+| 💬 **Chat across restarts** | Boot replays the last chat under the banner; `/clear [count|all]` wipes only the on-screen text — the agent's memory stays (v0.21.0) |
+| ◉ **Device presence** | Running sync engines heartbeat into the repo — the navbar shows `◉ <device> online` while another device is fresh; `/repo status` adds per-project sync history (v0.21.0) |
 | 🧹 **Deterministic compaction** | `/compact` summarizes old turns into a structured digest (a 100k-token history lands ≈10k) — 100% local code, NO AI call, nothing invented: facts, paths, tool outcomes and decisions are copied, never generated. Re-compaction folds the prior digest in |
 | 📝 **AI ask forms** | `ask_user` tool — the agent interviews you through interactive forms: option / multi-option / input fields, add your own options, optional notes box; answers flow back into the run (TUI overlay · GUI dialog · headless-safe) |
 | 🛠 **Z.ai models config** | The built-in provider's model list is data: edit `~/.tagent/zai-models.json` (or `<workspace>/.tagent/zai-models.json`) to add/relabel/flag models — no release wait |
@@ -532,6 +534,7 @@ export const hooks = {
 - [x] Background processes — bg_run/bg_logs/bg_stop, the agent runs and watches long commands (v0.19.0)
 - [x] Multi-line input — enter=newline, shift+enter=send, paste-safe; mode toolsets; agent-set timeouts (v0.19.0)
 - [x] Project auto-sync + encrypted settings vault + `tagent projects` manager + the menu/ESC audit + bottom-pinned editor (v0.20.0)
+- [x] Chat memory across restarts + `/clear [count|all]` text-only wipe + device presence in the navbar + `/repo status` sync history + per-call MCP budgets (v0.21.0)
 
 Ideas for the next versions (unordered, unpromised):
 

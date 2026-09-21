@@ -28,9 +28,61 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.20.0'
+export const LATEST = '0.21.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.21.0',
+    date: '2026-09-21',
+    title: 'The chat that survives the exit — and the devices that show up',
+    summary:
+      'Closing tagent no longer closes the conversation: boot replays the last chat under the banner, and /clear [count|all] wipes only the text on screen while the agent\u2019s memory stays. Every running sync engine heartbeats into the repo, so the navbar shows when another device is online; /repo status grows a per-project sync history. The agent can now budget each MCP call itself with __timeout_ms, and same-millisecond sessions no longer confuse the boot-resume picker.',
+    stable: true,
+    sections: [
+      {
+        name: 'New: chat memory across restarts',
+        items: [
+          'each session keeps a transcript sidecar (.tagent/sessions/<id>.transcript.json) — the rendered chat text exactly as you read it, ANSI included',
+          'boot replays the newest session\u2019s text right under the banner ("the chat is simply back, like tagent was never closed"); tagent start --fresh boots empty instead',
+          '/open and /new swap the display to the switched session — wipe, fresh banner, that session\u2019s text replayed',
+        ],
+      },
+      {
+        name: '/clear [count|all] — text only, memory stays',
+        items: [
+          'clears the screen AND the native scrollback AND the saved transcript; the session\u2019s messages (the agent\u2019s memory) are untouched — /clear 2 removes the last 2 rendered chat messages, /clear all wipes the text, /clear alone asks what you meant',
+          'memory/text separation is explicit: messages are what the agent knows, the sidecar is what you were reading',
+        ],
+      },
+      {
+        name: 'New: device presence',
+        items: [
+          'every running sync engine heartbeats into the committed .tagent-sync/presence.json (every 45s, entries pruned by TTL) — presence travels with the repo like any other file',
+          'the navbar and hint row show "◉ <device> online" while another device is fresh — close the lid, the badge fades within a minute',
+        ],
+      },
+      {
+        name: '/repo status — the full picture',
+        items: [
+          'link state · engine (interval, last round, ahead/behind) · devices with heartbeats · vault shares — one card',
+          'per-project sync history, newest first: auto ticks and manual syncs land in .tagent/sync-history.json (when, direction, files, commit)',
+        ],
+      },
+      {
+        name: 'Agent-budgeted MCP calls',
+        items: [
+          'every mcp_* tool accepts __timeout_ms (1000–3600000, clamped): slow scrapers and pipeline tools get the budget they need per call, no env dance',
+          'the param is stripped before the payload reaches the server; TAGENT_MCP_CALL_TIMEOUT_MS stays the global default',
+        ],
+      },
+      {
+        name: 'Fixed',
+        items: [
+          'sessions born in the same millisecond (scripted flows, fast /new) tied in the boot-resume sort and readdir order decided which chat came back — session timestamps are now strictly increasing per store',
+        ],
+      },
+    ],
+  },
   {
     version: '0.20.0',
     date: '2026-09-21',

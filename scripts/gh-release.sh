@@ -36,68 +36,68 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — projects that sync themselves
+## v__VER__ — the chat that survives the exit
 
-Linked projects now push and pull automatically every few seconds while
-tagent runs — every device stays converged. Config, API keys, providers,
-MCP servers and memory can ride along inside an AES-256-GCM encrypted
-vault that lives in the repo. And the menus got an audit: nothing eats
-your keys anymore.
+Closing tagent no longer closes the conversation: boot replays the last
+chat under the banner, and /clear [count|all] wipes only the text on
+screen while the agent's memory stays. Every running sync engine
+heartbeats into the repo, so the navbar shows when another device is
+online — and /repo status grows a per-project sync history. The agent
+can budget each MCP call itself with __timeout_ms.
 
 ```
-╭─ ✻ Tagent v__VER__ ── 💬 porting the checkout flow ────────╮
-╰─ 🤖 build · glm-4.7 · 🔌 2✓ 31 · [██░░░░] 9% · 4m ───────╯
+╭─ ✻ Tagent v__VER__ ── 💬 porting the checkout flow ───────╮
+╰─ 🤖 build · glm-4.7 · 🔌 2✓ 31 · ◉ laptop-b25 online ────╯
 
-  ⎇ auto-sync pushed a41f2e1 → you/my-shop
-  ⎇ auto-sync pulled — 3 files · vault: apikey:openrouter
+  ↩ resumed "porting the checkout flow" · 12 messages in memory
+    — /clear [n|all] wipes the text only
+  ⎇ auto-sync pulled — 3 files · history: 42 rounds
 ? shortcuts · / commands · @ files       build · glm-4.7 · ⎇ you/my-shop ⇅15s
 ```
 
-### New: auto-sync (5–15s, per project)
+### New: chat memory across restarts
 
-- SyncEngine pushes and pulls linked projects on a timer while tagent
-  runs: a dirty tree commits and pushes; a clean tree fast-forwards when
-  another device moved; conflicts are rebased, never lost
-- the interval is per project (5s–1h, default 15s) and lives in
-  .tagent-sync/ inside the repo — every device agrees
-- auto-sync only engages for projects you already linked — a fresh
-  folder is never surprise-uploaded
-- the hint row shows the live engine: `⎇ owner/repo ⇅15s ↑sha`
+- each session keeps a transcript sidecar — the rendered chat text
+  exactly as you read it, ANSI included
+- boot replays the newest session's text right under the banner (the
+  chat is simply back, like tagent was never closed); tagent start
+  --fresh boots empty instead
+- /open and /new swap the display to the switched session
 
-### New: encrypted settings vault (/repo)
+### /clear [count|all] — text only, memory stays
 
-- pick what rides along: API keys, custom providers, MCP servers, saved
-  memory — sealed with AES-256-GCM (scrypt key), so the repo never leaks
-  secrets even if it leaks
-- the passphrase lives per device in ~/.tagent/credentials.json; rotate
-  it with /repo passphrase (re-seals the vault); fresh clones apply the
-  vault automatically on boot
-- first run generates a strong passphrase and shows it once — save it,
-  other devices need it to unlock
+- clears the screen AND the native scrollback AND the saved transcript;
+  the session's messages (the agent's memory) are untouched
+- /clear 2 removes the last 2 rendered chat messages, /clear all wipes
+  the text, /clear alone asks what you meant
 
-### New: tagent projects — the manager
+### New: device presence
 
-- interactive cockpit over every linked project: sync now · edit (repo
-  name, auto-sync, interval, vault shares, passphrase) · clone · unlink
-  this device · delete from GitHub (double confirm, delete_repo PAT)
-- scriptable: `tagent projects list | sync <name> | rm <name>`;
-  `tagent clone` with no argument opens a picker of your repos
+- every running sync engine heartbeats into the committed
+  .tagent-sync/presence.json (45s, pruned by TTL) — presence travels
+  with the repo like any other file
+- the navbar and hint row show "◉ <device> online" while another device
+  is fresh — close the lid, the badge fades within a minute
 
-### The menu audit — options that used to error when selected
+### /repo status — the full picture
 
-- ESC followed by another key was swallowed as an unknown escape
-  sequence — menus appeared not to close and the first letter typed
-  after ESC was eaten. Both resolve cleanly now
-- slash commands and ctrl+x menu actions catch their own errors — a
-  broken option prints one red line instead of an unhandled rejection
-- /exit force-exits after cleanup: a live sync-engine timer can never
-  leave a restored-but-hung process
+- link state · engine (interval, last round, ahead/behind) · devices
+  with heartbeats · vault shares — one card
+- per-project sync history, newest first: auto ticks and manual syncs
+  land in .tagent/sync-history.json (when, direction, files, commit)
 
-### The editor sits at the bottom
+### Agent-budgeted MCP calls
 
-- fullscreen pads the transcript viewport to the full screen height, so
-  the input box is pinned to the bottom edge — the navbar's mirror
-  image — instead of floating mid-screen on short transcripts
+- every mcp_* tool accepts __timeout_ms (1000–3600000, clamped): slow
+  scrapers and pipeline tools get the budget they need per call
+- the param is stripped before the payload reaches the server;
+  TAGENT_MCP_CALL_TIMEOUT_MS stays the global default
+
+### Fixed
+
+- sessions born in the same millisecond (scripted flows, fast /new) tied
+  in the boot-resume sort and readdir order decided which chat came back
+  — session timestamps are now strictly increasing per store
 
 ---
 
@@ -151,7 +151,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — project auto-sync, encrypted settings vault, projects manager" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — chat memory across restarts, device presence, /repo status" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")
