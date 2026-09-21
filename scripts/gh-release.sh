@@ -36,62 +36,44 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — the agent that asks properly, and enter that sends
+## v__VER__ — pastes that paste, in every terminal
 
-Three directives reshape how the agent works in every mode: questions
-always go through the ask_user form, connected MCP tools are used on the
-agent's own initiative, and build mode carries a professional quality
-bar — "build a blog" means Blogger/Ghost-level work, never one bare HTML
-file unless you explicitly asked for simple. And the input keys are back
-to the natural convention: enter sends, shift+enter makes a newline.
+v0.22.0 made bare enter send, which exposed a corner: in terminals
+without bracketed-paste support, a pasted multi-line blob arrived as raw
+keystrokes and the first line's newline submitted the composer. The new
+raw-paste heuristic recognizes that burst and reroutes it into the editor
+as text. Typed input is untouched — a bare enter at the end of its own
+keystroke burst still sends.
 
 ```
-╭─ ✻ Tagent v__VER__ ── 💬 porting the checkout flow ───────╮
+╭─ ✻ Tagent v__VER__ ── 💬 pasting the migration notes ────╮
 ╰─ 🤖 build · glm-4.7 · 🔌 2✓ 31 · ◉ laptop-b25 online ────╯
 
-  ❯ build me a blog for my coffee shop
-  ● on it — full site: theme, posts, search, RSS, responsive.
-    picking the stack (ask form follows)…
-? shortcuts · / commands · @ files       build · glm-4.7 · ⎇ you/my-shop ⇅15s
+  ❯ (paste: 40 lines of YAML with blank lines)
+    all 40 lines sit in the composer, newlines intact — nothing sent
+? shortcuts · / commands · @ files       build · glm-4.7 · ⎇ you/api ⇅15s
 ```
 
-### Directive: ask through the form
+### Raw-paste fallback (no bracketed paste needed)
 
-- whenever something material is unknown, the agent calls ask_user —
-  the interactive form with options and input fields — never a
-  plain-text question that ends the turn and stalls the run
-- works in every mode, any time mid-run; the answers flow straight back
-  into the work
-- the action protocol itself now points mid-run questions to ask_user
-  instead of "reply with text only"
+- terminals that ignore the bracketed-paste mode (older conhost, some
+  SSH/IDE consoles) send pastes as one burst of raw keys with a bare
+  carriage-return at each line end — that burst is now detected and
+  inserted as text instead of parsed as keys
+- CRLF, CR-only, and LF-only pastes all land with their line structure
+  intact; a CRLF pair becomes one newline and blank lines survive
+- a single trailing newline (the select-copy artifact) drops, and pasted
+  CSI/escape bytes — the coloring codes that ride along when you copy
+  terminal output — never reach the composer
 
-### Directive: MCP tools used unprompted
+### Typing stays typing
 
-- when MCP servers are connected, the prompt names them and teaches
-  auto-detecting each tool from its [mcp:<server>] prefix and
-  description
-- docs lookups, web reading, knowledge graphs — the agent reaches for
-  them the moment they fit, in every mode, without being told
-
-### Directive: professional quality bar
-
-- the default is professional-grade, production-quality work —
-  simplifying only when you explicitly ask for simple/minimal/prototype
-- "build a blog" means a real polished product on the level of
-  Blogger/Ghost — theme and layout system, navigation, post pages,
-  search, tags, RSS, SEO meta, responsive down to mobile — NOT one bare
-  HTML file
-- no placeholders where real work belongs: no TODO stubs, no lorem ipsum
-  where real copy is expected
-
-### Keys: enter sends again
-
-- bare enter SUBMITS — chat muscle memory everywhere; shift+enter (also
-  alt/ctrl+enter) inserts a newline for long messages
-- menus and dialogs keep enter=accept; the ask-form notes box follows
-  the same swap (bare enter newlines, modified moves on)
-- bracketed paste unchanged — multi-line pastes still land as text,
-  never an Enter-submit per line
+- a bare enter as the last key of its burst still submits — fast typists
+  and coalesced chunks included
+- modified enters are never mistaken for pastes: alt+enter and kitty
+  shift/ctrl+enter keep inserting newlines mid-chunk
+- menus, dialogs, the ask-form notes box: paste lands in whichever editor
+  owns input, same as bracketed pastes always did
 
 ---
 
@@ -145,7 +127,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — ask_user always, MCP on own initiative, professional quality bar, enter=send" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — multi-line pastes land as newlines in every terminal" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")

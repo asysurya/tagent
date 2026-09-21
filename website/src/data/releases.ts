@@ -28,9 +28,36 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.22.0'
+export const LATEST = '0.22.1'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.22.1',
+    date: '2026-09-21',
+    title: 'Pastes that paste — in every terminal',
+    summary:
+      'v0.22.0 made bare enter send, which exposed a corner: in terminals without bracketed-paste support, a pasted multi-line blob arrived as raw keystrokes and the first line\u2019s newline submitted the composer. The raw-paste heuristic now recognizes that burst and reroutes it into the editor as text — newlines land as newlines, CRLF pairs collapse, blank lines survive, a trailing copy-newline drops, and pasted terminal escape garbage never reaches the composer. Typed input is untouched: a bare enter at the end of its own keystroke burst still sends.',
+    stable: true,
+    sections: [
+      {
+        name: 'Raw-paste fallback (no bracketed paste needed)',
+        items: [
+          'terminals that ignore the bracketed-paste mode (older conhost, some SSH/IDE consoles) send pastes as one burst of raw keys with a bare carriage-return at each line end — that burst is now detected and inserted as text instead of parsed as keys',
+          'CRLF, CR-only, and LF-only pastes all land with their line structure intact; a CRLF pair becomes one newline and blank lines survive',
+          'a single trailing newline (the select-copy artifact) is dropped, same as bracketed pastes',
+          'pasted CSI/escape bytes — the coloring codes that ride along when you copy terminal output — are stripped so control garbage never lands in the composer',
+        ],
+      },
+      {
+        name: 'Typing stays typing',
+        items: [
+          'a bare enter as the last key of its burst still submits — fast typists and coalesced chunks included',
+          'modified enters are never mistaken for pastes: alt+enter, kitty shift/ctrl+enter keep inserting newlines mid-chunk',
+          'menus, dialogs, the ask-form notes box: paste lands in whichever editor owns input, same as before',
+        ],
+      },
+    ],
+  },
   {
     version: '0.22.0',
     date: '2026-09-21',

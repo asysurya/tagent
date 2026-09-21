@@ -1562,6 +1562,17 @@ export class TuiApp {
     const combined = this.inBuf + data
     const start = combined.indexOf('\x1b[200~')
     if (start === -1) {
+      // no bracketed markers — but a terminal without 2004 support sends a
+      // pasted multi-line blob as raw keystrokes (one bare \r per line),
+      // which under enter-to-send would submit once per line. detectRawPaste
+      // recognizes that burst and reroutes it as text.
+      const pasted = this.detectRawPaste(combined)
+      if (pasted !== null) {
+        this.inBuf = ''
+        this.pasteText(pasted)
+        this.requestRender()
+        return
+      }
       this.inBuf = combined
       this.pump()
       this.requestRender()
@@ -1576,6 +1587,56 @@ export class TuiApp {
     this.pasteBuf = ''
     const rest = combined.slice(start + 6)
     if (rest.length > 0) this.feed(rest)
+  }
+
+  /** raw-keystroke paste heuristic — the no-bracketed-paste fallback.
+   *
+   *  Bracketed paste (\x1b[?2004h, enabled in enterScreen) protects pastes
+   *  in every terminal that honors it. Terminals that don't send raw bytes
+   *  instead: a pasted multi-line blob arrives as one burst of keystrokes
+   *  with a bare \r at each line end — under the enter-to-send convention
+   *  each of those would SUBMIT the composer. Typed input can never look
+   *  like that: the app pumps each Enter as it arrives, so a bare enter
+   *  followed by more complete keys in the SAME chunk can only be pasted
+   *  text. When we see exactly that, rebuild the chunk as text — print and
+   *  tab tokens pass through, a \r\n pair collapses to one newline, other
+   *  enter tokens become single newlines, and non-text keys (esc, arrows,
+   *  CSI garbage a paste picked up from terminal output) drop out — then
+   *  insert it like a bracketed paste instead of parsing keys. */
+  private detectRawPaste(s: string): string | null {
+    if (s.length < 2 || (s.indexOf('\r') === -1 && s.indexOf('\n') === -1)) return null
+    const keys: Key[] = []
+    let i = 0
+    while (i < s.length) {
+      const r = this.parseKeyAt(s.slice(i))
+      if (r.wait) break // dangling tail — incomplete, doesn't count as content
+      i += r.skip
+      if (r.key) keys.push(r.key)
+    }
+    // a bare enter with at least one complete key after it = a paste burst
+    let paste = false
+    for (let j = 0; j < keys.length; j++) {
+      const k = keys[j]
+      if (k.t === 'enter' && k.mod === undefined && j < keys.length - 1) {
+        paste = true
+        break
+      }
+    }
+    if (!paste) return null
+    let text = ''
+    for (let j = 0; j < keys.length; j++) {
+      const k = keys[j]
+      if (k.t === 'print') text += k.ch
+      else if (k.t === 'tab') text += '\t'
+      else if (k.t === 'enter') {
+        // a \r\n pair is ONE line ending, not two — consume the pair whole
+        const nxt = keys[j + 1]
+        if (k.mod === undefined && nxt?.t === 'enter' && nxt.mod === 'ctrl') j++
+        text += '\n'
+      }
+      // esc / arrows / backspace / delete / ctrl-x / wheel… — not text, drop
+    }
+    return text
   }
 
   /** a paste body lands in whatever editor currently owns input — the main
@@ -2850,7 +2911,7 @@ export class TuiApp {
       k('↑ / ↓', 'input history (single line)'),
       k('enter', 'send'),
       k('shift+enter', 'newline — write multi-line messages (alt/ctrl+enter too)'),
-      k('paste', 'multi-line paste — lands as text, never submits'),
+      k('paste', 'paste lands as text (multi-line too), never submits'),
       k('ctrl+a/e/u/k/w', 'line editing (home/end/kill)'),
       k('ctrl+x', 'main menu'),
       k('tab', 'complete the / command or @ file'),

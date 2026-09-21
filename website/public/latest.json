@@ -1,6 +1,6 @@
 {
-  "version": "0.22.0",
+  "version": "0.22.1",
   "date": "2026-09-21",
-  "notes": "Three directives reshape how the agent works in every mode: questions always go through the ask_user form instead of a plain-text question that stalls the run, connected MCP tools are used on the agent’s own initiative, and build mode carries a professional quality bar — \"build a blog\" means Blogger/Ghost-level work, never one bare HTML file unless you explicitly asked for simple. The input keys are back to the natural convention: enter sends, shift/alt/ctrl+enter makes a newline.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.22.0"
+  "notes": "v0.22.0 made bare enter send, which exposed a corner: in terminals without bracketed-paste support, a pasted multi-line blob arrived as raw keystrokes and the first line’s newline submitted the composer. The raw-paste heuristic now recognizes that burst and reroutes it into the editor as text — newlines land as newlines, CRLF pairs collapse, blank lines survive, a trailing copy-newline drops, and pasted terminal escape garbage never reaches the composer. Typed input is untouched: a bare enter at the end of its own keystroke burst still sends.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.22.1"
 }

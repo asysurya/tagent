@@ -60,7 +60,7 @@ process when you want a browser. Same engine, same sessions, same permissions.
 | 🧪 **Test mode** | `tagent test` — QA agent: serves the project, clicks through it with a real browser, screenshots + audits responsive/typography/contrast, writes `TEST-REPORT.md` (vision models see the screenshots) |
 | 📊 **Context window** | Live usage bar under the chat input (`12.3k/131.1k [██████░░░░] 9%`, color-coded, opencode-style) tracks the model's window every turn; at 80% you get a one-key prompt to compact |
 | ✨ **Real TUI libraries** | The interface is built on string-width · figures · cli-boxes · picocolors · wrap-ansi: rounded cards (`╭─ ❯ you ─╮`), emoji tool icons with aligned columns, full box markdown tables (`╭┬╮ ├┼┤ ╰┴╯`), and width that counts CJK/emoji/combining marks correctly — the lines finally RATA (v0.18.0) |
-| 🔼 **Multi-line input** | Enter sends; shift/alt/ctrl+enter inserts a newline; bracketed paste — multi-line pastes land as text, never an Enter-submit per line (v0.22.0) |
+| 🔼 **Multi-line input** | Enter sends; shift/alt/ctrl+enter inserts a newline; pastes land as text in every terminal — bracketed or raw, multi-line pastes never submit (v0.22.1) |
 | 🗣 **Agent asks properly** | Questions go through the ask_user form — structured choices, never a plain-text question that stalls the run; works in every mode (v0.22.0) |
 | 🧠 **MCP auto-detect** | Connected MCP tools are part of the agent's standard kit — it reaches for them proactively, no prompting needed (v0.22.0) |
 | 💎 **Professional quality bar** | "Build a blog" means Blogger/Ghost-level work — theme, navigation, search, RSS, responsive. Simplified only when explicitly asked (v0.22.0) |
@@ -539,6 +539,7 @@ export const hooks = {
 - [x] Project auto-sync + encrypted settings vault + `tagent projects` manager + the menu/ESC audit + bottom-pinned editor (v0.20.0)
 - [x] Chat memory across restarts + `/clear [count|all]` text-only wipe + device presence in the navbar + `/repo status` sync history + per-call MCP budgets (v0.21.0)
 - [x] Agent directives: ask_user for questions, MCP tools used on own initiative, professional-grade default output + enter=send key swap (v0.22.0)
+- [x] Raw-paste fallback: multi-line pastes land as newlines even in terminals without bracketed-paste support; CRLF collapses, blank lines survive, escape garbage strips (v0.22.1)
 
 Ideas for the next versions (unordered, unpromised):
 
