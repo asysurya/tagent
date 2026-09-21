@@ -27,10 +27,22 @@ export class SessionStore {
   private dir: string
   /** sidecar cache — append-heavy: read once, keep in memory, rewrite */
   private tCache = new Map<string, TranscriptEntry[]>()
+  /** high-water mark of emitted timestamps — see nextTs() */
+  private lastTs = 0
 
   constructor(private root: string, private workspaceId: string) {
     this.dir = path.join(root, '.tagent', 'sessions')
     ensureDir(this.dir)
+  }
+
+  /** strictly-increasing wall clock per store. Sessions born in the same
+   *  millisecond (scripted flows, fast /new) otherwise tie in list()'s sort
+   *  and readdir order silently picks the boot-resume "newest" — the wrong
+   *  chat can come back. Monotonic + never below the record it updates. */
+  private nextTs(after?: number): number {
+    const ts = Math.max(Date.now(), this.lastTs + 1, (after ?? 0) + 1)
+    this.lastTs = ts
+    return ts
   }
 
   private file(id: string): string {
@@ -45,14 +57,15 @@ export class SessionStore {
   }
 
   create(title: string, model: string, mode: AgentMode): SessionData {
+    const born = this.nextTs()
     const session: SessionData = {
       id: uid(),
       workspaceId: this.workspaceId,
       title: title.slice(0, 80) || 'New session',
       model,
       mode,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      createdAt: born,
+      updatedAt: born,
       messageCount: 0,
       messages: [],
       todos: [],
@@ -62,7 +75,7 @@ export class SessionStore {
   }
 
   save(session: SessionData): void {
-    session.updatedAt = Date.now()
+    session.updatedAt = this.nextTs(session.updatedAt)
     session.messageCount = session.messages.length
     ensureDir(this.dir)
     fs.writeFileSync(this.file(session.id), JSON.stringify(session, null, 1))

@@ -46,12 +46,20 @@ function initTimeoutMs(): number {
 }
 /** per-CALL budget — some MCP tools are slow by nature (scrapers, agents,
  *  build pipelines). Override with TAGENT_MCP_CALL_TIMEOUT_MS=<millis>
- *  (values under 1s are ignored). */
+ *  (values under 1s are ignored). The agent may also pass `__timeout_ms`
+ *  on any mcp_* call for a per-invocation budget (1s..1h, clamped). */
 function callTimeoutMs(): number {
   const v = Math.floor(Number(process.env.TAGENT_MCP_CALL_TIMEOUT_MS ?? ''))
   return Number.isFinite(v) && v >= 1000 ? v : 120_000
 }
 const CALL_TIMEOUT_MS = callTimeoutMs()
+const CALL_TIMEOUT_MAX = 3_600_000
+/** clamp an agent-requested per-call budget into a sane range */
+function clampCallTimeout(requested: unknown): number | undefined {
+  const v = Math.floor(Number(requested))
+  if (!Number.isFinite(v)) return undefined
+  return Math.min(Math.max(v, 1_000), CALL_TIMEOUT_MAX)
+}
 const LIST_TIMEOUT_MS = 10_000
 const MAX_OUTPUT = 24_000
 
@@ -192,8 +200,9 @@ class McpConnection {
     return this.tools
   }
 
-  async call(tool: string, args: Record<string, unknown>): Promise<string> {
-    const result = (await this.request('tools/call', { name: tool, arguments: args }, CALL_TIMEOUT_MS)) as {
+  async call(tool: string, args: Record<string, unknown>, timeoutMs?: number): Promise<string> {
+    const budget = timeoutMs ?? CALL_TIMEOUT_MS
+    const result = (await this.request('tools/call', { name: tool, arguments: args }, budget)) as {
       content?: { type: string; text?: string }[]
       isError?: boolean
     }
@@ -308,13 +317,24 @@ export class McpManager {
       if (conn.state !== 'ready') continue
       for (const t of conn.tools) {
         const tn = toolName(name, t.name)
+        const baseParams = schemaToParams(t.inputSchema)
+        const schema = (t.inputSchema as Record<string, unknown>) ?? { type: 'object', properties: {} }
         defs.push({
           name: tn,
           description: `[mcp:${name}] ${t.description ?? t.name}`.slice(0, 400),
           risk: 'medium',
-          params: schemaToParams(t.inputSchema),
-          inputSchema: (t.inputSchema as Record<string, unknown>) ?? { type: 'object', properties: {} },
-          run: async (input) => conn.call(t.name, input),
+          params: { ...baseParams, __timeout_ms: 'number — per-call budget in ms (min 1000, max 3600000, default 120000)' },
+          inputSchema: {
+            ...(typeof schema === 'object' && schema !== null ? schema : {}),
+            properties: {
+              ...(((schema as { properties?: Record<string, unknown> }).properties ?? {}) as Record<string, unknown>),
+              __timeout_ms: { type: 'number', description: 'Per-call timeout in milliseconds (1000-3600000). Override when this tool is known to be slow.' },
+            },
+          },
+          run: async (input) => {
+            const { __timeout_ms, ...args } = input
+            return conn.call(t.name, args, clampCallTimeout(__timeout_ms))
+          },
         })
       }
     }
