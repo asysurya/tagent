@@ -115,6 +115,29 @@ class FakeHost {
       mcpStatus: [],
     }
   }
+  /* the TUI's boot + navbar surface (v0.20 booted MCP at startup and reads
+   * live state per frame — the host has to provide it) */
+  mcpState: { state: string; tools: number }[] = []
+  mcpStatus(): { state: string; tools: number }[] {
+    return this.mcpState
+  }
+  async mcpEnsure(): Promise<{ state: string; tools: number }[]> {
+    return this.mcpState
+  }
+  contextInfo(): { used: number; limit: number; pct: number; bar: string } {
+    return { used: 0, limit: 131_072, pct: 0, bar: '' }
+  }
+  compactThreshold(): number {
+    return 80
+  }
+  compactSession(): { ok: false; error: string } {
+    return { ok: false, error: 'nothing to compact' }
+  }
+  sessionTranscript(): { t: string; m?: number }[] {
+    return []
+  }
+  sessionTranscriptAppend(): void {}
+  sessionTranscriptTrim(): void {}
   newSession(mode: 'build' | 'plan' = 'build') {
     this.session = { id: 's1', title: 'test session', mode, todos: [], messages: [] }
     this.bus.emit('session:active', this.session)
@@ -309,7 +332,7 @@ test('esc while running: interrupt + queued messages dropped', async () => {
   void a.send('first run')
   await sleep(30)
   if (!a.running) throw new Error('precondition: run must be live')
-  app.feed('second message\r') // submit while running → queued
+  app.feed('second message\n') // submit while running → queued (\n = ctrl+enter, the v0.19 convention)
   await sleep(20)
   if (a.queued.length !== 1) throw new Error(`precondition: expected 1 queued message, got ${a.queued.length}`)
   app.feed('\x1b') // esc → interrupt
@@ -353,10 +376,10 @@ test('up-arrow walks the input history on a single-line editor', async () => {
     host.sent.push({ text })
     return { turns: 1, toolCalls: 0, finished: 'complete' }
   }
-  app.feed('first message\r')
+  app.feed('first message\n')
   await sleep(30)
   a.running = false // the stub host never emits chat:done — reset the flag
-  app.feed('second message\r')
+  app.feed('second message\n')
   await sleep(30)
   if (host.sent.length !== 2) throw new Error(`precondition: 2 sends, got ${host.sent.length}`)
   app.feed('\x1b[A') // up → latest history entry

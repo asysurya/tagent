@@ -78,10 +78,36 @@ git(CLONE, 'reset', '--hard', STALE_SHA) // main sits at STALE, tracks origin/ma
 git(CLONE, 'remote', 'set-url', 'origin', 'https://github.com/asysurya/tagent.git')
 git(CLONE, 'config', `url.${ORIGIN}.insteadOf`, 'https://github.com/asysurya/tagent.git')
 // minimal node_modules so the clone can actually RUN: its own workspace core
-// (version = STALE) + socket.io borrowed from the real install
+// (version = STALE) + the runtime deps borrowed from the real install
 fs.mkdirSync(path.join(CLONE, 'node_modules/@tagent'), { recursive: true })
 fs.symlinkSync('../../packages/core', path.join(CLONE, 'node_modules/@tagent/core'))
-try { fs.symlinkSync(path.join(ROOT, 'node_modules/socket.io'), path.join(CLONE, 'node_modules/socket.io')) } catch { /* optional */ }
+/** link every package of src/node_modules into dst/node_modules (skip
+ *  .bin and any scopes in `skipScopes`) */
+const linkAll = (src: string, dst: string, skipScopes: string[] = []): void => {
+  fs.mkdirSync(dst, { recursive: true })
+  for (const e of fs.readdirSync(src)) {
+    if (e === '.bin' || e === '.cache') continue
+    if (e.startsWith('@') && skipScopes.includes(e)) continue
+    const from = path.join(src, e)
+    const t = path.join(dst, e)
+    if (e.startsWith('@')) {
+      fs.mkdirSync(t, { recursive: true })
+      for (const sub of fs.readdirSync(from)) {
+        const ts = path.join(t, sub)
+        if (!fs.existsSync(ts)) fs.symlinkSync(path.join(from, sub), ts)
+      }
+    } else if (!fs.existsSync(t)) fs.symlinkSync(from, t)
+  }
+}
+try {
+  // workspace root hoist (socket.io and friends)
+  linkAll(path.join(ROOT, 'node_modules'), path.join(CLONE, 'node_modules'))
+  // v0.18+ runs on real TUI deps (string-width, figures, cli-boxes, …) which
+  // bun installs into packages/cli/node_modules — link those too, EXCEPT the
+  // @tagent scope: those are workspace links to the REAL core and would make
+  // the "stale" clone run the fresh core (version comes from @tagent/core)
+  linkAll(path.join(ROOT, 'packages/cli/node_modules'), path.join(CLONE, 'packages/cli/node_modules'), ['@tagent'])
+} catch { /* best-effort — missing deps surface as a clear error below */ }
 
 // 3. the decoy: the user's own repo they run the update from
 fs.mkdirSync(DECOY, { recursive: true })

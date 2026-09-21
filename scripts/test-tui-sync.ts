@@ -143,6 +143,29 @@ class FakeHost {
       mcpStatus: [],
     }
   }
+  /* the TUI's boot + navbar surface (v0.20 booted MCP at startup and reads
+   * live state per frame — the host has to provide it) */
+  mcpState: { state: string; tools: number }[] = []
+  mcpStatus(): { state: string; tools: number }[] {
+    return this.mcpState
+  }
+  async mcpEnsure(): Promise<{ state: string; tools: number }[]> {
+    return this.mcpState
+  }
+  contextInfo(): { used: number; limit: number; pct: number; bar: string } {
+    return { used: 0, limit: 131_072, pct: 0, bar: '' }
+  }
+  compactThreshold(): number {
+    return 80
+  }
+  compactSession(): { ok: false; error: string } {
+    return { ok: false, error: 'nothing to compact' }
+  }
+  sessionTranscript(): { t: string; m?: number }[] {
+    return []
+  }
+  sessionTranscriptAppend(): void {}
+  sessionTranscriptTrim(): void {}
   interrupt(): void {}
 }
 
@@ -163,9 +186,11 @@ type AppInternals = {
 const internals = (app: TuiApp): AppInternals => app as unknown as AppInternals
 
 const framePlain = (app: TuiApp): string => app.lastFrame.map(stripAnsi).join('\n')
-/** the sticky hint row — carries the ⎇ sync badge in the inline model */
+/** the sticky hint row — carries the ⎇ sync badge in the inline model.
+ *  (the v0.20 navbar footer also reads "build · model…", so anchor on the
+ *  hint row's own left segment, not the mode token) */
 const hintRowPlain = (app: TuiApp): string => {
-  const row = app.lastFrame.map(stripAnsi).find((r) => /\b(build|plan) ·/.test(r))
+  const row = app.lastFrame.map(stripAnsi).find((r) => r.includes('? shortcuts'))
   return row ?? ''
 }
 

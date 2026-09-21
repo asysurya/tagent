@@ -32,7 +32,7 @@ export {
   DIAGNOSTICS_DEFAULT_TIMEOUT_MS, type DiagnosticsResult,
 } from './diagnostics'
 export { buildSystemPrompt } from './system-prompt'
-export { SessionStore } from './session'
+export { SessionStore, type TranscriptEntry } from './session'
 export {
   createCheckpoint, listCheckpoints, undoCheckpoint, shouldCheckpoint,
   type CheckpointMeta,
@@ -83,9 +83,12 @@ export {
   SyncEngine, manualSync, readSyncSettings, writeSyncSettings, defaultSyncSettings,
   exportVaultPayload, applyVaultPayload, hashPayload, vaultNeedsPassphrase,
   syncDirOf, syncSettingsFile, vaultFileOf,
+  deviceIdOf, deviceName, readPresence, writePresence, onlineOthers, PRESENCE_EVERY_MS,
+  recordSyncHistory, readSyncHistory,
   SYNC_DIR, MIN_INTERVAL_MS, MAX_INTERVAL_MS, DEFAULT_INTERVAL_MS,
   type RepoSyncSettings, type VaultSettings, type VaultPayload,
   type SyncEvent, type SyncEngineStatus, type SyncEngineOpts,
+  type PresenceEntry, type SyncHistoryEntry,
 } from './sync'
 export {
   encryptVaultJSON, decryptVaultJSON, parseVaultFile,

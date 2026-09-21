@@ -71,6 +71,7 @@ import {
   type PermissionRequest,
   type SessionData,
   type SessionMeta,
+  type TranscriptEntry,
   type TagentConfig,
   type ToolCallRecord,
   type CustomProviderConfig,
@@ -303,6 +304,23 @@ export class AgentHost {
 
   listSessions(): SessionMeta[] {
     return this.sessions.list()
+  }
+
+  /* ---------------- transcript sidecar (chat text persistence) ---------------- */
+
+  /** the persisted chat TEXT of a session — what /clear wipes and what
+   *  boot replays. The agent's memory is the session's messages, not this. */
+  sessionTranscript(id: string): TranscriptEntry[] {
+    return this.sessions.readTranscript(id)
+  }
+
+  sessionTranscriptAppend(id: string, entries: TranscriptEntry[]): void {
+    this.sessions.appendTranscript(id, entries)
+  }
+
+  /** keep only the first `keepFirst` entries — 0 wipes the text. */
+  sessionTranscriptTrim(id: string, keepFirst: number): void {
+    this.sessions.trimTranscript(id, keepFirst)
   }
 
   /** persisted subagent runs of one session — the multi-agent timeline */

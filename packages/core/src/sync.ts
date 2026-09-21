@@ -17,6 +17,7 @@
  * least once) — a brand-new folder is never surprise-uploaded.
  */
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
@@ -81,6 +82,188 @@ export function syncSettingsFile(root: string): string {
 
 export function vaultFileOf(root: string): string {
   return path.join(root, SYNC_DIR, 'vault.json')
+}
+
+/* ------------------------------ presence ------------------------------ */
+
+/** device presence — the navbar's "◉ laptop" badge ("device lain sedang
+ *  online"). Every running engine refreshes its own entry in the COMMITTED
+ *  .tagent-sync/presence.json on a slow heartbeat (45s — a git commit per
+ *  minute per device is the cheapest online-signal that needs no server);
+ *  whoever writes also prunes stale entries, so the file stays tiny.
+ *  Entries fresher than the TTL are online. Device ids live in the
+ *  gitignored .tagent/ — every clone (= every device) mints its own. */
+export const PRESENCE_EVERY_MS = 45_000
+
+export interface PresenceEntry {
+  id: string
+  name: string
+  at: number
+}
+
+/** in-memory fallback when .tagent/ is read-only — keeps the id stable for the run */
+const DEVICE_IDS = new Map<string, string>()
+
+/** stable per-clone device identity (8 hex chars). */
+export function deviceIdOf(root: string): string {
+  const key = path.resolve(root)
+  const cached = DEVICE_IDS.get(key)
+  if (cached) return cached
+  const file = path.join(key, '.tagent', 'device-id')
+  try {
+    const cur = fs.readFileSync(file, 'utf8').trim()
+    if (/^[a-f0-9]{6,16}$/.test(cur)) {
+      DEVICE_IDS.set(key, cur)
+      return cur
+    }
+  } catch {
+    /* first run — mint below */
+  }
+  const id = createHash('sha256')
+    .update(`${os.hostname()}|${key}|${Date.now()}|${Math.random()}`)
+    .digest('hex')
+    .slice(0, 10)
+  try {
+    ensureDir(path.dirname(file))
+    fs.writeFileSync(file, id)
+  } catch {
+    /* read-only workspace — the map keeps this run's id stable */
+  }
+  DEVICE_IDS.set(key, id)
+  return id
+}
+
+/** pretty device name — the hostname's first label ("laptop", "pixel-7"). */
+export function deviceName(): string {
+  return (os.hostname().split('.')[0] || 'device').slice(0, 16)
+}
+
+function presenceFileOf(root: string): string {
+  return path.join(root, SYNC_DIR, 'presence.json')
+}
+
+/** how long a heartbeat stays "online" — slow projects (interval > 45s)
+ *  ride their own ticks, so the TTL tracks the agreed interval (repo.json
+ *  is committed — every device agrees). */
+function presenceTtlMs(root: string): number {
+  return Math.max(135_000, readSyncSettings(root).intervalMs * 3)
+}
+
+/** fresh presence entries (own + others) from the working tree. */
+export function readPresence(root: string): PresenceEntry[] {
+  try {
+    const raw = JSON.parse(fs.readFileSync(presenceFileOf(root), 'utf8')) as {
+      devices?: Record<string, { name?: string; at?: number }>
+    }
+    const ttl = presenceTtlMs(root)
+    const now = Date.now()
+    return Object.entries(raw.devices ?? {})
+      .filter(([, v]) => typeof v?.at === 'number' && now - (v.at as number) < ttl)
+      .map(([id, v]) => ({
+        id,
+        name: typeof v.name === 'string' && v.name ? v.name : id.slice(0, 6),
+        at: v.at as number,
+      }))
+  } catch {
+    return []
+  }
+}
+
+/** heartbeat: refresh this device's entry + prune stale ones. Returns
+ *  true when the file changed (→ worth a commit this tick); false when
+ *  the last heartbeat is still fresh. */
+export function writePresence(root: string): boolean {
+  const file = presenceFileOf(root)
+  let devices: Record<string, { name: string; at: number }> = {}
+  try {
+    devices =
+      (JSON.parse(fs.readFileSync(file, 'utf8')) as { devices?: Record<string, { name: string; at: number }> })
+        .devices ?? {}
+  } catch {
+    /* fresh file */
+  }
+  const ttl = presenceTtlMs(root)
+  const now = Date.now()
+  for (const [id, v] of Object.entries(devices)) {
+    if (now - (v?.at ?? 0) > ttl) delete devices[id]
+  }
+  const self = deviceIdOf(root)
+  const prev = devices[self]
+  if (prev && now - prev.at < PRESENCE_EVERY_MS) return false // not due yet
+  devices[self] = { name: deviceName(), at: now }
+  try {
+    ensureDir(path.dirname(file))
+    fs.writeFileSync(file, JSON.stringify({ devices }, null, 2))
+    return true
+  } catch {
+    return false // read-only workspace — no presence, no crash
+  }
+}
+
+/** OTHER devices with a fresh heartbeat — what the navbar shows. */
+export function onlineOthers(root: string): PresenceEntry[] {
+  const self = deviceIdOf(root)
+  return readPresence(root).filter((d) => d.id !== self)
+}
+
+/* ------------------------------ history ------------------------------ */
+
+/** what actually happened, per project — .tagent/sync-history.json
+ *  (gitignored: each device keeps its own view of the timeline; /repo
+ *  status renders it). Capped at the last 100 rounds. */
+export interface SyncHistoryEntry {
+  at: number
+  action: 'pushed' | 'pulled' | 'error' | 'vault' | 'settings'
+  detail: string
+  repo?: string
+  commit?: string
+}
+
+const HISTORY_CAP = 100
+
+function historyFileOf(root: string): string {
+  return path.join(root, '.tagent', 'sync-history.json')
+}
+
+export function recordSyncHistory(
+  root: string,
+  entry: Omit<SyncHistoryEntry, 'at'> & { at?: number },
+): void {
+  try {
+    const full: SyncHistoryEntry = {
+      at: entry.at ?? Date.now(),
+      action: entry.action,
+      detail: entry.detail.slice(0, 160),
+      ...(entry.repo ? { repo: entry.repo } : {}),
+      ...(entry.commit ? { commit: entry.commit } : {}),
+    }
+    let entries: SyncHistoryEntry[] = []
+    try {
+      entries =
+        (JSON.parse(fs.readFileSync(historyFileOf(root), 'utf8')) as { entries?: SyncHistoryEntry[] })
+          .entries ?? []
+    } catch {
+      /* fresh file */
+    }
+    entries.push(full)
+    if (entries.length > HISTORY_CAP) entries = entries.slice(-HISTORY_CAP)
+    ensureDir(path.dirname(historyFileOf(root)))
+    fs.writeFileSync(historyFileOf(root), JSON.stringify({ entries }, null, 1))
+  } catch {
+    /* history is best-effort — never break a sync over it */
+  }
+}
+
+/** newest-first sync rounds (default: the last 20). */
+export function readSyncHistory(root: string, limit = 20): SyncHistoryEntry[] {
+  try {
+    const entries =
+      (JSON.parse(fs.readFileSync(historyFileOf(root), 'utf8')) as { entries?: SyncHistoryEntry[] })
+        .entries ?? []
+    return entries.slice(-limit).reverse()
+  } catch {
+    return []
+  }
 }
 
 export function readSyncSettings(root: string): RepoSyncSettings {
@@ -258,6 +441,8 @@ export interface SyncEngineStatus {
   lastAction: '' | 'pushed' | 'pulled'
   busy: boolean
   needsPassphrase: boolean
+  /** other devices with a fresh presence heartbeat — the navbar badge */
+  others: PresenceEntry[]
 }
 
 export interface SyncEngineOpts {
@@ -313,6 +498,7 @@ export class SyncEngine {
       lastAction: this.lastAction,
       busy: this.busy,
       needsPassphrase: vaultNeedsPassphrase(this.root),
+      others: onlineOthers(this.root),
     }
   }
 
@@ -348,6 +534,7 @@ export class SyncEngine {
       this.lastError = ''
     } catch (err) {
       this.lastError = String((err as Error)?.message ?? err).split('\n')[0].slice(0, 200)
+      recordSyncHistory(this.root, { action: 'error', detail: this.lastError })
       if (reason === 'manual') throw err
       this.emit({ type: 'error', message: this.lastError })
     } finally {
@@ -358,6 +545,16 @@ export class SyncEngine {
   private async tickInner(reason: 'timer' | 'manual'): Promise<void> {
     const s = readSyncSettings(this.root)
     if (reason === 'timer' && !s.auto) return
+
+    // heartbeat — keeps this device "online" to the others even while the
+    // tree is clean (a clean tree commits nothing). Write-before-dirty-check
+    // so the heartbeat rides this tick's push instead of forcing an extra one
+    let heartbeat = false
+    try {
+      heartbeat = writePresence(this.root)
+    } catch {
+      /* read-only — presence just doesn't happen */
+    }
 
     // vault present but this device can't open it → one notice, then quiet
     if (vaultNeedsPassphrase(this.root)) {
@@ -385,7 +582,7 @@ export class SyncEngine {
 
     // dirty tree? cheap check, no network
     const isRepo = fs.existsSync(path.join(this.root, '.git'))
-    const dirty = !isRepo || (await gitOk(this.root, 'status', '--porcelain')) !== ''
+    const dirty = !isRepo || heartbeat || (await gitOk(this.root, 'status', '--porcelain')) !== ''
 
     if (dirty || vaultChanged) {
       await this.doPush()
@@ -437,8 +634,9 @@ export class SyncEngine {
 
   private async doPush(): Promise<void> {
     const before = await this.revParse().catch(() => '')
+    const dev = `⧉${deviceName()}`
     const r: PushResult = await syncProject(this.root, this.cfg(), {
-      message: `sync: auto ${new Date().toISOString().slice(11, 19)}`,
+      message: `sync: auto ${new Date().toISOString().slice(11, 19)} ${dev}`,
       remoteBase: this.opts.remoteBase,
     })
     // a rebase inside syncProject may have integrated remote work too
@@ -446,6 +644,7 @@ export class SyncEngine {
     let applied: string[] = []
     if (before && after && before !== after) applied = await this.applyVaultIfChanged(before, after)
     this.lastAction = 'pushed'
+    recordSyncHistory(this.root, { action: 'pushed', detail: `auto ${dev}`, repo: r.repo, commit: r.commit })
     this.emit({ type: 'pushed', repo: r.repo, commit: r.commit })
     if (applied.length) this.emit({ type: 'pulled', files: 0, applied })
   }
@@ -483,6 +682,12 @@ export class SyncEngine {
         })
         this.lastAction = 'pushed'
         this.lastSyncAt = Date.now()
+        recordSyncHistory(this.root, {
+          action: 'pushed',
+          detail: `auto catch-up ⧉${deviceName()}`,
+          repo,
+          commit: head.slice(0, 7),
+        })
         this.emit({ type: 'pushed', repo, commit: head.slice(0, 7) })
         return
       }
@@ -504,6 +709,11 @@ export class SyncEngine {
       const applied = await this.applyVaultIfChanged(before, after)
       this.lastAction = 'pulled'
       this.lastSyncAt = Date.now()
+      recordSyncHistory(this.root, {
+        action: 'pulled',
+        detail: `${files} file${files === 1 ? '' : 's'}${applied.length ? ` + vault (${applied.join(', ')})` : ''}`,
+        repo,
+      })
       this.emit({ type: 'pulled', files, applied })
     } finally {
       // FETCH_HEAD records the fetch URL verbatim — including the one-shot
@@ -534,6 +744,9 @@ export class SyncEngine {
     const payload = decryptVaultJSON(vault, passphrase) as VaultPayload
     const { changed } = applyVaultPayload(this.root, payload)
     this.writeVaultState({ hash, payloadHash: hashPayload(payload) })
+    if (changed.length) {
+      recordSyncHistory(this.root, { action: 'vault', detail: `applied ${changed.join(', ')}` })
+    }
     return changed
   }
 

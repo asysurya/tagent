@@ -70,6 +70,7 @@ import {
   deleteRepo,
   readSyncSettings,
   writeSyncSettings,
+  recordSyncHistory,
   getVaultPassphrase,
   setVaultPassphrase,
   workspaceHasWork,
@@ -215,6 +216,9 @@ function printHelp() {
             the interactive TUI — the primary interface.
             --web-gui       also serve the browser GUI on this workspace
             --no-web-gui    skip the GUI even if config enables it
+            --inline        scrollback-native app (no alt-screen)
+            --fresh         boot with an empty screen — the last chat's
+                            text is not replayed (memory still loads)
     tagent web [path] [--port N] [--no-open]
             daemon + web GUI only (no TUI) — phone / remote use
     tagent run [path] "prompt" [--json]
@@ -380,6 +384,9 @@ async function mainStart(dirArg?: string, boot?: { mode?: 'test'; url?: string |
         workspaceRoot: root,
         webUrl,
         fullscreen: !has('--inline'),
+        // --fresh: boot with an empty screen — the previous chat's TEXT is
+        // not replayed (its memory still loads, /open brings it back)
+        noResume: has('--fresh'),
         ...(boot?.mode === 'test'
           ? {
               initialMode: 'test' as const,
@@ -760,6 +767,7 @@ async function mainSync() {
       console.log(dim(`  linked this project as ${repoName}`))
     }
     const res = await syncProject(root, cfg, { message, onLog: (l) => console.log(`  ${dim(l)}`) }) // re-links with the full owner/name
+    recordSyncHistory(root, { action: 'pushed', detail: 'manual — tagent sync', repo: res.repo, commit: res.commit })
     console.log(green(`\n  ✔ synced → ${res.url}`))
     console.log(dim(`  commit ${res.commit} · branch ${res.branch}`))
   } catch (e) {
@@ -874,8 +882,10 @@ async function syncOneProject(p: ProjectReg): Promise<void> {
       message: 'sync: manual from tagent projects',
       onLog: (l) => console.log(`  ${dim(l)}`),
     })
+    recordSyncHistory(p.root, { action: 'pushed', detail: 'manual — tagent projects', repo: r.repo, commit: r.commit })
     console.log(green(`\n  ✔ synced → ${r.url} (${r.commit})\n`))
   } catch (e) {
+    recordSyncHistory(p.root, { action: 'error', detail: `manual — ${(e as Error).message}` })
     console.log(red(`\n  ✗ sync failed: ${(e as Error).message}`))
     console.log(dim('    nothing was lost — try again any time\n'))
   }

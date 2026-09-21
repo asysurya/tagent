@@ -69,6 +69,9 @@ import {
   defaultSyncSettings,
   MIN_INTERVAL_MS,
   DEFAULT_INTERVAL_MS,
+  readSyncHistory,
+  onlineOthers,
+  PRESENCE_EVERY_MS,
   type LoopSummary,
   type PermissionRequest,
   type AskFormRequest,
@@ -82,6 +85,7 @@ import {
   type SyncEvent,
   type SyncEngineStatus,
   type RepoSyncSettings,
+  type TranscriptEntry,
 } from '@tagent/core'
 
 import type { AgentHost } from './host'
@@ -638,7 +642,7 @@ const SLASH_COMMANDS: { name: string; desc: string }[] = [
   { name: 'grep', desc: 'search the workspace' },
   { name: 'sh', desc: 'run a shell command' },
   { name: 'auth', desc: 'GitHub login' },
-  { name: 'repo', desc: 'auto-sync · interval · encrypted settings' },
+  { name: 'repo', desc: 'auto-sync · status · interval · vault' },
   { name: 'push', desc: 'push to GitHub [msg]' },
   { name: 'checkpoints', desc: 'snapshot list' },
   { name: 'undo', desc: 'rollback last snapshot' },
@@ -648,7 +652,7 @@ const SLASH_COMMANDS: { name: string; desc: string }[] = [
   { name: 'stats', desc: 'sessions · ctx · snapshots' },
   { name: 'settings', desc: 'config dump' },
   { name: 'stop', desc: 'interrupt the run' },
-  { name: 'clear', desc: 'clear the screen' },
+  { name: 'clear', desc: 'wipe text [n|all] — memory stays' },
   { name: 'exit', desc: 'quit tagent' },
 ]
 
@@ -663,10 +667,10 @@ const HELP_ROWS: [string, string][] = [
   ['todos · log [n]', 'live plan · journal tail'],
   ['apikey <provider> · permissions · allow/deny/ask <tool>', 'access'],
   ['files [path] · read <f> · grep <pat> · sh <cmd>', 'workspace'],
-  ['auth · repo · push [msg]', 'GitHub · auto-sync · shared settings'],
+  ['auth · repo [status] · push [msg]', 'GitHub · auto-sync · sync history'],
   ['checkpoints · undo · memory · skills · skill <n>', 'memory & history'],
   ['stats · settings · update · webgui [on|off]', 'info · self-update'],
-  ['stop · clear · exit', 'run control'],
+  ['stop · clear [n|all] · exit', 'run control · text-only wipe'],
 ]
 
 /* ------------------------------------------------------------------ */
@@ -707,6 +711,9 @@ export interface TuiAppOptions {
    *  built-in scrollback viewer). index.ts defaults this on for capable
    *  terminals; `tagent start --inline` keeps the classic inline app. */
   fullscreen?: boolean
+  /** `tagent start --fresh` — boot with an empty screen: the previous
+   *  chat's TEXT is not replayed (memory still loads). */
+  noResume?: boolean
 }
 
 const EDITOR_PLACEHOLDER = 'Message tagent… (enter newline · shift+enter send · / @ ?)'
@@ -720,6 +727,11 @@ interface LogLine {
   raw: string
   /** wrapped (at flush time) lines already written into the scrollback */
   wrapped?: string[]
+  /** first line of a chat message (user box / assistant reply) — the unit
+   *  /clear <count> trims */
+  m?: 1
+  /** display-only line (banner, system notes) — never persisted */
+  sys?: 1
 }
 
 export class TuiApp {
@@ -828,6 +840,15 @@ export class TuiApp {
   /* project auto-sync engine (/repo — push + pull every few seconds) */
   private sync?: SyncEngine
   private syncHint = ''
+  /** status() reads files (settings + presence) — cached ~500ms so the 1s
+   *  navbar tick and the per-frame hint row share one read */
+  private syncStatusCache: { at: number; val: SyncEngineStatus | undefined } = { at: 0, val: undefined }
+
+  /* transcript persistence — "memory chat gak hilang saat ditutup":
+   *  everything println'd rides a debounced append into the session's
+   *  sidecar; boot replays it so the chat is simply back. */
+  private tPending: { sid: string; e: TranscriptEntry }[] = []
+  private tTimer: ReturnType<typeof setTimeout> | undefined
 
   private busCleanup: (() => void)[] = []
   private resizeBound = false
@@ -875,9 +896,18 @@ export class TuiApp {
       // the moment the handshake lands)
       void this.host.mcpEnsure().catch(() => undefined)
       if (this.opts.updateCheck !== false) await this.startupUpdate()
-      // the most recent session is one /open away — keep its todos loaded
+      // the most recent session is one /open away — its MEMORY loads now,
+      // and (unless --fresh) its TEXT replays right under the banner: the
+      // chat is simply back, like tagent was never closed
       const sessions = this.host.listSessions()
-      if (sessions.length > 0) this.host.loadSession(sessions[0].id)
+      if (sessions.length > 0) {
+        const loaded = this.host.loadSession(sessions[0].id)
+        if (loaded) {
+          this.sessionTitle = loaded.title
+          this.mode = loaded.mode
+        }
+        if (!this.opts.noResume) this.replayTranscript()
+      }
       // `tagent test` — boot straight into QA mode (optionally with a target)
       if (this.opts.initialMode === 'test') {
         this.host.setSessionMode('test')
@@ -918,6 +948,13 @@ export class TuiApp {
     if (this.destroyed) return
     this.destroyed = true
     this.hideStatus()
+    // persist whatever text hadn't hit the debounce yet — closing tagent
+    // must never lose the chat
+    try {
+      this.transcriptFlush()
+    } catch {
+      /* read-only — nothing to do */
+    }
     if (this.frameTimer) {
       clearTimeout(this.frameTimer)
       this.frameTimer = undefined
@@ -1027,6 +1064,11 @@ export class TuiApp {
     add('permission:request', (req: PermissionRequest) => void this.onPermission(req))
     add('ask:request', (form: AskFormRequest) => void this.onAskUserHost(form))
     add('chat:done', (d: { summary: LoopSummary }) => this.onChatDone(d.summary))
+    // /open · /new · boot — the navbar's title + mode follow the active session
+    add('session:active', (s: SessionData) => {
+      if (this.sessionTitle !== s.title) this.sessionTitle = s.title
+      if (this.mode !== s.mode) this.mode = s.mode
+    })
     add('context:update', (d: { used: number; limit: number }) => {
       const was = this.ctxLimit > 0 ? contextPct(this.ctxUsed, this.ctxLimit) : 0
       this.ctxUsed = d.used
@@ -1085,7 +1127,7 @@ export class TuiApp {
     this.streamText = ''
     if (!content.trim()) return
     const lines = this.mdRender ? this.mdRender(content, this.transcriptW()) : content.split('\n')
-    lines.forEach((l, i) => this.println(i === 0 ? `${orange('\u25CF')} ${l}` : l))
+    lines.forEach((l, i) => this.println(i === 0 ? `${orange('\u25CF')} ${l}` : l, i === 0 ? 1 : undefined))
   }
 
   private onToolStart(call: ToolCallRecord): void {
@@ -1197,7 +1239,7 @@ export class TuiApp {
     if (this.streamText.trim()) {
       const raw = this.streamText
       this.streamText = ''
-      raw.split('\n').forEach((l, i) => this.println(i === 0 ? `${orange('\u25CF')} ${l}` : l))
+      raw.split('\n').forEach((l, i) => this.println(i === 0 ? `${orange('\u25CF')} ${l}` : l, i === 0 ? 1 : undefined))
     }
     const mark = summary.finished === 'complete' ? green('✔ done') : summary.finished === 'aborted' ? yellow('■ stopped') : red('✗ error')
     const u = summary.usage
@@ -1210,6 +1252,9 @@ export class TuiApp {
     this.println(`  ${dim('⎿')} ${mark} ${dim(`· ${this.lastDoneLabel}`)}`)
     if (summary.error) this.println(`  ${red(summary.error)}`)
     this.running = false
+    // the run's text is complete — persist it right now (crash-safe, and
+    // /clear counts must see the whole message)
+    this.transcriptFlush()
     if (summary.plan) void this.offerPlan(summary.plan)
     const next = this.queued.shift()
     if (next) {
@@ -1309,17 +1354,37 @@ export class TuiApp {
   /* ---------------- output primitives ---------------- */
 
   /** append a (possibly multi-line) styled string to the transcript — it is
-   * wrapped at flush time and written into the terminal scrollback */
-  println(s: string): void {
+   * wrapped at flush time and written into the terminal scrollback. `mark`
+   * flags the first line of a chat message (the /clear <count> unit). */
+  println(s: string, mark?: 1): void {
     if (this.permissionFrozen) {
       this.frozen.push(s)
       return
     }
-    this.addLine(s)
+    this.addLine(s, mark)
   }
 
-  private addLine(s: string): void {
-    for (const l of s.split('\n')) this.log.push({ raw: l })
+  /** display-only println — banner + system notes. Same scrollback path,
+   *  but never persisted to the transcript sidecar (they're re-printed
+   *  fresh on every boot). */
+  private sysPrintln(s: string): void {
+    if (this.permissionFrozen) {
+      this.frozen.push(s)
+      return
+    }
+    this.addLine(s, undefined, 1)
+  }
+
+  private addLine(s: string, mark?: 1, sys?: 1): void {
+    for (const l of s.split('\n')) {
+      this.log.push({ raw: l, ...(mark ? { m: 1 } : {}), ...(sys ? { sys: 1 } : {}) })
+      // text persistence — everything the user read comes back after a
+      // restart (system lines excluded: banners print themselves). A line
+      // printed before the session exists (the FIRST user box, before
+      // chatSend mints the session) is attributed at flush time — by then
+      // the session exists and the box belongs to it.
+      if (!sys) this.tPending.push({ sid: this.host.session?.id ?? '', e: { t: l, ...(mark ? { m: 1 } : {}) } })
+    }
     // the scrollback itself is the transcript history — 4000 entries is only
     // a safety valve against unbounded memory in an endless session
     if (this.log.length > 4000) {
@@ -1330,6 +1395,7 @@ export class TuiApp {
       // flatLines() rebuild from the wrapped caches (cheap, they persist)
       this.flatCache = { upto: 0, lines: [] }
     }
+    this.scheduleTranscriptFlush()
     this.requestRender()
   }
 
@@ -1337,6 +1403,99 @@ export class TuiApp {
     const buf = this.frozen
     this.frozen = []
     for (const b of buf) this.addLine(b)
+  }
+
+  /* ---------------- transcript persistence ---------------- */
+
+  /** debounced write — the sidecar is the chat TEXT; flushing every single
+   *  line would hammer the disk for nothing. */
+  private scheduleTranscriptFlush(): void {
+    if (this.tTimer || this.tPending.length === 0) return
+    this.tTimer = setTimeout(() => {
+      this.tTimer = undefined
+      this.transcriptFlush()
+    }, 1_500)
+  }
+
+  /** write the pending lines into their sessions' sidecars (grouped by
+   *  session id — lines recorded before a /open switch belong to the OLD
+   *  session, and stay there). */
+  private transcriptFlush(): void {
+    if (this.tTimer) {
+      clearTimeout(this.tTimer)
+      this.tTimer = undefined
+    }
+    if (this.tPending.length === 0) return
+    const bySid = new Map<string, TranscriptEntry[]>()
+    const nowSid = this.host.session?.id ?? ''
+    for (const p of this.tPending) {
+      const sid = p.sid || nowSid // pre-session lines → the session that followed
+      if (!sid) continue // no session ever appeared — nothing to attach to
+      const arr = bySid.get(sid) ?? []
+      arr.push(p.e)
+      bySid.set(sid, arr)
+    }
+    this.tPending = []
+    for (const [sid, entries] of bySid) {
+      try {
+        this.host.sessionTranscriptAppend(sid, entries)
+      } catch {
+        /* read-only workspace — the run keeps going, only the text
+         *  restore is lost */
+      }
+    }
+  }
+
+  /** boot resume — the previous chat's TEXT back on screen. The memory
+   *  (session messages) already loaded; this restores what the user was
+   *  reading. /clear [count|all] wipes it (memory stays). */
+  private replayTranscript(): void {
+    const s = this.host.session
+    if (!s) return
+    const all = this.host.sessionTranscript(s.id)
+    if (all.length === 0) return
+    const CAP = 800
+    const show = all.length > CAP ? all.slice(-CAP) : all
+    this.sysPrintln(
+      dim(
+        `  ↩ resumed "${truncateStyled(s.title, 40)}" · ${s.messages.length} messages in memory` +
+          (all.length > CAP ? ` · showing the last ${CAP} of ${all.length} lines` : '') +
+          ' — /clear [n|all] wipes the text only',
+      ),
+    )
+    for (const e of show) this.log.push({ raw: e.t, ...(e.m ? { m: 1 } : {}) })
+    this.requestRender()
+  }
+
+  /** /open + /new — the display follows the session switch: flush what the
+   *  old session recorded, wipe the screen, print a fresh banner, replay
+   *  the new session's text. */
+  private swapTranscript(loaded: SessionData | null): void {
+    this.transcriptFlush()
+    this.wipeScreen()
+    this.log = []
+    this.flushed = 0
+    this.flatCache = { upto: 0, lines: [] }
+    this.viewing = false
+    this.viewOffset = 0
+    this.streamText = ''
+    this.lastDoneLabel = ''
+    if (loaded) {
+      this.sessionTitle = loaded.title
+      this.mode = loaded.mode
+    }
+    this.banner()
+    this.replayTranscript()
+  }
+
+  /** clear the screen AND the native scrollback, reset the sticky region. */
+  private wipeScreen(): void {
+    this.writeOut(
+      this.fullscreen
+        ? '\x1b[H\x1b[2J\x1b[3J'
+        : `\x1b[${Math.max(0, this.stickyDrawn - 1)}A\x1b[J\x1b[H\x1b[2J\x1b[3J`,
+    )
+    if (!this.fullscreen) this.stickyDrawn = 0
   }
 
   private banner(): void {
@@ -1351,16 +1510,16 @@ export class TuiApp {
       ? `🌐 ${this.webUrl} ${dim('(sharing this session)')}`
       : `🌐 web gui off — ${dim('/webgui on · start with --web-gui')}`
     const foot = truncateV(`📂 ${this.host.root} · ${web}`, Math.max(8, boxW - 4))
-    this.println('')
+    this.sysPrintln('')
     for (const r of roundBox({
       title: `${orange('✻')} ${bold('Tagent')} ${dim(`v${CURRENT_VERSION} · terminal-native coding agent`)}`,
       footer: foot,
       rows: [],
       width: boxW,
-    })) this.println(r)
-    this.println('')
-    this.println(dim('  type to talk to the agent · / commands · @ files · ? shortcuts · ctrl+x menu'))
-    this.println('')
+    })) this.sysPrintln(r)
+    this.sysPrintln('')
+    this.sysPrintln(dim('  type to talk to the agent · / commands · @ files · ? shortcuts · ctrl+x menu'))
+    this.sysPrintln('')
   }
 
   /* ---------------- input plumbing ---------------- */
@@ -1783,7 +1942,9 @@ export class TuiApp {
       }
       rows.push(...wrapV(l, cellW))
     }
-    this.println('')
+    // the leading blank line carries the message mark — /clear <count>
+    // trims from here, box and all
+    this.println('', 1)
     for (const r of roundBox({ title: '❯ you', rows, width: boxW, color: cyan })) this.println(r)
   }
 
@@ -2518,7 +2679,10 @@ export class TuiApp {
     )
     if (!pick) return this.println(dim('  cancelled'))
     const s = this.host.newSession(pick)
-    this.println(green(`  ✔ new ${pick} session · ${s.id}`))
+    // fresh session → fresh screen: the old session's text stays saved in
+    // ITS sidecar (/open brings it back), this one starts clean
+    this.swapTranscript(s)
+    this.sysPrintln(green(`  ✔ new ${pick} session · ${s.id.slice(0, 8)}`))
     if (pick === 'test') this.printModeBanner('test')
   }
 
@@ -2537,7 +2701,8 @@ export class TuiApp {
     )
     if (!id) return this.println(dim('  cancelled'))
     const loaded = this.host.loadSession(id)
-    this.println(green(`  ✔ ${loaded?.title} · ${loaded?.messageCount} messages`))
+    // display follows the switch — the picked session's text replays
+    this.swapTranscript(loaded)
   }
 
   private async skillsMenu(): Promise<void> {
@@ -2775,7 +2940,7 @@ export class TuiApp {
         const s = host.listSessions().find((x) => x.id.startsWith(arg))
         if (!s) return this.println(red(`  no session starts with "${arg}"`))
         const loaded = host.loadSession(s.id)
-        this.println(green(`  ✔ ${loaded?.title} · ${loaded?.messageCount} messages`))
+        this.swapTranscript(loaded) // display follows the switch — its text replays
         return
       }
 
@@ -3332,14 +3497,31 @@ export class TuiApp {
       }
 
       case 'clear': {
-        // wipe the screen AND the scrollback (the transcript lives there now),
-        // then drop the sticky region and start over with a fresh banner
-        this.writeOut(
-          this.fullscreen
-            ? '\x1b[H\x1b[2J\x1b[3J'
-            : `\x1b[${Math.max(0, this.stickyDrawn - 1)}A\x1b[J\x1b[H\x1b[2J\x1b[3J`,
-        )
-        if (!this.fullscreen) this.stickyDrawn = 0
+        // TEXT-ONLY wipe — "cuman hapus teks aja, bukan memory": the screen,
+        // the scrollback AND the saved transcript text go; the session's
+        // messages (the agent's memory) stay, so the chat just continues.
+        //   /clear        — everything (same as all)
+        //   /clear all    — everything, explicit
+        //   /clear <n>    — the text of the last n messages
+        const a = arg.trim().toLowerCase()
+        let keepCount = 0 // transcript entries to keep
+        if (a && a !== 'all') {
+          const n = Math.floor(Number(a))
+          if (!n || n < 1) {
+            return this.println(dim('  usage: /clear [count|all] — wipes text only, memory stays'))
+          }
+          const sid = host.session?.id
+          if (sid) {
+            const tr = host.sessionTranscript(sid)
+            const bounds = tr.map((e, i) => (e.m ? i : -1)).filter((i) => i >= 0)
+            keepCount = bounds.length ? bounds[Math.max(0, bounds.length - n)] : 0
+          }
+        }
+        const sid = host.session?.id
+        const msgs = host.session?.messages?.length ?? 0
+        this.transcriptFlush()
+        if (sid) host.sessionTranscriptTrim(sid, keepCount)
+        this.wipeScreen()
         this.log = []
         this.flushed = 0
         this.flatCache = { upto: 0, lines: [] }
@@ -3348,6 +3530,19 @@ export class TuiApp {
         this.streamText = ''
         this.lastDoneLabel = ''
         this.banner()
+        if (keepCount > 0 && sid) {
+          for (const e of host.sessionTranscript(sid).slice(0, keepCount)) {
+            this.log.push({ raw: e.t, ...(e.m ? { m: 1 } : {}) })
+          }
+        }
+        this.sysPrintln(
+          dim(
+            keepCount > 0
+              ? `  ⌫ dropped the last ${a.trim()} message${a.trim() === '1' ? '' : 's'}' text — memory intact (${msgs} messages)`
+              : `  ⌫ text cleared — memory intact (${msgs} message${msgs === 1 ? '' : 's'} remembered)`,
+          ),
+        )
+        this.requestRender()
         return
       }
 
@@ -3691,6 +3886,9 @@ export class TuiApp {
     if (sub === 'sync' || sub === 'now') {
       return this.repoSyncNow()
     }
+    if (sub === 'status' || sub === 'info') {
+      return this.repoStatus()
+    }
     if (sub === 'passphrase') {
       return this.repoPassphraseFlow()
     }
@@ -3719,6 +3917,7 @@ export class TuiApp {
         ...vaultItems,
         { label: 'passphrase', hint: getVaultPassphrase() ? 'saved on this device → rotate' : 'set this device\'s passphrase', value: 'pass' },
         { label: 'sync now', hint: 'one full round, right away', value: 'sync' },
+        { label: 'status', hint: 'link · devices · sync history', value: 'status' },
       ]
       if (linked) actions.push({ label: 'unlink', hint: `forget ${linked.repo} on this device`, value: 'unlink' })
       actions.push({ label: 'done', hint: 'esc', value: 'done' })
@@ -3787,6 +3986,11 @@ export class TuiApp {
         continue
       }
 
+      if (pick === 'status') {
+        this.repoStatus()
+        continue
+      }
+
       if (pick === 'unlink') {
         const sure = await this.askYesNo(`  unlink ${bold(linked!.repo)}? (files stay, auto-sync stops)`, true)
         if (!sure) continue
@@ -3801,6 +4005,71 @@ export class TuiApp {
     }
   }
 
+  /** /repo status — the detailed card: link, engine, last round, devices
+   *  online, vault state and the per-project sync history timeline. */
+  private repoStatus(): void {
+    const host = this.host
+    const s = readSyncSettings(host.root)
+    const linked = getLinkedProject(host.root)
+    const eng = this.syncStatus()
+    const others = (() => {
+      try {
+        return onlineOthers(host.root)
+      } catch {
+        return []
+      }
+    })()
+    const hist = readSyncHistory(host.root, 14)
+
+    this.println(bold('  ⎇ repo sync — status'))
+    this.println(
+      `    ${dim('project')}   ${bold(path.basename(host.root))} ${dim(host.root)}`,
+    )
+    this.println(
+      `    ${dim('link')}      ${linked ? `${bold(linked.repo)} ${dim(`· linked ${fmtWhen(linked.linkedAt)}`)}` : yellow('not linked — /auth then /push')}`,
+      )
+    this.println(
+      `    ${dim('engine')}    ${s.auto ? green('auto on') : 'auto off'} ${dim(`· every ${Math.round(s.intervalMs / 1000)}s`)} · ${eng?.running ? green('running') : dim('stopped')}`,
+    )
+    if (eng?.lastSyncAt) {
+      this.println(
+        `    ${dim('last')}      ${eng.lastAction === 'pulled' ? cyan('↓ pulled') : green('↑ pushed')} ${dim(fmtWhen(eng.lastSyncAt))}` +
+          (eng.lastError ? ` ${red(`· ${truncateStyled(eng.lastError, 50)}`)}` : ''),
+      )
+    } else if (eng?.lastError) {
+      this.println(`    ${dim('error')}     ${red(truncateStyled(eng.lastError, 64))}`)
+    }
+    this.println(
+      `    ${dim('devices')}   ${
+        others.length
+          ? others.map((d) => `${green('◉')} ${bold(d.name)} ${dim(fmtWhen(d.at))}`).join(dim(' · '))
+          : dim('just this device')
+      } ${dim(`· heartbeat every ${Math.round(PRESENCE_EVERY_MS / 1000)}s`)}`,
+    )
+    const v = s.vault
+    this.println(
+      `    ${dim('vault')}     ${v.apiKeys ? green('☑') : '☐'} api keys · ${v.customProviders ? green('☑') : '☐'} providers · ${v.mcp ? green('☑') : '☐'} mcp · ${v.memory ? green('☑') : '☐'} memory ${getVaultPassphrase() ? green('· passphrase saved') : yellow('· no passphrase on this device')}`,
+    )
+    if (hist.length === 0) {
+      this.println(`    ${dim('history')}   ${dim('nothing recorded yet')}`)
+    } else {
+      this.println(`    ${dim('history')}   ${dim(`last ${hist.length} round${hist.length === 1 ? '' : 's'} (newest first)`)}`)
+      for (const h of hist.slice(0, 14)) {
+        const icon =
+          h.action === 'pushed' ? green('↑')
+          : h.action === 'pulled' ? cyan('↓')
+          : h.action === 'error' ? red('!')
+          : blue('🔐')
+        const at = new Date(h.at)
+        const hhmmss = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}:${String(at.getSeconds()).padStart(2, '0')}`
+        this.println(
+          `      ${dim(hhmmss)} ${icon} ${bold(h.action.padEnd(7))} ${dim(truncateStyled(h.detail, 60))}${h.commit ? dim(` · ${h.commit.slice(0, 7)}`) : ''}`,
+        )
+      }
+    }
+    this.println(dim('    settings: /repo · history per device — .tagent/sync-history.json (gitignored)'))
+  }
+
   /** one full sync round right now (dirty or not). */
   private async repoSyncNow(): Promise<void> {
     const host = this.host
@@ -3812,9 +4081,11 @@ export class TuiApp {
         message: `sync: manual ${new Date().toISOString().slice(11, 19)}`,
         onLog: (l) => this.println(dim(`  ${l}`)),
       })
+      recordSyncHistory(host.root, { action: 'pushed', detail: 'manual — /repo sync', repo: r.repo, commit: r.commit })
       this.println(green(`  ✔ synced → ${r.repo} (${r.commit})`))
       this.refreshSyncBadge()
     } catch (e) {
+      recordSyncHistory(host.root, { action: 'error', detail: `manual — ${(e as Error).message ?? e}` })
       this.refreshSyncBadge()
       this.println(red(`  ✗ ${(e as Error).message}`))
     }
@@ -4192,8 +4463,18 @@ export class TuiApp {
       const pct = contextPct(ci.used, ci.limit)
       ctx = ` · ${pct >= 80 ? red(raw) : pct >= 60 ? yellow(raw) : green(raw)}`
     }
+    // "device lain sedang online" — the top navbar mirrors the hint row's
+    // presence badge (green only when someone else is actually there)
+    let devSeg = ''
+    const sst = this.syncStatus()
+    if (sst?.running && sst.others.length > 0) {
+      const who = sst.others.length === 1
+        ? truncateStyled(sst.others[0].name, 16)
+        : `${sst.others.length} devices`
+      devSeg = ` · ${green(`◉ ${who} online`)}`
+    }
     const title = `${orange('✻')} ${bold('Tagent')} ${dim(`v${CURRENT_VERSION}`)} · ${dim('💬')} ${truncateStyled(this.sessionTitle, Math.max(6, boxW - 34))}`
-    const foot = `🤖 ${this.mode} · ${shortModelName(cfg.defaultModel)} · 🔌 ${mcp}${ctx} · ${fmtElapsed(Date.now() - this.startedAt)}`
+    const foot = `🤖 ${this.mode} · ${shortModelName(cfg.defaultModel)} · 🔌 ${mcp}${ctx}${devSeg} · ${fmtElapsed(Date.now() - this.startedAt)}`
     return roundBox({ title, footer: foot, rows: [], width: boxW })
   }
 
@@ -4312,13 +4593,18 @@ export class TuiApp {
     let badge = ''
     if (this.syncBadge) {
       badge = ` · ⎇ ${this.syncBadge}`
-      if (this.sync) {
-        const s = this.sync.status()
-        if (s.running) {
-          badge += ` ${dim(`⇅${Math.round(s.intervalMs / 1000)}s`)}`
-          if (this.syncHint) badge += ` ${this.syncHint}`
-          if (s.lastError) badge += ` ${red('!')}`
+      const s = this.syncStatus()
+      if (s?.running) {
+        badge += ` ${dim(`⇅${Math.round(s.intervalMs / 1000)}s`)}`
+        // "device lain sedang online" — fresh heartbeats from other devices
+        if (s.others.length > 0) {
+          const who = s.others.length === 1
+            ? truncateStyled(s.others[0].name, 16)
+            : `${s.others.length} devices`
+          badge += ` ${green(`◉ ${who}`)}`
         }
+        if (this.syncHint) badge += ` ${this.syncHint}`
+        if (s.lastError) badge += ` ${red('!')}`
       }
     }
     const right = `${this.mode} · ${shortModelName(cfg.defaultModel)}${ctx ? ` · ${ctx}` : ''} · ${fmtElapsed(Date.now() - this.startedAt)}${badge}`
@@ -4327,6 +4613,22 @@ export class TuiApp {
     const keysCut = truncateStyled(keys, Math.max(4, W - vwidthANSI(rightCut) - 1))
     const pad = Math.max(1, W - vwidthANSI(keysCut) - vwidthANSI(rightCut))
     return dim(keysCut) + ' '.repeat(pad) + rightCut
+  }
+
+  /** cached engine status — status() touches the filesystem (settings +
+   *  presence); the 1s navbar tick and the per-frame hint row share one
+   *  read through this ~500ms cache. */
+  private syncStatus(): SyncEngineStatus | undefined {
+    if (!this.sync) return undefined
+    const now = Date.now()
+    if (!this.syncStatusCache.val || now - this.syncStatusCache.at > 500) {
+      try {
+        this.syncStatusCache = { at: now, val: this.sync.status() }
+      } catch {
+        /* settings I/O must never break a render */
+      }
+    }
+    return this.syncStatusCache.val
   }
 
   /** slow ticker (30s) — keeps the elapsed-time stat fresh while idle; while
@@ -4867,7 +5169,7 @@ export function appCapable(): boolean {
  */
 export async function runApp(
   host: AgentHost,
-  opts: { workspaceRoot: string; webUrl?: string; initialMode?: AgentMode; autoSend?: string; fullscreen?: boolean },
+  opts: { workspaceRoot: string; webUrl?: string; initialMode?: AgentMode; autoSend?: string; fullscreen?: boolean; noResume?: boolean },
 ): Promise<void> {
   const app = new TuiApp(host, opts)
   try {

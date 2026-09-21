@@ -81,11 +81,22 @@ const engineB = new SyncEngine({
   remoteBase: REMOTE_BASE,
   onEvent: (e) => eventsB.push(e.type),
 })
-// B is clean and even with the remote — the tick itself is quiet on events…
+// B is clean and even with the remote — but its FIRST tick still writes the
+// presence heartbeat (a fresh clone = a new device id announcing "device B
+// online" to the others). That's the ONE event a clean tick may produce.
+await engineB.tick('manual')
+ok(
+  'B first tick announces presence (one push, nothing else)',
+  eventsB.filter((x) => x === 'pushed').length === 1 && !eventsB.includes('pulled') && !eventsB.includes('error'),
+  eventsB.join(','),
+)
+ok('B wrote its presence entry', fs.existsSync(path.join(B, '.tagent-sync', 'presence.json')))
+// …with the heartbeat fresh, the next clean tick is quiet again — and it
+// CONSUMED the vault it cloned (apply-then-export ordering): the key landed
+// in B's config, and no phantom re-push happened (quiet tick proves it)
+eventsB.length = 0
 await engineB.tick('manual')
 ok('B clean+even tick is quiet', eventsB.length === 0)
-// …but it CONSUMED the vault it cloned (apply-then-export ordering): the key
-// landed in B's config, and no phantom re-push happened (quiet tick proves it)
 ok('B consumed the vault inside the tick', loadConfig(B).apiKeys.openrouter === 'sk-or-SHARED')
 ok('B applied marker written', fs.existsSync(path.join(B, '.tagent', 'vault-state.json')))
 const applied = await engineB.applyVaultOnce()
