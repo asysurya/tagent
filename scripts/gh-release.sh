@@ -36,86 +36,69 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — TUI maximalization: themes, tool boxes, taps
+## v__VER__ — Chips: background badges on tool titles & reports
 
-The transcript gets the design it deserved. Every tool call rides a
-rounded box in its category color, run stats and sync pushes ride
-two-line banner boxes, and the AI reply renders as live markdown
-while it streams — no more raw ## and ** on screen. Six themes
-ship (dark, light, Tokyo Night, Dracula, Nord, Gruvbox) switched
-live via /theme, menus grew number badges — press 1-9, or tap the
-row on touch terminals — and the input box no longer collides
-with the reply on narrow screens.
+Titles get a background. Every tool box now opens with a filled
+chip — 💻 bash on tomato, 🔌 MCP on red, 📖 reads on blue — and
+the results, verdicts and reports follow one pill vocabulary:
+✔ done on green, ✗ error on red, ⊘ denied on yellow. Every
+report (MCP servers · repo sync · skills · memory · checkpoints)
+opens with a themed header chip, MCP server states ride their
+own chips, and the sync history chips each round. Each of the
+six themes ships its own hand-tuned badge table — switched live
+by /theme like everything else, degrading to plain text (same
+widths) under NO_COLOR. `tagent doctor` matches on the CLI side.
 
 ```
-❯ /theme tokyo-night   ✔ theme → Tokyo Night · every surface recolors now
+╭─[💻 bash]──────────────────────────╮
+│ bash setup.sh --with-flags             │
+│ [✔ done] 0.8s — setup complete         │
+╰───────────────────────────────────╯
 
-╭─ 🔧 write_file ─────────────────────────╮
-│ src/app.ts                              │
-│ ✔ done · 1.2s — 12 lines written        │
-╰──────────────────────────────────────────╯
-╭─ 💻 bash ────────────────────────────────╮
-│ bash setup.sh --with-flags               │
-│ ✔ done · 0.8s — setup complete           │
-╰──────────────────────────────────────────╯
-╭─ ✔ done ── 3 turns · 7 tool calls · 12.3s ─╮
-╰──────────────────────────────────────────────╯
+  [🔌 MCP] servers (3)
+    [ ready ✓ ]  context7       · 12 tools
+    [ error ]    memory         · 0 tools
+         ✗ No space left on device
+         → free disk, then /mcp reload
+
+  [⎇ sync] repo — status
+      12:00:01 [ pushed ] manual — /push  · a1b2c3d
 ```
 
-### Themes — /theme [name]
+### Tool titles & status pills
 
-- six built-ins: dark (default, byte-identical to the old palette),
-  light, tokyo-night, dracula, nord, gruvbox — 256-color SGR so
-  every terminal renders them; NO_COLOR still wins
-- switching is LIVE: navbar, editor, tool boxes, banners and
-  markdown recolor on the very next frame; the pick is saved to
-  the global config (~/.tagent) and reapplied at boot
-- the markdown body follows the theme — headings, list markers,
-  code chips and fence labels re-hue per palette
+- tool-call titles ride a bg chip: `╭─[💻 bash]──…` — the icon
+  + name on the category color, the border still carrying the
+  tool's hue behind it (composed in segments so the chip's
+  reset never bleeds into the rail)
+- result rows ride status pills — ✔ done / ✗ error / ⊘ denied
+  — next to duration and the output tail
+- run verdicts and auto-sync banners carry the chip in the top
+  rail (✔ done green · ■ stopped yellow · ✗ error red · ⎇ auto-sync)
 
-### Tool-call boxes
+### Reports with chip headers
 
-- every call rides a rounded box: icon + tool name in the title
-  rail, the summarized input as the body, the result row closing
-  it (drawn open at tool:start, closed at tool:end — the
-  transcript stays append-only)
-- the border carries the category color: bash tomato, MCP red,
-  reads blue, writes green, search magenta, web cyan, ask yellow
+- `/mcp list` — 🔌 MCP header chip, per-server state chips
+  (ready ✓ / error / connecting / off) with names still aligned
+- `/repo status` — ⎇ sync header chip, history rounds chipped
+  (pushed · pulled · error), `/push` and manual sync report
+  ↑ pushed / ✗ pills
+- `/skills`, `/memory`, `/checkpoints` — 🎯 · 🧠 · 💾 headers
+  with counts; permission verdicts, compaction, notify errors
+  and the chat-error line all ride the same pills
 
-### System banner boxes
+### Per-theme badge tables
 
-- run verdicts: ✔ done / ■ stopped / ✗ error in the top rail, the
-  stats (turns · tool calls · seconds · tokens) in the bottom rail
-- auto-sync pushes and pulls get the same two-line frame —
-  non-chat output stands apart from chat
-
-### Live markdown streaming
-
-- the streaming tail renders with the SAME renderer as the final
-  flush — headings, lists, bold and links appear styled, not as
-  raw markers
-- a streaming code block renders as a code box: an unclosed fence
-  is auto-closed mid-stream so partial code shows as code
-
-### Mobile-friendly menus
-
-- number badges: non-searchable lists pick directly with 1-9 (the
-  ctrl+x menu, mode picker, theme picker); permission prompts take
-  1-4 alongside y/a/s/n
-- touch support in fullscreen: menu rows, permission options,
-  ask-form options and submit, the /-palette and @-file completion
-  all respond to a tap (SGR mouse reporting)
-- the ctrl+x menu dropped type-to-filter — digits and taps are the
-  path on phones (searchable pickers like the model list filter)
-
-### Rendering fixes
-
-- input-box / reply collisions fixed on narrow terminals: every
-  sticky row is hard-truncated to the terminal width and the
-  navbar's hard 34-column floor went responsive — the sticky-region
-  geometry can no longer break and paint the editor over the
-  transcript
-- stale tap zones can no longer double-fire a menu action
+- nine hand-tuned badge pairs per theme: dark uses the classic
+  Unix combos (white on red/blue, black on green/yellow/cyan),
+  tokyo-night & dracula go pastel neon with near-black text,
+  nord & gruvbox ride their strong colors, light keeps dark
+  chips with white text
+- /theme recolors chips on the next frame; NO_COLOR and non-TTY
+  degrade to plain text with identical widths — layout never
+  shifts between terminals
+- `tagent doctor`, `tagent sync`, `tagent clone` and `tagent
+  auth` ride the same chip look on the CLI side
 
 ---
 ## Single-file binaries: download, run, done
@@ -168,7 +151,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — TUI maximalization: themes, tool boxes, taps" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — Chips: background badges on tool titles & reports" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")

@@ -15,6 +15,13 @@
  * wins over everything: the app's color gate (USE_COLOR) is checked by the
  * callers, never here.
  *
+ * v0.23.1 adds the BADGE table: every theme also ships a bg-chip variant per
+ * slot (`48;5;NNN` + a contrast fg) — tool titles, report headers and status
+ * pills ride ui.ts chip(), which reads it live. A chip is "text with a
+ * background" — the lazygit/gh-dash look — and stays readable because each
+ * pair was hand-tuned per theme (white on saturated, or near-black on
+ * pastel neon).
+ *
  * Persistence: the theme name lives in the GLOBAL config (~/.tagent,
  * `theme` key) — a personal preference, not a workspace fact. /theme
  * switches live and writes it; boot applies it before the first frame.
@@ -49,12 +56,21 @@ export interface ThemeMd {
   code: string
 }
 
+/** bg-chip slots — tool titles, report headers, status pills (v0.23.1).
+ *  Every slot also exists in ThemeSgr; the badge table only adds the
+ *  bg;fg PAIR that reads well as a filled chip. */
+export type BadgeSlot = 'red' | 'green' | 'yellow' | 'blue' | 'magenta' | 'cyan' | 'orange' | 'dim' | 'accent'
+
+export type ThemeBadge = Record<BadgeSlot, string>
+
 export interface Theme {
   name: string
   label: string
   /** true = built for a dark terminal background */
   dark: boolean
   sgr: ThemeSgr
+  /** bg;fg SGR pairs for chips — ui.ts chip() reads these live */
+  badge: ThemeBadge
   md: ThemeMd
 }
 
@@ -71,6 +87,12 @@ const DARK: Theme = {
     bold: '1', dim: '2',
     red: '31', green: '32', yellow: '33', blue: '34', magenta: '35', cyan: '36',
     orange: '38;5;208', accent: '36',
+  },
+  // classic Unix combos — white on red/blue/plum, black on green/yellow/cyan
+  badge: {
+    red: '41;97', green: '42;30', yellow: '43;30', blue: '44;97',
+    magenta: '45;97', cyan: '46;30', orange: '48;5;208;38;5;16',
+    dim: '48;5;238;38;5;250', accent: '46;30',
   },
   md: {
     heading: ['1;36', '1;35', '1;33', '1', '1', '1'],
@@ -91,6 +113,12 @@ const LIGHT: Theme = {
     red: '38;5;160', green: '38;5;28', yellow: '38;5;94', blue: '38;5;25',
     magenta: '38;5;127', cyan: '38;5;30', orange: '38;5;166', accent: '38;5;30',
   },
+  // dark chips + white text stay crisp on white paper
+  badge: {
+    red: '48;5;160;38;5;231', green: '48;5;28;38;5;231', yellow: '48;5;94;38;5;231',
+    blue: '48;5;25;38;5;231', magenta: '48;5;127;38;5;231', cyan: '48;5;30;38;5;231',
+    orange: '48;5;166;38;5;231', dim: '48;5;250;38;5;238', accent: '48;5;30;38;5;231',
+  },
   md: {
     heading: ['1;160', '1;127', '1;94', '1', '1', '1'],
     soft: '38;5;24',
@@ -109,6 +137,12 @@ const TOKYO_NIGHT: Theme = {
     bold: '1', dim: '2',
     red: '38;5;210', green: '38;5;156', yellow: '38;5;179', blue: '38;5;111',
     magenta: '38;5;140', cyan: '38;5;117', orange: '38;5;215', accent: '38;5;117',
+  },
+  // pastel neon chips + near-black text — the tokyo-night signature
+  badge: {
+    red: '48;5;210;38;5;17', green: '48;5;156;38;5;17', yellow: '48;5;179;38;5;17',
+    blue: '48;5;111;38;5;17', magenta: '48;5;140;38;5;17', cyan: '48;5;117;38;5;17',
+    orange: '48;5;215;38;5;17', dim: '48;5;61;38;5;189', accent: '48;5;117;38;5;17',
   },
   md: {
     heading: ['1;117', '1;140', '1;179', '1', '1', '1'],
@@ -129,6 +163,12 @@ const DRACULA: Theme = {
     red: '38;5;203', green: '38;5;84', yellow: '38;5;228', blue: '38;5;111',
     magenta: '38;5;213', cyan: '38;5;117', orange: '38;5;215', accent: '38;5;213',
   },
+  // neon chips + near-black text — dracula's own style guide
+  badge: {
+    red: '48;5;213;38;5;17', green: '48;5;84;38;5;17', yellow: '48;5;228;38;5;17',
+    blue: '48;5;111;38;5;17', magenta: '48;5;141;38;5;17', cyan: '48;5;117;38;5;17',
+    orange: '48;5;215;38;5;17', dim: '48;5;61;38;5;189', accent: '48;5;213;38;5;17',
+  },
   md: {
     heading: ['1;117', '1;213', '1;228', '1', '1', '1'],
     soft: '38;5;146',
@@ -148,6 +188,12 @@ const NORD: Theme = {
     red: '38;5;131', green: '38;5;150', yellow: '38;5;222', blue: '38;5;110',
     magenta: '38;5;139', cyan: '38;5;109', orange: '38;5;173', accent: '38;5;110',
   },
+  // aurora chips (red/green/yellow) + frost chips (blue/cyan) on dark text
+  badge: {
+    red: '48;5;131;38;5;16', green: '48;5;150;38;5;16', yellow: '48;5;222;38;5;16',
+    blue: '48;5;110;38;5;16', magenta: '48;5;139;38;5;16', cyan: '48;5;108;38;5;16',
+    orange: '48;5;173;38;5;16', dim: '48;5;59;38;5;188', accent: '48;5;110;38;5;16',
+  },
   md: {
     heading: ['1;110', '1;139', '1;222', '1', '1', '1'],
     soft: '38;5;145',
@@ -166,6 +212,12 @@ const GRUVBOX: Theme = {
     bold: '1', dim: '2',
     red: '38;5;203', green: '38;5;148', yellow: '38;5;214', blue: '38;5;109',
     magenta: '38;5;175', cyan: '38;5;108', orange: '38;5;208', accent: '38;5;108',
+  },
+  // gruvbox strong-color chips + bg-dark text
+  badge: {
+    red: '48;5;203;38;5;16', green: '48;5;150;38;5;16', yellow: '48;5;214;38;5;16',
+    blue: '48;5;109;38;5;16', magenta: '48;5;175;38;5;16', cyan: '48;5;108;38;5;16',
+    orange: '48;5;208;38;5;16', dim: '48;5;239;38;5;187', accent: '48;5;108;38;5;16',
   },
   md: {
     heading: ['1;108', '1;175', '1;214', '1', '1', '1'],

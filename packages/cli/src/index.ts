@@ -581,7 +581,7 @@ async function mainAuth() {
   }
   if (st.logged) {
     const login = st.login ?? readGlobalConfig().github?.login ?? '(unknown)'
-    console.log(green(`✔ logged in as ${login}`))
+    console.log(`  ${okChip('logged in')} ${bold(login)}`)
     console.log(dim('  tagent sync uploads a project · tagent logout disconnects'))
     if (migrated) await maybePromptLinkWorkspace(root) // this run completed a login
     return
@@ -687,7 +687,7 @@ async function runWebConnect(root: string): Promise<void> {
 async function finishLogin(root: string, token: string, preValidated?: string): Promise<void> {
   const login = preValidated ?? (await validatePat(token)) // throws on an invalid token
   saveGithubLogin(token, login) // credential store + login cached in the global config
-  console.log(green(`\n  ✔ logged in as ${login}`))
+  console.log(`\n  ${okChip('logged in')} ${bold(login)}`)
   await maybePromptLinkWorkspace(root)
 }
 
@@ -744,10 +744,10 @@ async function doInitialSync(root: string): Promise<void> {
       message: 'sync: initial upload from tagent',
       onLog: (l) => console.log(`  ${dim(l)}`),
     }) // a successful sync re-links the registry with the full owner/name
-    console.log(green(`\n  ✔ project synced → ${res.url}`))
+    console.log(`\n  ${okChip('pushed')} ${bold(`→ ${res.url}`)}`)
     console.log(dim(`  commit ${res.commit} · next time: tagent sync [message]`))
   } catch (e) {
-    console.log(red(`  ✗ sync failed: ${(e as Error).message}`))
+    console.log(`  ${errChip('sync failed')} ${red((e as Error).message)}`)
     console.log(dim('    nothing was lost — try again any time: tagent sync'))
   }
 }
@@ -769,7 +769,7 @@ async function mainSync() {
     }
     const res = await syncProject(root, cfg, { message, onLog: (l) => console.log(`  ${dim(l)}`) }) // re-links with the full owner/name
     recordSyncHistory(root, { action: 'pushed', detail: 'manual — tagent sync', repo: res.repo, commit: res.commit })
-    console.log(green(`\n  ✔ synced → ${res.url}`))
+    console.log(`\n  ${okChip('synced')} ${bold(`→ ${res.url}`)}\n`)
     console.log(dim(`  commit ${res.commit} · branch ${res.branch}`))
   } catch (e) {
     console.error(`[tagent] sync failed: ${(e as Error).message}`)
@@ -798,7 +798,7 @@ async function mainProjects() {
       await syncOneProject(p)
     } else {
       unlinkProject(p.root)
-      console.log(green(`  ✔ unlinked ${p.name} (${p.repo}) — files stay on disk`))
+      console.log(`  ${okChip('unlinked')} ${bold(p.name)} ${dim(`(${p.repo}) — files stay on disk`)}`)
     }
     return
   }
@@ -884,10 +884,10 @@ async function syncOneProject(p: ProjectReg): Promise<void> {
       onLog: (l) => console.log(`  ${dim(l)}`),
     })
     recordSyncHistory(p.root, { action: 'pushed', detail: 'manual — tagent projects', repo: r.repo, commit: r.commit })
-    console.log(green(`\n  ✔ synced → ${r.url} (${r.commit})\n`))
+    console.log(`\n  ${okChip('synced')} ${bold(`→ ${r.url}`)} ${dim(`(${r.commit})`)}\n`)
   } catch (e) {
     recordSyncHistory(p.root, { action: 'error', detail: `manual — ${(e as Error).message}` })
-    console.log(red(`\n  ✗ sync failed: ${(e as Error).message}`))
+    console.log(`\n  ${errChip('sync failed')} ${red((e as Error).message)}`)
     console.log(dim('    nothing was lost — try again any time\n'))
   }
 }
@@ -933,7 +933,7 @@ async function manageProject(p: ProjectReg): Promise<void> {
       const sure = await confirm(`  unlink ${bold(p.name)}? (files stay, syncing stops)`, { default: true })
       if (!sure) continue
       unlinkProject(p.root)
-      console.log(green(`\n  ✔ unlinked — /push or tagent sync links it again any time\n`))
+      console.log(`\n  ${okChip('unlinked')} ${dim('— /push or tagent sync links it again any time')}\n`)
       return
     }
     if (act === 'delete') {
@@ -948,10 +948,10 @@ async function manageProject(p: ProjectReg): Promise<void> {
       try {
         await deleteRepo(token, p.repo)
         unlinkProject(p.root)
-        console.log(green(`\n  ✔ ${p.repo} deleted from GitHub\n`))
+        console.log(`\n  ${okChip('deleted')} ${bold(p.repo)} ${dim('from GitHub')}\n`)
         return
       } catch (e) {
-        console.log(red(`\n  ✗ ${(e as Error).message}`))
+        console.log(`\n  ${errChip()} ${red((e as Error).message)}`)
         console.log(dim('    the PAT may lack the delete_repo scope — delete it in the browser instead\n'))
       }
     }
@@ -987,7 +987,7 @@ async function editProject(p: ProjectReg): Promise<void> {
       const owner = p.repo.includes('/') ? p.repo.split('/')[0] : readGlobalConfig().github?.login || 'you'
       linkProject(p.root, `${owner}/${next}`)
       Object.assign(p, getLinkedProject(p.root))
-      console.log(green(`  ✔ re-linked as ${p.repo} — the next sync creates/pushes there`))
+      console.log(`  ${okChip('re-linked')} ${bold(p.repo)} ${dim('— the next sync creates/pushes there')}`)
       continue
     }
     if (pick === 'auto') {
@@ -1003,7 +1003,7 @@ async function editProject(p: ProjectReg): Promise<void> {
       })
       if (!t) continue
       writeSyncSettings(p.root, { ...s, intervalMs: t * 1000 })
-      console.log(green(`  ✔ sync interval → every ${t < 60 ? t + 's' : t / 60 + 'm'}`))
+      console.log(`  ${okChip('interval')} ${bold(`every ${t < 60 ? t + 's' : t / 60 + 'm'}`)}`)
       continue
     }
     if (pick.startsWith('v:')) {
@@ -1080,7 +1080,7 @@ async function mainClone(repoOverride?: string) {
   console.log(`\n  ${bold('tagent clone')} · ${repo} → ${path.relative(process.cwd(), dest) || dest}\n`)
   try {
     const r = await restoreProject(token, repo, parent, { onLog: (l) => console.log(`  ${dim(l)}`) })
-    console.log(green(`\n  ✔ cloned into ${r.root}`))
+    console.log(`\n  ${okChip('cloned')} ${bold(`into ${r.root}`)}`)
     console.log('\n  next steps:')
     console.log(`    cd ${path.relative(process.cwd(), r.root) || '.'}`)
     console.log(`    tagent${dim('   # start the TUI there')}\n`)
@@ -1117,7 +1117,7 @@ async function mainWhoami() {
   const st = authStatus()
   if (st.logged) {
     const login = st.login ?? readGlobalConfig().github?.login
-    console.log(green(`✔ logged in as ${login ?? '(unknown)'}`))
+    console.log(`  ${okChip('logged in')} ${bold(login ?? '(unknown)')}`)
   } else {
     console.log('guest — not logged in (tagent auth connects GitHub sync)')
   }
@@ -1587,13 +1587,13 @@ async function mainDoctor() {
     )
   }
 
-  console.log(`\n  ${bold('tagent doctor')} · v${CURRENT_VERSION} · ${root}\n`)
+  console.log(`\n  ${infoChip('doctor')} ${bold(`tagent v${CURRENT_VERSION}`)} · ${root}\n`)
   let bad = 0
   for (const [ok, label] of results) {
-    console.log(`  ${ok ? green('✔') : red('✗')} ${label}`)
+    console.log(`  ${ok ? okChip() : errChip()} ${label}`)
     if (!ok) bad++
   }
-  console.log(bad === 0 ? `\n  ${green('all good')}\n` : `\n  ${red(`${bad} issue(s) found`)}\n`)
+  console.log(bad === 0 ? `\n  ${okChip('all good')}\n` : `\n  ${errChip(`${bad} issue(s) found`)}\n`)
   process.exit(bad === 0 ? 0 : 1)
 }
 
@@ -1709,7 +1709,7 @@ async function mainUpdate() {
     process.exit(1)
   }
   if (!info.outdated) {
-    console.log(green(`  ✔ up to date — v${info.current}`))
+    console.log(`  ${okChip('up to date')} ${dim(`v${info.current}`)}`)
     process.exit(0)
   }
   console.log(`  update available: v${info.current} → ${bold('v' + info.latest)}`)
@@ -1733,6 +1733,18 @@ function dim(s: string): string { return process.stdout.isTTY ? `\x1b[2m${s}\x1b
 function green(s: string): string { return process.stdout.isTTY ? `\x1b[32m${s}\x1b[0m` : s }
 function red(s: string): string { return process.stdout.isTTY ? `\x1b[31m${s}\x1b[0m` : s }
 function yellow(s: string): string { return process.stdout.isTTY ? `\x1b[33m${s}\x1b[0m` : s }
+
+/** v0.23.1 — a bg chip for CLI report lines (doctor, sync, auth…):
+ *  same look as the TUI's ui.ts chip(), tuned for BOTH terminal kinds —
+ *  green/black pairs stay readable on paper-white and dark terminals
+ *  alike. Degrades to plain " text " when piped (isTTY false). */
+function chip(text: string, bg: string, fg: string): string {
+  return process.stdout.isTTY ? `\x1b[${bg};${fg}m ${text} \x1b[0m` : ` ${text} `
+}
+const okChip = (s = '') => chip(`✔${s ? ` ${s}` : ''}`, '42', '30')
+const errChip = (s = '') => chip(`✗${s ? ` ${s}` : ''}`, '41', '97')
+const warnChip = (s = '') => chip(`⚠${s ? ` ${s}` : ''}`, '43', '30')
+const infoChip = (s: string) => chip(s, '44', '97')
 
 init().catch((e: unknown) => {
   console.error('[tagent] fatal:', e)

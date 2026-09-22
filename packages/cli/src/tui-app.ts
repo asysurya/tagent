@@ -94,23 +94,28 @@ import type { DaemonHandle } from './daemon'
 import { selfUpdate } from './updater'
 import {
   vw, truncateV, fitV, padCol, roundBox, labelRow, kvRow, toolIcon,
-  setUiColor, STATUS_ICONS, SYM, F, cpW, wrapV, boxTop, boxRow, boxBottom,
+  setUiColor, STATUS_ICONS, SYM, F, cpW, wrapV, boxTop, boxRow, boxBottom, chip,
 } from './ui'
-import { activeTheme, setTheme, THEMES, themeLabel, themeSwatch } from './theme'
+import { activeTheme, setTheme, THEMES, themeLabel, themeSwatch, type BadgeSlot } from './theme'
 
-/** per-tool-category box colors — the tool-call frame's identity (v0.23.0):
- *  bash tomato, mcp red, reads blue, writes green, search magenta… */
-function toolColor(tool: string | undefined): (s: string) => string {
-  if ((tool ?? '').startsWith('mcp_')) return red
+/** per-tool-category slots (v0.23.1) — the SAME mapping drives the border
+ *  color (toolColor) and the title chip (chip(…, toolSlot(tool))): bash
+ *  tomato, mcp red, reads blue, writes green, search magenta… */
+export function toolSlot(tool: string | undefined): BadgeSlot {
+  if ((tool ?? '').startsWith('mcp_')) return 'red'
   const t = (tool ?? '').toLowerCase()
-  if (/^(bash|exec|run_command|sh$|shell|diag)/.test(t)) return orange
-  if (/^(write_file|edit_file|apply_patch|save|todos|todo_write|read_todos)/.test(t)) return green
-  if (/^(read_file|list_files|files|read$|glob|checkpoint|memory|facts|skills|skill_run|load_skill|worklog)/.test(t)) return blue
-  if (/^(grep|search_files|search|find|web_search|ddg)/.test(t)) return magenta
-  if (/^(web_fetch|fetch_url|browser|open_url|serve|report|test_report|test$)/.test(t)) return cyan
-  if (/^(ask_user|ask$|plan$)/.test(t)) return yellow
-  if (/^(task|subagent|agent)/.test(t)) return magenta
-  return dim
+  if (/^(bash|exec|run_command|sh$|shell|diag)/.test(t)) return 'orange'
+  if (/^(write_file|edit_file|apply_patch|save|todos|todo_write|read_todos)/.test(t)) return 'green'
+  if (/^(read_file|list_files|files|read$|glob|checkpoint|memory|facts|skills|skill_run|load_skill|worklog)/.test(t)) return 'blue'
+  if (/^(grep|search_files|search|find|web_search|ddg)/.test(t)) return 'magenta'
+  if (/^(web_fetch|fetch_url|browser|open_url|serve|report|test_report|test$)/.test(t)) return 'cyan'
+  if (/^(ask_user|ask$|plan$)/.test(t)) return 'yellow'
+  if (/^(task|subagent|agent)/.test(t)) return 'magenta'
+  return 'dim'
+}
+function toolColor(tool: string | undefined): (s: string) => string {
+  const slot = toolSlot(tool)
+  return (s: string) => c(T()[slot], s)
 }
 /* ------------------------------------------------------------------ */
 /* ansi + format helpers                                                */
@@ -135,6 +140,16 @@ const magenta = (s: string) => c(T().magenta, s)
 const cyan = (s: string) => c(T().cyan, s)
 const orange = (s: string) => c(T().orange, s)
 const accent = (s: string) => c(T().accent, s)
+
+/* v0.23.1 status pills — ONE bg-chip vocabulary for every result line in
+ * the transcript. okPill/errPill/warnPill take an optional short verb;
+ * plain icon pills keep the compact confirmations quiet. All of them ride
+ * ui.ts chip(), so /theme recolors them and NO_COLOR degrades the padding. */
+const okPill = (s = '') => chip(`${SYM.tick}${s ? ` ${s}` : ''}`, 'green')
+const errPill = (s = '') => chip(`${SYM.cross}${s ? ` ${s}` : ''}`, 'red')
+const warnPill = (s = '') => chip(`⚠${s ? ` ${s}` : ''}`, 'yellow')
+const pushPill = () => chip(`${SYM.arrowUp} pushed`, 'green')
+const pullPill = () => chip(`${SYM.arrowDown} pulled`, 'cyan')
 
 const SPINNER = ['🌑', '🌒', '🌓', '🌔', '🌕', '🌖', '🌗', '🌘']
 
@@ -1098,8 +1113,10 @@ export class TuiApp {
     add('todos:update', (d: { todos: TodoItem[] }) => this.onTodos(d.todos))
     add('subagent:update', (d: { info: SubagentInfo }) => this.onSubagent(d.info))
     add('notify', (d: { level: string; message: string }) => {
-      const icon = d.level === 'error' ? red('!') : d.level === 'warn' ? yellow('!') : blue('·')
-      this.println(`  ${icon} ${d.message}`)
+      // v0.23.1 — errors and warnings ride bg pills so they pop in scrollback;
+      // info stays a quiet blue dot (chips everywhere would be noise)
+      const pill = d.level === 'error' ? errPill() : d.level === 'warn' ? warnPill() : blue('·')
+      this.println(`  ${pill} ${d.message}`)
       if (d.level === 'error') {
         this.notice = truncateStyled(d.message, this.termW - 8)
       }
@@ -1175,17 +1192,19 @@ export class TuiApp {
   }
 
   private onToolStart(call: ToolCallRecord): void {
-    // a colored rounded BOX per tool call (v0.23.0) — the category color
-    // frames the whole call so tools read at a glance while scrolling:
-    //   ╭─ 💻 bash ───────────────────────╮
+    // a colored rounded BOX per tool call (v0.23.0) whose TITLE rides a
+    // bg chip (v0.23.1) — the category color frames the call, the chip
+    // carries the icon + name so tools read at a glance while scrolling:
+    //   ╭─[💻 bash]───────────────────╮
     //   │ bash setup.sh --with-flags      │
-    //   │ ✔ done · 1.2s — 3 lines         │   ← onToolEnd
-    //   ╰────────────────────────────────╯
+    //   │ [✔ done] 1.2s — 3 lines          │   ← onToolEnd
+    //   ╰────────────────────────────╯
     // the transcript is append-only, so the box is drawn open and closed
     // by its two events — the same immutability contract as every line
+    const slot = toolSlot(call.tool)
     const colFn = toolColor(call.tool)
     const boxW = Math.min(this.transcriptW() - 2, 78)
-    this.println(boxTop(`${toolIcon(call.tool)} ${call.tool}`, boxW, colFn))
+    this.println(boxTop(`${toolIcon(call.tool)} ${call.tool}`, boxW, colFn, (s) => chip(s, slot)))
     const summary = summarizeInput(call)
     if (summary) {
       for (const l of wrapV(summary, Math.max(4, boxW - 4))) this.println(boxRow(l, boxW, colFn))
@@ -1195,12 +1214,17 @@ export class TuiApp {
   private onToolEnd(call: ToolCallRecord): void {
     const colFn = toolColor(call.tool)
     const boxW = Math.min(this.transcriptW() - 2, 78)
-    const icon =
-      call.status === 'done' ? green(SYM.tick) : call.status === 'error' ? red(SYM.cross) : call.status === 'denied' ? yellow('⊘') : '·'
-    const dur = call.startedAt && call.endedAt ? `${((call.endedAt - call.startedAt) / 1000).toFixed(1)}s` : ''
     const status = call.status === 'done' ? 'done' : call.status === 'error' ? 'error' : call.status === 'denied' ? 'denied' : call.status
+    // v0.23.1 — the verdict rides a status pill: green done, red error,
+    // yellow denied; icon + word travel together in ONE chip
+    const pill =
+      call.status === 'done' ? okPill(status)
+      : call.status === 'error' ? errPill(status)
+      : call.status === 'denied' ? warnPill(status)
+      : chip(`· ${status}`, 'dim')
+    const dur = call.startedAt && call.endedAt ? `${((call.endedAt - call.startedAt) / 1000).toFixed(1)}s` : ''
     const out = (call.output ?? '').split('\n').find((l) => l.trim()) ?? ''
-    const bits = [icon, status]
+    const bits = [pill]
     if (dur) bits.push(dim(dur))
     if (out) bits.push(dim(`— ${out}`))
     this.println(boxRow(bits.join(' '), boxW, colFn))
@@ -1209,11 +1233,11 @@ export class TuiApp {
 
   /** two-line banner box — the frame for non-chat system events (run
    *  stats, sync pushes) that deserve to stand out in the scrollback:
-   *    ╭─ ✔ done ───────────────────╮
+   *    ╭─[✔ done]──────────────────╮
    *    ╰─ 3 turns · 12.3s ─────────╯ */
-  private bannerBox(title: string, foot: string, color: (s: string) => string): void {
+  private bannerBox(title: string, foot: string, color: (s: string) => string, slot: BadgeSlot = 'dim'): void {
     const boxW = Math.min(this.transcriptW() - 2, 78)
-    this.println(boxTop(title, boxW, color))
+    this.println(boxTop(title, boxW, color, (s) => chip(s, slot)))
     this.println(boxBottom(foot, boxW, color))
   }
 
@@ -1299,7 +1323,7 @@ export class TuiApp {
     this.host.permissionRespond(req.id, approved, remember)
     this.permissionFrozen = false
     this.flushFrozen()
-    this.println(approved ? green('  ✔ allowed') : yellow('  ⊘ denied'))
+    this.println(approved ? `  ${okPill('allowed')}` : `  ${warnPill('denied')}`)
   }
 
   private onChatDone(summary: LoopSummary): void {
@@ -1313,7 +1337,13 @@ export class TuiApp {
       this.streamCache = undefined
       raw.split('\n').forEach((l, i) => this.println(i === 0 ? `${orange('\u25CF')} ${l}` : l, i === 0 ? 1 : undefined))
     }
-    const mark = summary.finished === 'complete' ? green('✔ done') : summary.finished === 'aborted' ? yellow('■ stopped') : red('✗ error')
+    // the run's verdict rides a banner box (v0.23.0) whose title is a
+    // chip (v0.23.1) — green when complete, yellow aborted, red failed;
+    // the stats sit in the bottom rail
+    const done = summary.finished === 'complete'
+    const mark = done ? `${SYM.tick} done` : summary.finished === 'aborted' ? `■ stopped` : `${SYM.cross} error`
+    const slot: BadgeSlot = done ? 'green' : summary.finished === 'aborted' ? 'yellow' : 'red'
+    const colFn = done ? green : summary.finished === 'aborted' ? yellow : red
     const u = summary.usage
     if (u) {
       this.tokensIn += u.input
@@ -1321,10 +1351,8 @@ export class TuiApp {
     }
     const tok = u ? ` · ${fmtTok(u.input)} in / ${fmtTok(u.output)} out${u.cacheRead ? ` (${fmtTok(u.cacheRead)} cache-hit)` : ''}` : ''
     this.lastDoneLabel = `${summary.turns} turns · ${summary.toolCalls} tool calls · ${secs}s${tok}`
-    // the run's verdict rides a banner box (v0.23.0) — green when complete,
-    // yellow aborted, red failed; the stats sit in the bottom rail
-    this.bannerBox(mark, this.lastDoneLabel, summary.finished === 'complete' ? green : summary.finished === 'aborted' ? yellow : red)
-    if (summary.error) this.println(`  ${red(summary.error)}`)
+    this.bannerBox(mark, this.lastDoneLabel, colFn, slot)
+    if (summary.error) this.println(`  ${errPill()} ${red(summary.error)}`)
     this.running = false
     // the run's text is complete — persist it right now (crash-safe, and
     // /clear counts must see the whole message)
@@ -1363,11 +1391,11 @@ export class TuiApp {
   private runCompact(keepTokens?: number): void {
     const r = this.host.compactSession(keepTokens)
     if (!r.ok) {
-      this.println(yellow(`  ⚠ ${r.error}`))
+      this.println(`  ${warnPill()} ${yellow(`${r.error}`)}`)
       return
     }
     this.println(
-      `  ${dim('⎿')} ${green('compacted')} ${dim(`· ~${fmtTok(r.before)} → ~${fmtTok(r.after)} tokens · ${r.removedMessages} old turn(s) → digest · no AI used`)}`,
+      `  ${okPill('compacted')} ${dim(`· ~${fmtTok(r.before)} → ~${fmtTok(r.after)} tokens · ${r.removedMessages} old turn(s) → digest · no AI used`)}`,
     )
     const ci = this.host.contextInfo()
     this.ctxUsed = ci.used
@@ -1385,7 +1413,7 @@ export class TuiApp {
     })
     if (choice === 'dismiss') return this.println(dim('  — ask again anytime, or /mode build to switch manually'))
     const r = this.host.approvePlan(choice === 'execute')
-    if (!r.ok && r.error) this.println(red(`  ✗ ${r.error}`))
+    if (!r.ok && r.error) this.println(`  ${errPill()} ${red(`${r.error}`)}`)
   }
 
   /* ---------------- ticker (status row) ---------------- */
@@ -2103,7 +2131,7 @@ export class TuiApp {
     // the leading blank line carries the message mark — /clear <count>
     // trims from here, box and all
     this.println('', 1)
-    for (const r of roundBox({ title: '❯ you', rows, width: boxW, color: cyan })) this.println(r)
+    for (const r of roundBox({ title: '❯ you', titleChip: (s) => chip(s, 'accent'), rows, width: boxW, color: cyan })) this.println(r)
   }
 
   private async handleLine(text: string): Promise<void> {
@@ -2113,7 +2141,7 @@ export class TuiApp {
       } catch (e) {
         // a broken menu/command must never kill the app — the user just
         // sees the error line and keeps going
-        this.println(red(`  ✗ ${(e as Error)?.message ?? e}`))
+        this.println(`  ${errPill()} ${red(`${(e as Error)?.message ?? e}`)}`)
         this.println(dim('    /help lists every command · report the broken one'))
       }
       return
@@ -2133,7 +2161,7 @@ export class TuiApp {
     try {
       await this.host.chatSend(text)
     } catch (e) {
-      this.println(red(`  ✗ ${(e as Error).message}`))
+      this.println(`  ${errPill()} ${red(`${(e as Error).message}`)}`)
       this.running = false
     }
   }
@@ -2436,7 +2464,7 @@ export class TuiApp {
           if (cur?.onEdit) {
             void Promise.resolve(cur.onEdit(cur)).then(
               () => this.requestRender(),
-              (e) => this.println(red(`  ✗ ${(e as Error).message}`)),
+              (e) => this.println(`  ${errPill()} ${red(`${(e as Error).message}`)}`),
             )
             return
           }
@@ -2767,7 +2795,7 @@ export class TuiApp {
       await this.menuActionInner(action)
     } catch (e) {
       // menus must never crash the app — same contract as slash commands
-      this.println(red(`  ✗ ${(e as Error)?.message ?? e}`))
+      this.println(`  ${errPill()} ${red(`${(e as Error)?.message ?? e}`)}`)
       this.println(dim('    pick another option, or report the broken one'))
     }
   }
@@ -2785,7 +2813,7 @@ export class TuiApp {
       case 'diag': {
         this.println(dim('  running diagnostics…'))
         const r = await this.host.diagnosticsRun()
-        this.println(r.ok ? green(`  ✔ pass · ${(r.ms / 1000).toFixed(1)}s`) : red(`  ✗ fail · ${(r.ms / 1000).toFixed(1)}s${r.timedOut ? ' (timed out)' : ''}`))
+        this.println(r.ok ? `  ${okPill()} pass · ${(r.ms / 1000).toFixed(1)}s` : `  ${errPill()} ${red(`fail · ${(r.ms / 1000).toFixed(1)}s${r.timedOut ? ' (timed out)' : ''}`)}`)
         if (r.output) for (const l of r.output.split('\n').slice(0, 15)) this.println(dim(`  ${l}`))
         return
       }
@@ -2803,14 +2831,14 @@ export class TuiApp {
         return this.modelPickerFlow()
       case 'undo': {
         const r = this.host.undoCheckpoint() as { ok: boolean; checkpoint: { reason?: string } | null }
-        if (r.ok) this.println(green(`  ✔ rolled back · ${r.checkpoint?.reason ?? ''}`))
+        if (r.ok) this.println(`  ${okPill()} rolled back · ${r.checkpoint?.reason ?? ''}`)
         else this.println(dim('  nothing to undo'))
         return
       }
       case 'caveman': {
         const v = !(this.host.cfg.caveman === true)
         this.host.settingsSave({ caveman: v })
-        this.println(green(`  ✔ caveman mode ${v ? 'ON — outputs summarized (head+tail digests), old action echoes slimmed, terse replies' : 'off'}`))
+        this.println(`  ${okPill()} caveman mode ${v ? 'ON — outputs summarized (head+tail digests), old action echoes slimmed, terse replies' : 'off'}`)
         return
       }
       case 'theme':
@@ -2860,7 +2888,7 @@ export class TuiApp {
     const names = THEMES.map((t) => t.name).join(' · ')
     if (arg) {
       if (!setTheme(arg)) {
-        this.println(red(`  ✗ no theme "${arg}" — themes: ${names}`))
+        this.println(`  ${errPill()} ${red(`no theme "${arg}" — themes: ${names}`)}`)
         return
       }
       try {
@@ -2868,7 +2896,7 @@ export class TuiApp {
       } catch {
         /* read-only home — the live switch still holds for this run */
       }
-      this.println(green(`  ✔ theme → ${bold(activeTheme().label)} ${dim('· every surface recolors now · saved')}`))
+      this.println(`  ${okPill()} theme → ${bold(activeTheme().label)} ${dim('· every surface recolors now · saved')}`)
       this.requestRender()
       return
     }
@@ -2891,7 +2919,7 @@ export class TuiApp {
     } catch {
       /* read-only home — live still holds */
     }
-    this.println(green(`  ✔ theme → ${bold(themeLabel(pick) ?? pick)} ${dim('· every surface recolors now · saved')}`))
+    this.println(`  ${okPill()} theme → ${bold(themeLabel(pick) ?? pick)} ${dim('· every surface recolors now · saved')}`)
     this.requestRender()
   }
 
@@ -2909,7 +2937,7 @@ export class TuiApp {
     // fresh session → fresh screen: the old session's text stays saved in
     // ITS sidecar (/open brings it back), this one starts clean
     this.swapTranscript(s)
-    this.sysPrintln(green(`  ✔ new ${pick} session · ${s.id.slice(0, 8)}`))
+    this.sysPrintln(`  ${okPill()} new ${pick} session · ${s.id.slice(0, 8)}`)
     if (pick === 'test') this.printModeBanner('test')
   }
 
@@ -2948,7 +2976,7 @@ export class TuiApp {
       const r = this.host.skillRead(name) as { content: string }
       for (const l of r.content.split('\n').slice(0, 60)) this.println(`  ${l}`)
     } catch (e) {
-      this.println(red(`  ✗ ${(e as Error).message}`))
+      this.println(`  ${errPill()} ${red(`${(e as Error).message}`)}`)
     }
   }
 
@@ -2975,7 +3003,7 @@ export class TuiApp {
       fs.mkdirSync(path.dirname(file), { recursive: true })
       if (fs.existsSync(file)) return this.println(yellow(`  ${name}.md already exists`))
       fs.writeFileSync(file, SUBAGENT_TEMPLATE)
-      this.println(green(`  ✔ created .tagent/agents/${name.trim()}.md — edit it, it hot-loads next run`))
+      this.println(`  ${okPill()} created .tagent/agents/${name.trim()}.md — edit it, it hot-loads next run`)
       return
     }
     if (pick.startsWith('agent:')) {
@@ -3011,12 +3039,12 @@ export class TuiApp {
         const key = (await this.ask('api key (enter to reuse the stored key)', { masked: true }))?.trim()
         const list = [...(this.host.cfg.fallback ?? []), { provider, model, ...(key ? { apiKey: key } : {}), enabled: true }]
         this.host.settingsSave({ fallback: list })
-        this.println(green(`  ✔ fallback #${list.length}: ${provider}/${model}${key ? ' (own key)' : ''}`))
+        this.println(`  ${okPill()} fallback #${list.length}: ${provider}/${model}${key ? ' (own key)' : ''}`)
         continue
       }
       if (pick === 'clear') {
         this.host.settingsSave({ fallback: [] })
-        this.println(green('  ✔ fallback chain cleared'))
+        this.println(`  ${okPill()} fallback chain cleared`)
         continue
       }
       if (pick.startsWith('rm:')) {
@@ -3024,7 +3052,7 @@ export class TuiApp {
         const list = [...(this.host.cfg.fallback ?? [])]
         const [gone] = list.splice(i, 1)
         this.host.settingsSave({ fallback: list })
-        this.println(green(`  ✔ removed ${gone.provider}/${gone.model}`))
+        this.println(`  ${okPill()} removed ${gone.provider}/${gone.model}`)
       }
     }
   }
@@ -3176,14 +3204,14 @@ export class TuiApp {
         const s = host.listSessions().find((x) => x.id.startsWith(arg))
         if (!s) return this.println(red(`  no session starts with "${arg}"`))
         host.deleteSession(s.id)
-        this.println(green(`  ✔ deleted ${s.title}`))
+        this.println(`  ${okPill()} deleted ${s.title}`)
         return
       }
 
       case 'share': {
         const r = host.share(arg || undefined)
-        if (!r.ok) return this.println(red(`  ✗ ${r.error}`))
-        this.println(green('  ✔ share exported'))
+        if (!r.ok) return this.println(`  ${errPill()} ${red(`${r.error}`)}`)
+        this.println(`  ${okPill()} share exported`)
         this.println(`    ${dim('file')}  ${r.file}`)
         this.println(`    ${dim('url')}   ${this.webUrl ? this.webUrl.replace(/\/$/, '') + r.url : dim('run with --web-gui to serve it')}`)
         return
@@ -3194,7 +3222,7 @@ export class TuiApp {
         if (sub === 'stop') {
           if (!code) return this.println(dim('  usage: /relay stop <code> — see /relay list'))
           const r = host.relayRevoke(code)
-          return this.println(r.ok ? green(`  ✔ relay ${code} ended`) : dim(`  no live relay ${code}`))
+          return this.println(r.ok ? `  ${okPill()} relay ${code} ended` : dim(`  no live relay ${code}`))
         }
         if (sub === 'list') {
           const relays = host.relayList()
@@ -3211,17 +3239,17 @@ export class TuiApp {
           : host.session
         if (!target) return this.println(dim('  no session yet — say something first, or /relay <session-prefix>'))
         const r = host.relayCreate(target.id)
-        if (!r.ok || !r.code) return this.println(red(`  ✗ ${r.error}`))
+        if (!r.ok || !r.code) return this.println(`  ${errPill()} ${red(`${r.error}`)}`)
         const base = this.webUrl ?? this.relayBase
         if (!base) {
           try {
             await this.startRelayEndpoint()
           } catch (e) {
-            return this.println(red(`  ✗ could not start the relay endpoint: ${(e as Error).message}`))
+            return this.println(`  ${errPill()} ${red(`could not start the relay endpoint: ${(e as Error).message}`)}`)
           }
         }
         const url = (this.webUrl ?? this.relayBase ?? '').replace(/\/$/, '') + r.url
-        this.println(green(`  ✔ live relay for "${target.title}"`))
+        this.println(`  ${okPill()} live relay for "${target.title}"`)
         this.println(`    ${bold('url')}   ${url}`)
         this.println(dim(`    read-only live view · ends with /relay stop ${r.code}`))
         this.println(dim('    sharing beyond this machine: tagent relay --host 0.0.0.0 (prints LAN urls)'))
@@ -3269,7 +3297,7 @@ export class TuiApp {
         if (url && /^(https?:\/\/|\w+([.:-]\w+)+:\d+)/.test(url)) {
           this.sendViaQueue(`Verify the app running at ${url} — test every feature you can reach, check responsiveness (mobile/tablet/desktop) and visuals, then write the report.`)
         } else if (url) {
-          this.println(yellow(`  ⚠ "${url}" does not look like a URL — mode switched, send a target manually`))
+          this.println(`  ${warnPill()} ${yellow(`"${url}" does not look like a URL — mode switched, send a target manually`)}`)
         } else {
           this.println(dim('    the agent will serve the project itself — or send it a URL / feature list to test'))
         }
@@ -3311,7 +3339,7 @@ export class TuiApp {
           if (!info) return this.println(red(`  unknown provider "${ref.provider}" — /model to list`))
           if (info.needsKey && !info.hasKey) return this.println(red(`  ${ref.provider} has no key yet — /apikey ${ref.provider}`))
           host.settingsSave({ defaultProvider: ref.provider, defaultModel: ref.model })
-          this.println(green(`  ✔ ${ref.provider} · ${ref.model}`))
+          this.println(`  ${okPill()} ${ref.provider} · ${ref.model}`)
           return
         }
         // exact provider id → pick its first model
@@ -3321,7 +3349,7 @@ export class TuiApp {
           const nextModel = info.models[0]?.id
           if (!nextModel) return this.println(red(`  provider "${info.id}" has no models configured — /model refresh`))
           host.settingsSave({ defaultProvider: info.id, defaultModel: nextModel })
-          this.println(green(`  ✔ ${info.id} · ${nextModel}`))
+          this.println(`  ${okPill()} ${info.id} · ${nextModel}`)
           return
         }
         // otherwise: search across providers and models
@@ -3336,7 +3364,7 @@ export class TuiApp {
           const hit = provHits.length ? { provider: provHits[0].id, model: provHits[0].models[0]?.id } : { provider: modelHits[0].p.id, model: modelHits[0].m.id }
           if (!hit.model) return this.println(red(`  ${hit.provider} has no models — /model refresh`))
           host.settingsSave({ defaultProvider: hit.provider, defaultModel: hit.model })
-          this.println(green(`  ✔ ${hit.provider} · ${hit.model}`))
+          this.println(`  ${okPill()} ${hit.provider} · ${hit.model}`)
           return
         }
         for (const p of provHits.slice(0, 10)) this.println(`  ${bold(p.id)} ${dim(p.label)}${p.needsKey && !p.hasKey ? red(' (no key)') : ''}`)
@@ -3348,7 +3376,7 @@ export class TuiApp {
       case 'caveman': {
         const v = arg === 'on' ? true : arg === 'off' ? false : !cfg.caveman
         host.settingsSave({ caveman: v })
-        this.println(green(`  ✔ caveman mode ${v ? 'ON — terse replies, compact prompts' : 'off'}`))
+        this.println(`  ${okPill()} caveman mode ${v ? 'ON — terse replies, compact prompts' : 'off'}`)
         return
       }
 
@@ -3359,7 +3387,7 @@ export class TuiApp {
       case 'worklog': {
         const v = arg === 'on' ? true : arg === 'off' ? false : !cfg.worklog.enabled
         host.settingsSave({ worklogEnabled: v })
-        this.println(green(`  ✔ worklog + todos ${v ? 'on — the agent journals to WORKLOG.md' : 'off'}`))
+        this.println(`  ${okPill()} worklog + todos ${v ? 'on — the agent journals to WORKLOG.md' : 'off'}`)
         return
       }
 
@@ -3368,7 +3396,7 @@ export class TuiApp {
         const v = arg === 'on' ? true : arg === 'off' ? false : !cur
         const { updateGlobalConfig } = await import('@tagent/core')
         updateGlobalConfig({ webGui: v })
-        this.println(green(`  ✔ web gui will ${v ? 'start' : 'not start'} with ${bold('tagent start')}`))
+        this.println(`  ${okPill()} web gui will ${v ? 'start' : 'not start'} with ${bold('tagent start')}`)
         this.println(dim('    this run is unaffected — --web-gui always overrides'))
         return
       }
@@ -3398,7 +3426,7 @@ export class TuiApp {
         const n = Number(arg)
         if (!(n >= 1 && n <= 80)) return this.println(dim('  usage: /maxturns <1-80>'))
         host.settingsSave({ maxTurns: Math.round(n) })
-        this.println(green(`  ✔ turn budget: ${Math.round(n)}`))
+        this.println(`  ${okPill()} turn budget: ${Math.round(n)}`)
         return
       }
 
@@ -3411,7 +3439,7 @@ export class TuiApp {
           const file = path.join(dir, `${name}.md`)
           if (fs.existsSync(file)) return this.println(yellow(`  ${name}.md already exists`))
           fs.writeFileSync(file, SUBAGENT_TEMPLATE)
-          this.println(green(`  ✔ created .tagent/agents/${name}.md — edit it, it hot-loads next run`))
+          this.println(`  ${okPill()} created .tagent/agents/${name}.md — edit it, it hot-loads next run`)
           this.println(dim('    fields: name · description · model · tools · mode · maxTurns; body = persona'))
           return
         }
@@ -3436,17 +3464,17 @@ export class TuiApp {
           if (!cur) return this.println(dim('  no diagnostics command configured'))
           this.println(dim(`  running: ${cur} …`))
           const r = await host.diagnosticsRun()
-          this.println(r.ok ? green(`  ✔ pass · ${(r.ms / 1000).toFixed(1)}s`) : red(`  ✗ fail · ${(r.ms / 1000).toFixed(1)}s${r.timedOut ? ' (timed out)' : ''}`))
+          this.println(r.ok ? `  ${okPill()} pass · ${(r.ms / 1000).toFixed(1)}s` : `  ${errPill()} ${red(`fail · ${(r.ms / 1000).toFixed(1)}s${r.timedOut ? ' (timed out)' : ''}`)}`)
           if (r.output) for (const l of r.output.split('\n').slice(0, 15)) this.println(dim(`  ${l}`))
           return
         }
         if (arg === 'off' || arg === 'none' || arg === 'clear') {
           host.settingsSave({ diagnosticsCommand: '' })
-          return this.println(green('  ✔ diagnostics gate off'))
+          return this.println(`  ${okPill()} diagnostics gate off`)
         }
         if (arg) {
           host.settingsSave({ diagnosticsCommand: arg })
-          this.println(green(`  ✔ diagnostics gate: ${bold(arg)}`))
+          this.println(`  ${okPill()} diagnostics gate: ${bold(arg)}`)
           this.println(dim('    runs once per edit turn; failures are fed back to the agent'))
           return
         }
@@ -3466,18 +3494,18 @@ export class TuiApp {
           const key = keyParts.join(' ')
           list.push({ provider, model, ...(key ? { apiKey: key } : {}), enabled: true })
           host.settingsSave({ fallback: list })
-          return this.println(green(`  ✔ fallback #${list.length}: ${provider}/${model}${key ? ' (own key)' : ''}`))
+          return this.println(`  ${okPill()} fallback #${list.length}: ${provider}/${model}${key ? ' (own key)' : ''}`)
         }
         if (verb === 'rm') {
           const i = Number(rest[0]) - 1
           if (!(i >= 0 && i < list.length)) return this.println(dim(`  usage: /fallback rm <1-${list.length}>`))
           const [gone] = list.splice(i, 1)
           host.settingsSave({ fallback: list })
-          return this.println(green(`  ✔ removed ${gone.provider}/${gone.model}`))
+          return this.println(`  ${okPill()} removed ${gone.provider}/${gone.model}`)
         }
         if (verb === 'clear') {
           host.settingsSave({ fallback: [] })
-          return this.println(green('  ✔ fallback chain cleared'))
+          return this.println(`  ${okPill()} fallback chain cleared`)
         }
         const { chain } = host.fallbackChainView()
         this.println(bold('  provider fallback chain (try top → bottom)'))
@@ -3509,7 +3537,7 @@ export class TuiApp {
         }
         const key = await this.askHidden(`api key for ${prov}`)
         host.settingsSave({ apiKey: { provider: prov, key } })
-        this.println(green(`  ✔ key saved for ${prov}`))
+        this.println(`  ${okPill()} key saved for ${prov}`)
         return
       }
 
@@ -3527,7 +3555,7 @@ export class TuiApp {
         this.println(dim('  checking for updates…'))
         const info = await checkUpdate(true)
         if (!info) return this.println(red('  could not reach the update endpoint (offline?)'))
-        if (!info.outdated) return this.println(green(`  ✔ up to date — v${info.current}`))
+        if (!info.outdated) return this.println(`  ${okPill()} up to date — v${info.current}`)
         this.println(`  update available: v${info.current} → ${bold('v' + info.latest)}`)
         if (info.notes) this.println(dim(`  ${info.notes}`))
         const yes = await this.askYesNo('  update now?', true)
@@ -3555,7 +3583,7 @@ export class TuiApp {
         const perm = { ...(host.cfg.permissions) }
         perm.tools = { ...perm.tools, [arg]: cmd }
         host.settingsSave({ permissions: perm })
-        this.println(green(`  ✔ ${arg} → ${cmd}`))
+        this.println(`  ${okPill()} ${arg} → ${cmd}`)
         return
       }
 
@@ -3592,7 +3620,7 @@ export class TuiApp {
           }
           if (lines.length > max) this.println(dim(`  … ${lines.length - max} more lines`))
         } catch (e) {
-          this.println(red(`  ✗ ${(e as Error).message}`))
+          this.println(`  ${errPill()} ${red(`${(e as Error).message}`)}`)
         }
         return
       }
@@ -3638,12 +3666,12 @@ export class TuiApp {
             message: arg || undefined,
             onLog: (l) => this.println(dim(`  ${l}`)),
           })
-          this.println(green(`  ✔ pushed to ${r.repo} (${r.commit})`))
+          this.println(`  ${pushPill()} ${bold(`to ${r.repo}`)} ${dim(`(${r.commit})`)}`)
           this.println(dim(`  ${r.url}`))
           this.refreshSyncBadge()
         } catch (e) {
           this.refreshSyncBadge() // syncProject may have linked before the push failed
-          this.println(red(`  ✗ ${(e as Error).message}`))
+          this.println(`  ${errPill()} ${red((e as Error).message)}`)
         }
         return
       }
@@ -3651,15 +3679,16 @@ export class TuiApp {
       case 'checkpoints': {
         const cps = listCheckpoints(host.root).slice(0, 12)
         if (cps.length === 0) return this.println(dim('  no snapshots yet'))
+        this.println(`  ${chip('💾 checkpoints', 'blue')} ${bold(`${listCheckpoints(host.root).length} snapshot(s) — newest first`)}`)
         for (const cp of cps) {
-          this.println(`   ${cyan('◉')} ${dim(fmtWhen(cp.at))} · ${cp.label}`)
+          this.println(`    ${dim(fmtWhen(cp.at))} · ${cp.label}`)
         }
         return
       }
 
       case 'undo': {
         const r = host.undoCheckpoint() as { ok: boolean; checkpoint: { reason?: string } | null }
-        if (r.ok) this.println(green(`  ✔ rolled back · ${r.checkpoint?.reason ?? ''}`))
+        if (r.ok) this.println(`  ${okPill()} rolled back · ${r.checkpoint?.reason ?? ''}`)
         else this.println(dim('  nothing to undo'))
         return
       }
@@ -3667,14 +3696,16 @@ export class TuiApp {
       case 'memory': {
         const facts = listFacts(host.root)
         if (facts.length === 0) return this.println(dim('  no memory facts — the agent saves them via the memory tool'))
-        for (const f of facts.slice(0, 20)) this.println(`   ${magenta('◆')} ${f.text}`)
+        this.println(`  ${chip('🧠 memory', 'blue')} ${bold(`${facts.length} fact(s) the agent remembers`)}`)
+        for (const f of facts.slice(0, 20)) this.println(`    ${magenta('◆')} ${f.text}`)
         return
       }
 
       case 'skills': {
         const skills = listSkills(host.root)
         if (skills.length === 0) return this.println(dim('  no skills installed'))
-        for (const s of skills) this.println(`   ${bold(s.name)} ${dim(`(${s.source})`)} — ${s.description}`)
+        this.println(`  ${chip('🎯 skills', 'blue')} ${bold(`${skills.length} installed`)}`)
+        for (const s of skills) this.println(`    ${bold(s.name)} ${dim(`(${s.source})`)} — ${s.description}`)
         return
       }
 
@@ -3684,7 +3715,7 @@ export class TuiApp {
           const r = host.skillRead(arg) as { content: string }
           for (const l of r.content.split('\n').slice(0, 60)) this.println(`  ${l}`)
         } catch (e) {
-          this.println(red(`  ✗ ${(e as Error).message}`))
+          this.println(`  ${errPill()} ${red(`${(e as Error).message}`)}`)
         }
         return
       }
@@ -3790,7 +3821,7 @@ export class TuiApp {
           return
         }
         if (!/no plugin command named/.test(r.error ?? '')) {
-          this.println(red(`  ✗ ${r.error}`))
+          this.println(`  ${errPill()} ${red(`${r.error}`)}`)
           return
         }
         this.println(dim(`  unknown command /${cmd} — /help`))
@@ -3809,7 +3840,7 @@ export class TuiApp {
       return
     }
     this.host.settingsSave({ apiKey: { provider: providerId, key } })
-    this.println(green(`  ✔ key saved for ${providerId}`))
+    this.println(`  ${okPill()} key saved for ${providerId}`)
   }
 
   /** /model with no arg — provider picker → model picker (mirrors tui.ts) */
@@ -3855,7 +3886,7 @@ export class TuiApp {
       const key = (await this.askHidden(`api key for ${provId}`)).trim()
       if (!key) return this.println(dim('  cancelled — empty key'))
       host.settingsSave({ apiKey: { provider: provId, key } })
-      this.println(green(`  ✔ key saved for ${provId}`))
+      this.println(`  ${okPill()} key saved for ${provId}`)
     }
     if (info.models.length === 0 && !info.custom) {
       const wantRefresh = await this.askYesNo(`  no cached models for ${provId} — discover now?`, true)
@@ -3888,11 +3919,11 @@ export class TuiApp {
         host.settingsSave({ customProvider: { ...cp, models: [...(cp.models ?? []), custom] } })
       }
       host.settingsSave({ defaultProvider: provId, defaultModel: custom })
-      this.println(green(`  ✔ ${provId} · ${custom}`))
+      this.println(`  ${okPill()} ${provId} · ${custom}`)
       return
     }
     host.settingsSave({ defaultProvider: provId, defaultModel: modelId })
-    this.println(green(`  ✔ ${provId} · ${modelId}`))
+    this.println(`  ${okPill()} ${provId} · ${modelId}`)
   }
 
   /**
@@ -3935,12 +3966,12 @@ export class TuiApp {
       defaultProvider: id,
       defaultModel: models[0] ?? '',
     })
-    if ('error' in r && r.error) return this.println(red(`  ✗ ${r.error}`))
-    this.println(green(`  ✔ ${label} (${id}) saved and selected`))
+    if ('error' in r && r.error) return this.println(`  ${errPill()} ${red(`${r.error}`)}`)
+    this.println(`  ${okPill()} ${label} (${id}) saved and selected`)
     if (models[0]) {
-      this.println(green(`  ✔ ${id} · ${models[0]}`))
+      this.println(`  ${okPill()} ${id} · ${models[0]}`)
     } else {
-      this.println(yellow(`  ⚠ no models yet — /model to pick one, or /model ${id} <model-id>`))
+      this.println(`  ${warnPill()} ${yellow(`no models yet — /model to pick one, or /model ${id} <model-id>`)}`)
     }
     this.println(dim(`    manage later: /model · failover: /fallback add ${id} <model> [key]`))
   }
@@ -3949,16 +3980,16 @@ export class TuiApp {
   private printModeBanner(mode: AgentMode): void {
     this.mode = mode
     if (mode === 'plan') {
-      this.println(green('  ✔ mode: plan — read-only'))
+      this.println(`  ${okPill()} mode: plan — read-only`)
       this.println(dim('    the agent investigates, INTERVIEWS you for missing detail, then delivers a plan'))
       this.println(dim('    approving the plan writes PRD.md and switches to build automatically'))
     } else if (mode === 'test') {
-      this.println(green('  ✔ mode: test — QA agent'))
+      this.println(`  ${okPill()} mode: test — QA agent`)
       this.println(dim('    the agent runs the project (serve), clicks through it (browser), screenshots + audits'))
       this.println(dim('    responsive (mobile/tablet/desktop) and visuals — then writes TEST-REPORT.md'))
       this.println(dim('    read-only for source files · playwright needed: bun add playwright && bunx playwright install chromium'))
     } else {
-      this.println(green('  ✔ mode: build — full write access'))
+      this.println(`  ${okPill()} mode: build — full write access`)
       this.println(dim('    the agent reads PRD.md first when present, implements, and verifies its work'))
     }
   }
@@ -4015,8 +4046,8 @@ export class TuiApp {
         const tpl = templates.find((x) => x.name === t)!
         this.println(dim(`  starting ${tpl.name} (${tpl.command} ${tpl.args.join(' ')})…`))
         const r = await host.mcpSave({ name: tpl.name, command: tpl.command, args: tpl.args })
-        if (r.error) this.println(red(`  ✗ ${r.error}`))
-        else this.println(green(`  ✔ ${tpl.name} added — see status`))
+        if (r.error) this.println(`  ${errPill()} ${red(`${r.error}`)}`)
+        else this.println(`  ${okPill()} ${tpl.name} added — see status`)
         continue
       }
 
@@ -4036,8 +4067,8 @@ export class TuiApp {
         const r = await host.mcpSave({
           name, command, args: rawArgs ? rawArgs.split(/\s+/) : [], env: Object.keys(env).length ? env : undefined,
         })
-        if (r.error) this.println(red(`  ✗ ${r.error}`))
-        else this.println(green(`  ✔ ${name} added`))
+        if (r.error) this.println(`  ${errPill()} ${red(`${r.error}`)}`)
+        else this.println(`  ${okPill()} ${name} added`)
         continue
       }
 
@@ -4061,14 +4092,14 @@ export class TuiApp {
         if (!act || act === 'back') continue
         if (act === 'toggle') {
           const r = await host.mcpToggle(name)
-          if (r.error) this.println(red(`  ✗ ${r.error}`))
-          else this.println(green(`  ✔ ${name} ${r.enabled ? 'enabled' : 'disabled'}`))
+          if (r.error) this.println(`  ${errPill()} ${red(`${r.error}`)}`)
+          else this.println(`  ${okPill()} ${name} ${r.enabled ? 'enabled' : 'disabled'}`)
         } else {
           const sure = await this.askYesNo(`  remove ${bold(name)}?`, true)
           if (!sure) continue
           const r = await host.mcpRemove(name)
-          if (r.error) this.println(red(`  ✗ ${r.error}`))
-          else this.println(green(`  ✔ ${name} removed`))
+          if (r.error) this.println(`  ${errPill()} ${red(`${r.error}`)}`)
+          else this.println(`  ${okPill()} ${name} removed`)
         }
         continue
       }
@@ -4081,12 +4112,15 @@ export class TuiApp {
       this.println(dim('  no MCP servers — /mcp to add one'))
       return
     }
-    this.println(bold(`  MCP servers (${status.length})`))
+    this.println(`  ${chip('🔌 MCP', 'red')} ${bold(`servers (${status.length})`)}`)
     for (const s of status) {
-      const icon = s.state === 'ready' ? green('◉') : s.state === 'error' ? red('✗') : s.state === 'disabled' ? dim('○') : yellow('◌')
-      this.println(`   ${icon} ${bold(padCol(s.name, 16))} ${dim(s.state)} · ${s.tools} tools${s.enabled === false ? dim(' (disabled)') : ''}`)
-      if (s.error) this.println(`      ${red(s.error.slice(0, 120))}`)
-      if (s.hint) this.println(`      ${yellow(`→ ${s.hint}`)}`)
+      // v0.23.1 — the state rides a chip (green ready / red error /
+      // yellow connecting / dim off), padded to one column so the names align
+      const label = s.state === 'ready' ? 'ready ✓' : s.state === 'disabled' ? 'off' : s.state
+      const slot: BadgeSlot = s.state === 'ready' ? 'green' : s.state === 'error' ? 'red' : s.state === 'disabled' ? 'dim' : 'yellow'
+      this.println(`    ${padCol(chip(label, slot), 13)} ${bold(padCol(s.name, 16))} ${dim(`· ${s.tools} tools`)}${s.enabled === false ? dim(' (disabled)') : ''}`)
+      if (s.error) this.println(`       ${red(s.error.slice(0, 120))}`)
+      if (s.hint) this.println(`       ${yellow(`→ ${s.hint}`)}`)
     }
     this.println(dim('    tools: mcp_<server>_<tool> · permissions: /allow mcp_<server> · manage: /mcp'))
   }
@@ -4108,7 +4142,7 @@ export class TuiApp {
       writeSyncSettings(host.root, { ...s, auto: sub === 'on' })
       this.syncEngineRestart()
       return this.println(sub === 'on'
-        ? green(`  ✔ auto-sync on (every ${Math.round(readSyncSettings(host.root).intervalMs / 1000)}s)`)
+        ? `  ${okPill()} auto-sync on (every ${Math.round(readSyncSettings(host.root).intervalMs / 1000)}s)`
         : dim('  auto-sync off — /push still works any time'))
     }
     if (sub === 'interval' || sub === 'every') {
@@ -4117,7 +4151,7 @@ export class TuiApp {
       const s = readSyncSettings(host.root)
       writeSyncSettings(host.root, { ...s, intervalMs: secs * 1000 })
       this.syncEngineRestart()
-      return this.println(green(`  ✔ sync interval → every ${secs}s`))
+      return this.println(`  ${okPill()} sync interval → every ${secs}s`)
     }
     if (sub === 'sync' || sub === 'now') {
       return this.repoSyncNow()
@@ -4174,7 +4208,7 @@ export class TuiApp {
         this.syncEngineRestart()
         this.println(s.auto
           ? dim('  auto-sync off — /push still works any time')
-          : green(`  ✔ auto-sync on — every ${Math.round(readSyncSettings(host.root).intervalMs / 1000)}s`))
+          : `  ${okPill()} auto-sync on — every ${Math.round(readSyncSettings(host.root).intervalMs / 1000)}s`)
         continue
       }
 
@@ -4201,7 +4235,7 @@ export class TuiApp {
         if (!ms) continue
         writeSyncSettings(host.root, { ...s, intervalMs: ms })
         this.syncEngineRestart()
-        this.println(green(`  ✔ sync interval → every ${Math.round(ms / 1000)}s`))
+        this.println(`  ${okPill()} sync interval → every ${Math.round(ms / 1000)}s`)
         continue
       }
 
@@ -4235,7 +4269,7 @@ export class TuiApp {
         } catch { /* ignore */ }
         this.syncEngineRestart()
         this.refreshSyncBadge()
-        this.println(green('  ✔ unlinked — /push links it again any time'))
+        this.println(`  ${okPill()} unlinked — /push links it again any time`)
         continue
       }
     }
@@ -4257,7 +4291,7 @@ export class TuiApp {
     })()
     const hist = readSyncHistory(host.root, 14)
 
-    this.println(bold('  ⎇ repo sync — status'))
+    this.println(`  ${chip('⎇ sync', 'cyan')} ${bold('repo — status')}`)
     this.println(
       `    ${dim('project')}   ${bold(path.basename(host.root))} ${dim(host.root)}`,
     )
@@ -4291,15 +4325,12 @@ export class TuiApp {
     } else {
       this.println(`    ${dim('history')}   ${dim(`last ${hist.length} round${hist.length === 1 ? '' : 's'} (newest first)`)}`)
       for (const h of hist.slice(0, 14)) {
-        const icon =
-          h.action === 'pushed' ? green('↑')
-          : h.action === 'pulled' ? cyan('↓')
-          : h.action === 'error' ? red('!')
-          : blue('🔐')
+        // v0.23.1 — the action rides a chip: green push, cyan pull, red error
+        const slot: BadgeSlot = h.action === 'pushed' ? 'green' : h.action === 'pulled' ? 'cyan' : h.action === 'error' ? 'red' : 'blue'
         const at = new Date(h.at)
         const hhmmss = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}:${String(at.getSeconds()).padStart(2, '0')}`
         this.println(
-          `      ${dim(hhmmss)} ${icon} ${bold(h.action.padEnd(7))} ${dim(truncateStyled(h.detail, 60))}${h.commit ? dim(` · ${h.commit.slice(0, 7)}`) : ''}`,
+          `      ${dim(hhmmss)} ${padCol(chip(h.action, slot), 12)} ${dim(truncateStyled(h.detail, 56))}${h.commit ? dim(` · ${h.commit.slice(0, 7)}`) : ''}`,
         )
       }
     }
@@ -4318,12 +4349,12 @@ export class TuiApp {
         onLog: (l) => this.println(dim(`  ${l}`)),
       })
       recordSyncHistory(host.root, { action: 'pushed', detail: 'manual — /repo sync', repo: r.repo, commit: r.commit })
-      this.println(green(`  ✔ synced → ${r.repo} (${r.commit})`))
+      this.println(`  ${pushPill()} ${bold(`to ${r.repo}`)} ${dim(`(${r.commit})`)}`)
       this.refreshSyncBadge()
     } catch (e) {
       recordSyncHistory(host.root, { action: 'error', detail: `manual — ${(e as Error).message ?? e}` })
       this.refreshSyncBadge()
-      this.println(red(`  ✗ ${(e as Error).message}`))
+      this.println(`  ${errPill()} ${red((e as Error).message)}`)
     }
   }
 
@@ -4338,7 +4369,7 @@ export class TuiApp {
     const next = a.trim()
     if (!next) return this.println(dim('  unchanged'))
     const b = await this.ask('repeat passphrase', { masked: true })
-    if ((b ?? '').trim() !== next) return this.println(red('  ✗ passphrases differ — nothing changed'))
+    if ((b ?? '').trim() !== next) return this.println(`  ${errPill()} ${red(`passphrases differ — nothing changed`)}`)
 
     // an existing vault this device could open gets re-sealed NOW so the
     // new passphrase travels with the next sync tick
@@ -4355,11 +4386,11 @@ export class TuiApp {
           resealed = true
         }
       } catch (e) {
-        return this.println(red(`  ✗ could not re-seal the vault: ${(e as Error).message}`))
+        return this.println(`  ${errPill()} ${red(`could not re-seal the vault: ${(e as Error).message}`)}`)
       }
     }
     setVaultPassphrase(next)
-    this.println(green('  ✔ passphrase saved on this device'))
+    this.println(`  ${okPill()} passphrase saved on this device`)
     if (resealed) this.println(dim('    vault re-encrypted — other devices need the new passphrase'))
     else this.println(dim('    the vault is (re)encrypted on the next sync tick'))
   }
@@ -4394,7 +4425,7 @@ export class TuiApp {
       if (!name) name = ((await this.ask('plugin name')) ?? '').trim()
       if (!name) return this.println(dim('  cancelled'))
       const r = host.pluginScaffold(name)
-      this.println(green('  ✔ scaffold created'))
+      this.println(`  ${okPill()} scaffold created`)
       this.println(`    ${dim(r.file)}`)
       this.println(dim('    edit it, then just run — plugins hot-reload each turn'))
       return
@@ -4422,7 +4453,7 @@ export class TuiApp {
         const name = ((await this.ask('plugin name')) ?? '').trim()
         if (!name) continue
         const r = host.pluginScaffold(name)
-        this.println(green('  ✔ scaffold created'))
+        this.println(`  ${okPill()} scaffold created`)
         this.println(`    ${dim(r.file)}`)
         continue
       }
@@ -4459,7 +4490,7 @@ export class TuiApp {
     const host = this.host
     const github = host.cfg.github ?? {}
     if (github.token) {
-      this.println(green(`  ✔ connected as ${github.login}`))
+      this.println(`  ${okPill()} connected as ${github.login}`)
       const a = (await this.ask('switch account? (l = logout, enter = stay)')) ?? ''
       if (a.trim().toLowerCase().startsWith('l')) {
         await host.githubLogout()
@@ -4483,19 +4514,19 @@ export class TuiApp {
         this.println(`  ${bold('code')}   ${bold(cyan(start.user_code))}`)
         this.println(dim('  waiting for authorization…'))
         const r = await host.githubDevicePoll()
-        this.println(green(`  ✔ logged in as ${r.login}`))
+        this.println(`  ${okPill()} logged in as ${r.login}`)
       } else if (choice === 'pat') {
         const token = (await this.askHidden('GitHub token')).trim()
         if (!token) return this.println(dim('  cancelled'))
         const r = await host.githubPat(token)
-        this.println(green(`  ✔ logged in as ${r.login}`))
+        this.println(`  ${okPill()} logged in as ${r.login}`)
       } else {
         return this.println(dim('  cancelled'))
       }
       this.refreshSyncBadge()
       this.println(dim('  sync this workspace any time with `tagent sync`'))
     } catch (e) {
-      this.println(red(`  ✗ ${(e as Error).message}`))
+      this.println(`  ${errPill()} ${red(`${(e as Error).message}`)}`)
     }
   }
 
@@ -4969,18 +5000,18 @@ export class TuiApp {
   private onSyncEvent(e: SyncEvent): void {
     if (e.type === 'pushed') {
       this.syncHint = `↑ ${e.commit}`
-      this.bannerBox('⎇ auto-sync', `pushed ${e.commit} → ${e.repo}`, green)
+      this.bannerBox('⎇ auto-sync', `pushed ${e.commit} → ${e.repo}`, green, 'green')
     } else if (e.type === 'pulled') {
       this.syncHint = `↓ ${e.files || ''}${e.applied.length ? ' 🔐' : ''}`.trim()
       const bits: string[] = []
       if (e.files > 0) bits.push(`${e.files} file${e.files === 1 ? '' : 's'}`)
       if (e.applied.length) bits.push(`vault: ${e.applied.join(', ')}`)
-      this.bannerBox('⎇ auto-sync', `pulled${bits.length ? ` — ${bits.join(' · ')}` : ' — up to date'}`, cyan)
+      this.bannerBox('⎇ auto-sync', `pulled${bits.length ? ` — ${bits.join(' · ')}` : ' — up to date'}`, cyan, 'cyan')
     } else if (e.type === 'vault-passphrase') {
       this.println(yellow('  🔐 shared settings are locked — set this device\'s passphrase (/repo) to unlock'))
     } else if (e.type === 'error') {
       this.syncHint = red('sync error')
-      this.println(red(`  ⎇ sync: ${e.message}`))
+      this.println(`  ${errPill('sync')} ${red(e.message)}`)
     }
     this.refreshSyncBadge()
   }

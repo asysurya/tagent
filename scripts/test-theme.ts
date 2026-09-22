@@ -465,6 +465,121 @@ await test('narrow terminal: the navbar never forces a wider box (responsive flo
 })
 
 /* ------------------------------------------------------------------ */
+/* 10. v0.23.1 — chips: bg-badge titles, pills, report headers           */
+/* ------------------------------------------------------------------ */
+
+await test('badges: every theme ships a full 9-slot table with bg codes', () => {
+  const slots = ['red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'orange', 'dim', 'accent'] as const
+  for (const t of THEMES) {
+    for (const slot of slots) {
+      const code = t.badge[slot]
+      if (!code) throw new Error(`${t.name}.badge.${slot} missing`)
+      // every badge must set a background: 48;5;NNN or the classic 4x codes
+      if (!/^48;5;\d+/.test(code) && !/^4[1-6];/.test(code)) {
+        throw new Error(`${t.name}.badge.${slot} = "${code}" has no background`)
+      }
+    }
+  }
+})
+
+await test('chip(): emits the theme bg pair, resets, degrades to plain " text "', () => {
+  setTheme('dark')
+  const uikit = require('../packages/cli/src/ui')
+  const out = uikit.chip('bash', 'orange')
+  if (!out.includes('\x1b[48;5;208;38;5;16m bash \x1b[0m')) throw new Error(`dark orange chip wrong: ${JSON.stringify(out)}`)
+  setTheme('tokyo-night')
+  if (!uikit.chip('x', 'red').includes('\x1b[48;5;210;38;5;17m')) throw new Error('tokyo-night red chip wrong')
+  setTheme('light')
+  if (!uikit.chip('x', 'green').includes('\x1b[48;5;28;38;5;231m')) throw new Error('light green chip wrong')
+  // colors OFF → identical visible width, just plain padding
+  setAppColor(false)
+  const plain = uikit.chip('bash', 'orange')
+  if (plain !== ' bash ') throw new Error(`plain degradation wrong: ${JSON.stringify(plain)}`)
+  setAppColor(true)
+  setTheme('dark')
+})
+
+await test('tool boxes: the title rides a bg chip — and the border color survives it', async () => {
+  fs.rmSync(path.join(HOME, '.tagent', 'config.json'), { force: true })
+  setTheme('dark')
+  const host = mkHost()
+  const { app, out } = await started(host)
+  host.bus.emit('tool:start', { call: { id: 'c1', tool: 'bash', input: { command: 'ls' }, status: 'running' } })
+  host.bus.emit('tool:end', { call: { id: 'c1', tool: 'bash', input: { command: 'ls' }, status: 'done', output: 'ok', startedAt: 1, endedAt: 1001 } })
+  await sleep(40)
+  app.renderNow()
+  const raw = out.text()
+  const top = raw.split('\n').find((l) => l.includes('bash'))
+  if (!top) throw new Error('bash box top not found')
+  // the chip bg paints the title…
+  if (!top.includes('\x1b[48;5;208;38;5;16m 💻 bash \x1b[0m')) throw new Error('title chip missing from the top rail')
+  // …and the tomato border AFTER the chip's reset still paints (the classic
+  // nested-SGR bug would leave the trailing dashes colorless)
+  const after = top.slice(top.indexOf('\x1b[0m', top.indexOf('48;5;208')) + 4)
+  if (!after.includes('\x1b[38;5;208m')) throw new Error('border color died after the chip (nested SGR bleed)')
+  // the status row rides a green pill
+  if (!raw.includes('\x1b[42;30m ✔ done \x1b[0m')) throw new Error('done pill missing')
+  const plain = stripAnsi(raw)
+  if (!plain.includes('╭─')) throw new Error('top rail lost its border')
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+await test('reports: /mcp list + /repo status headers ride chips', async () => {
+  fs.rmSync(path.join(HOME, '.tagent', 'config.json'), { force: true })
+  setTheme('dark')
+  const host = mkHost()
+  host.mcpStatus = () => [
+    { name: 'context7', state: 'ready', tools: 12, command: 'npx', error: undefined, hint: undefined, note: undefined },
+    { name: 'memory', state: 'error', tools: 0, command: 'npx', error: 'No space left on device', hint: 'free disk', note: undefined },
+  ]
+  const { app, out } = await started(host)
+  app.feed('/mcp list\r')
+  await sleep(120)
+  app.renderNow()
+  const raw = out.text()
+  if (!raw.includes('\x1b[41;97m 🔌 MCP \x1b[0m')) throw new Error('MCP report header chip missing')
+  if (!raw.includes('\x1b[42;30m ready ✓ \x1b[0m')) throw new Error('ready state chip missing')
+  if (!raw.includes('\x1b[41;97m error \x1b[0m')) throw new Error('error state chip missing')
+  if (!raw.includes('No space left on device')) throw new Error('error detail line missing')
+  const plain = stripAnsi(raw)
+  if (!plain.includes('context7')) throw new Error('server name missing')
+  // names align across chips of different widths (padCol around the chip)
+  const r1 = plain.split('\n').find((l) => l.includes('context7'))
+  const r2 = plain.split('\n').find((l) => l.includes('memory'))
+  if (r1 && r2 && stripAnsi(r1).indexOf('context7') !== stripAnsi(r2).indexOf('memory')) {
+    throw new Error('server names misaligned across state chips')
+  }
+  app.feed('/repo status\r')
+  await sleep(120)
+  app.renderNow()
+  if (!out.text().includes('\x1b[46;30m ⎇ sync \x1b[0m')) throw new Error('repo status header chip missing')
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+await test('theme switch recolors chips live — tokyo-night chips are pastel', async () => {
+  fs.rmSync(path.join(HOME, '.tagent', 'config.json'), { force: true })
+  setTheme('dark')
+  const host = mkHost()
+  const { app, out } = await started(host)
+  app.feed('/theme tokyo-night\r')
+  await sleep(120)
+  host.bus.emit('tool:start', { call: { id: 'c2', tool: 'bash', input: { command: 'ls' }, status: 'running' } })
+  host.bus.emit('tool:end', { call: { id: 'c2', tool: 'bash', input: { command: 'ls' }, status: 'done', output: 'ok', startedAt: 1, endedAt: 1001 } })
+  await sleep(40)
+  app.renderNow()
+  const raw = out.text()
+  if (!raw.includes('\x1b[48;5;215;38;5;17m 💻 bash \x1b[0m')) throw new Error('tokyo-night bash chip missing')
+  if (!raw.includes('\x1b[48;5;156;38;5;17m ✔ done \x1b[0m')) throw new Error('tokyo-night done pill missing')
+  app.exit()
+  await sleep(10)
+  app.destroy()
+})
+
+/* ------------------------------------------------------------------ */
 
 const fails = results.filter((r) => r.startsWith('FAIL'))
 console.log(fails.length === 0 ? '\nALL PASS' : `\n${fails.length} FAILING`)

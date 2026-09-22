@@ -1,6 +1,6 @@
 {
-  "version": "0.23.0",
+  "version": "0.23.1",
   "date": "2026-09-22",
-  "notes": "The transcript gets the design it deserved. Every tool call rides a rounded box in its category color (bash tomato, MCP red, reads blue…), run stats and sync pushes ride two-line banner boxes, and the AI reply renders as live markdown while it streams — no more raw ## and ** on screen. Six themes ship (dark, light, Tokyo Night, Dracula, Nord, Gruvbox) switched live via /theme, menus grew number badges — press 1-9 or tap the row on touch terminals — and the input box no longer collides with the reply on narrow screens.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.23.0"
+  "notes": "Tool titles, status pills and report headers get a background: every tool box now opens with a filled chip (💻 bash on tomato, 🔌 MCP on red…), the run verdict and result rows ride status pills (✔ done on green, ✗ error on red), and every report — MCP servers, repo sync, skills, memory, checkpoints — opens with a themed header chip plus per-line state chips. Each of the six themes ships its own hand-tuned badge table (saturated chips with white text, or pastel neon with near-black), switched live by /theme like everything else. `tagent doctor` got the same treatment.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.23.1"
 }

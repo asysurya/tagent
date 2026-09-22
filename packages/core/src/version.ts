@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { GLOBAL_DIR } from './config'
 
-export const CURRENT_VERSION = '0.23.0'
+export const CURRENT_VERSION = '0.23.1'
 
 const DEFAULT_UPDATE_URL =
   'https://raw.githubusercontent.com/asysurya/tagent/main/website/public/latest.json'

@@ -28,9 +28,43 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.23.0'
+export const LATEST = '0.23.1'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.23.1',
+    date: '2026-09-22',
+    title: 'Chips — background badges on tool titles & reports',
+    summary:
+      'Tool titles, status pills and report headers get a background: every tool box now opens with a filled chip (💻 bash on tomato, 🔌 MCP on red…), the run verdict and result rows ride status pills (✔ done on green, ✗ error on red), and every report — MCP servers, repo sync, skills, memory, checkpoints — opens with a themed header chip plus per-line state chips. Each of the six themes ships its own hand-tuned badge table (saturated chips with white text, or pastel neon with near-black), switched live by /theme like everything else. `tagent doctor` got the same treatment.',
+    stable: true,
+    sections: [
+      {
+        name: 'Chips — text on a filled background',
+        items: [
+          'tool-call titles ride a bg chip: ╭─[💻 bash]──… with the icon + name on the category color — bash tomato, MCP red, reads blue, writes green, search magenta, web cyan, ask yellow',
+          'result rows ride status pills — ✔ done on green, ✗ error on red, ⊘ denied on yellow — next to duration and the output tail',
+          'banner boxes (run verdicts, auto-sync pushes/pulls) carry the chip too: ✔ done / ⎇ auto-sync ride a filled pill in the top rail',
+        ],
+      },
+      {
+        name: 'Reports with chip headers',
+        items: [
+          '/mcp list opens with a 🔌 MCP chip and every server state rides its own chip — ready ✓ green, error red, connecting yellow, off dim — with names still aligned',
+          '/repo status opens with a ⎇ sync chip, the history log chips each round (pushed green · pulled cyan · error red), and /push / sync report ↑ pushed / ✗ pills',
+          '/skills, /memory and /checkpoints open with 🎯 / 🧠 / 💾 header chips + counts; permission verdicts, compaction, notify errors and the chat-error line all ride pills — one vocabulary everywhere',
+        ],
+      },
+      {
+        name: 'Per-theme badge tables',
+        items: [
+          'each theme ships nine hand-tuned badge pairs (red/green/yellow/blue/magenta/cyan/orange/dim/accent): dark uses the classic Unix combos (white on red/blue, black on green/yellow/cyan), tokyo-night & dracula go pastel neon with near-black text, nord & gruvbox use their strong colors, light keeps dark chips with white text',
+          '/theme recolors chips on the next frame like every other surface; NO_COLOR and non-TTY degrade to plain text with identical widths — layout never shifts',
+          'tagent doctor, sync, clone and auth outputs ride the same chip look on the CLI side (42/30 classic pairs that read on both dark and paper-white terminals)',
+        ],
+      },
+    ],
+  },
   {
     version: '0.23.0',
     date: '2026-09-22',

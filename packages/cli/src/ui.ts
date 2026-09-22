@@ -19,7 +19,7 @@ import pc from 'picocolors'
 import cliBoxes from 'cli-boxes'
 import wrapAnsi from 'wrap-ansi'
 
-import { activeTheme, type ThemeSgr } from './theme'
+import { activeTheme, type ThemeSgr, type BadgeSlot } from './theme'
 
 /* ------------------------------------------------------------------ */
 /* color gate                                                          */
@@ -48,6 +48,17 @@ export const cBlue = tcol('blue')
 export const cMagenta = tcol('magenta')
 export const cCyan = tcol('cyan')
 export const cOrange = tcol('orange')
+
+/** a bg-chip (v0.23.1): text on a filled background — tool titles, report
+ *  headers, status pills. The bg;fg pair comes from the ACTIVE theme's
+ *  badge table (hand-tuned per theme), so /theme recolors chips live like
+ *  everything else. Degrades to plain " text " when colors are off — width
+ *  stays IDENTICAL to the colored chip (one space pad each side), so layout
+ *  math never shifts between TTYs. */
+export function chip(text: string, slot: BadgeSlot): string {
+  if (!uiColorOn()) return ` ${text} `
+  return `\x1b[${activeTheme().badge[slot]}m ${text} \x1b[0m`
+}
 
 /* ------------------------------------------------------------------ */
 /* width — the alignment backbone                                     */
@@ -235,6 +246,10 @@ const B = cliBoxes.round
 export interface BoxOpts {
   /** drawn into the top border:  ╭─ title ────╮ */
   title?: string
+  /** v0.23.1 — when set, the title rides a bg chip (chip()) instead of the
+   *  border color; the rail is then composed in SEGMENTS so the chip's
+   *  SGR reset never bleeds into the border run. */
+  titleChip?: (s: string) => string
   /** drawn into the bottom border: ╰─ footer ──╯ */
   footer?: string
   /** body rows (already styled); each is fitted to the inner width */
@@ -257,6 +272,13 @@ export function roundBox(o: BoxOpts): string[] {
   const edgeRow = (cornerL: string, cornerR: string, label?: string): string => {
     if (label === undefined || label === '') {
       return color(cornerL + B.top.repeat(innerW) + cornerR)
+    }
+    if (o.titleChip && cornerL === B.topLeft) {
+      // chip titles (v0.23.1) — segments, so the chip's reset never kills
+      // the border color that follows it
+      const chipTxt = o.titleChip(truncateV(label, Math.max(1, innerW - 6)))
+      const fill = Math.max(0, innerW - vw(chipTxt) - 1)
+      return color(cornerL + B.top) + chipTxt + color(B.top.repeat(fill) + cornerR)
     }
     const text = ` ${truncateV(label, Math.max(1, innerW - 4))} `
     const fill = Math.max(0, innerW - vw(text) - 1)
@@ -281,10 +303,17 @@ export function rule(width: number, color: (s: string) => string = cDim): string
 /* open box parts — tool-call boxes are drawn in TWO passes            */
 /* ------------------------------------------------------------------ */
 
-/** the top border of a round box with an embedded title: ╭─ title ──╮ */
-export function boxTop(title: string, width: number, color: (s: string) => string): string {
+/** the top border of a round box with an embedded title: ╭─ title ──╮.
+ *  v0.23.1: pass `chipFn` and the title rides a bg chip instead — the rail
+ *  is then drawn in segments (color(reset) would otherwise eat the border). */
+export function boxTop(title: string, width: number, color: (s: string) => string, chipFn?: (s: string) => string): string {
   const innerW = Math.max(2, width - 2)
   if (!title) return color(B.topLeft + B.top.repeat(innerW) + B.topRight)
+  if (chipFn) {
+    const chipTxt = chipFn(truncateV(title, Math.max(1, innerW - 6)))
+    const fill = Math.max(0, innerW - vw(chipTxt) - 1)
+    return color(B.topLeft + B.top) + chipTxt + color(B.top.repeat(fill) + B.topRight)
+  }
   const text = ` ${truncateV(title, Math.max(1, innerW - 4))} `
   const fill = Math.max(0, innerW - vw(text) - 1)
   return color(B.topLeft + B.top + text + B.top.repeat(fill) + B.topRight)
