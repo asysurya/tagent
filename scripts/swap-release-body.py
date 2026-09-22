@@ -1,49 +1,50 @@
 #!/usr/bin/env python3
-"""swap gh-release.sh BODY to the v0.22.1 story (raw-paste fallback)"""
+"""swap gh-release.sh BODY to the v0.22.2 story (MCP diagnostics + navbar workspace)"""
 import re
 import sys
 
 P = '/home/z/my-project/scripts/gh-release.sh'
 src = open(P, encoding='utf-8').read()
 
-NEW = """## v__VER__ — pastes that paste, in every terminal
+NEW = """## v__VER__ — MCP failures that say why, and a navbar that says where
 
-v0.22.0 made bare enter send, which exposed a corner: in terminals
-without bracketed-paste support, a pasted multi-line blob arrived as raw
-keystrokes and the first line's newline submitted the composer. The new
-raw-paste heuristic recognizes that burst and reroutes it into the editor
-as text. Typed input is untouched — a bare enter at the end of its own
-keystroke burst still sends.
+A dead MCP server used to report nothing but "error — server exited
+(code 1)": the reason it died (npm network error, old Node, a launcher
+that isn't installed) was thrown away because stderr was never read. Now
+the full story is captured and surfaced — and a missing npx transparently
+falls back to bunx on machines that have bun. The navbar also grew a
+workspace segment so you always know which folder the agent is in.
 
 ```
-╭─ ✻ Tagent v__VER__ ── 💬 pasting the migration notes ────╮
-╰─ 🤖 build · glm-4.7 · 🔌 2✓ 31 · ◉ laptop-b25 online ────╯
-
-  ❯ (paste: 40 lines of YAML with blank lines)
-    all 40 lines sit in the composer, newlines intact — nothing sent
-? shortcuts · / commands · @ files       build · glm-4.7 · ⎇ you/api ⇅15s
+\\u276f tagent doctor \\u00b7 v__VER__
+  \\u2718 mcp context7: error \\u2014 server exited (code 1): npm ERR! code
+    ENOTFOUND \\u2014 full reason above; /mcp reload retries after fixing
+\\u2570\\u2500 \\U0001F916 build \\u00b7 \\U0001F4C2 tagent-proyek \\u00b7 glm-4.7 \\u00b7 \\U0001F50C 2\\u2713 31 \\u00b7 4m \\u2500\\u256f
 ```
 
-### Raw-paste fallback (no bracketed paste needed)
+### MCP: the failure says why
 
-- terminals that ignore the bracketed-paste mode (older conhost, some
-  SSH/IDE consoles) send pastes as one burst of raw keys with a bare
-  carriage-return at each line end — that burst is now detected and
-  inserted as text instead of parsed as keys
-- CRLF, CR-only, and LF-only pastes all land with their line structure
-  intact; a CRLF pair becomes one newline and blank lines survive
-- a single trailing newline (the select-copy artifact) drops, and pasted
-  CSI/escape bytes — the coloring codes that ride along when you copy
-  terminal output — never reach the composer
+- server stderr is captured \\u2014 the exit error carries the last lines of
+  it, so "code 1" becomes "code 1: npm ERR! code ENOTFOUND"
+- a missing launcher is named ("cannot start 'npx' \\u2014 not found on
+  PATH") with install advice instead of a bare exit code
+- doctor and the /mcp menu show 160 chars of the reason; calls made
+  after a death include it too
 
-### Typing stays typing
+### MCP: npx \\u2192 bunx fallback
 
-- a bare enter as the last key of its burst still submits — fast typists
-  and coalesced chunks included
-- modified enters are never mistaken for pastes: alt+enter and kitty
-  shift/ctrl+enter keep inserting newlines mid-chunk
-- menus, dialogs, the ask-form notes box: paste lands in whichever editor
-  owns input, same as bracketed pastes always did
+- binary installs ship no Node.js \\u2014 a configured npx may simply not
+  exist. When bun is installed, tagent transparently launches the
+  server with bunx (runs the very same npm packages)
+- the fallback shows as a note ("npx not on PATH \\u2014 using bunx")
+  instead of three dead servers; custom launchers are untouched
+
+### Navbar: workspace segment
+
+- the facts row now reads \\U0001F916 build \\u00b7 \\U0001F4C2 my-project \\u00b7 glm-4.7 \\u00b7 \\U0001F50C 2\\u2713 31
+  \\u2014 you always know which folder the agent is working in
+- truncated to 18 cells so long folder names never push the model or
+  MCP status off the bar
 
 ---
 """
@@ -52,6 +53,8 @@ m = re.search(r"(BODY=\$\(cat <<'EOF'\n)(.*?)(## Single-file binaries)", src, re
 if not m:
     print('PATTERN NOT FOUND')
     sys.exit(1)
-src = src[:m.start(2)] + NEW + src[m.start(2):][:0] + src[m.end(2):]
+
+body = NEW.encode().decode('unicode_escape')
+src = src[:m.start(2)] + body + src[m.end(2):]
 open(P, 'w', encoding='utf-8').write(src)
 print('BODY swapped ok')

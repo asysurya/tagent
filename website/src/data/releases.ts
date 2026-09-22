@@ -28,9 +28,42 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.22.1'
+export const LATEST = '0.22.2'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.22.2',
+    date: '2026-09-22',
+    title: 'MCP failures that say why — and a navbar that says where',
+    summary:
+      'A dead MCP server used to report nothing but "error — server exited (code 1)": the reason it died (npm network error, old Node, missing launcher) was thrown away because stderr was never read. The full story is now captured and surfaced — doctor and /mcp name the disease, a missing npx transparently falls back to bunx on bun machines (same npm packages), and calls made after a death explain themselves. The navbar also grew a workspace segment, so the facts row reads build · 📂 my-project · model.',
+    stable: true,
+    sections: [
+      {
+        name: 'MCP: the failure says why',
+        items: [
+          'server stderr is captured — the exit error carries the last lines of it, so "code 1" becomes "code 1: npm ERR! code ENOTFOUND"',
+          'a missing launcher is named: "cannot start \u0027npx\u0027 — not found on PATH", with install advice instead of a bare exit code',
+          'doctor and the /mcp menu show up to 160 chars of the reason (was 60); calls after a death include it too',
+        ],
+      },
+      {
+        name: 'MCP: npx → bunx fallback',
+        items: [
+          'binary installs ship no Node.js — a configured npx may simply not exist. When bun is installed, tagent transparently launches the server with bunx (runs the very same npm packages)',
+          'the fallback appears as a note in /mcp and doctor ("npx not on PATH — using bunx") instead of three dead servers',
+          'custom absolute-path launchers and non-npx commands are untouched',
+        ],
+      },
+      {
+        name: 'Navbar: workspace segment',
+        items: [
+          'the facts row now reads 🤖 build · 📂 my-project · glm-4.7 · 🔌 2✓ 31 — you always know which folder the agent is working in',
+          'truncated to 18 cells so long folder names never push the model or MCP status off the bar',
+        ],
+      },
+    ],
+  },
   {
     version: '0.22.1',
     date: '2026-09-21',

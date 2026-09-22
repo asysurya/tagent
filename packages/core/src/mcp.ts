@@ -1,4 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import fs from 'node:fs'
+import path from 'node:path'
 import type { McpConfig, McpServerConfig, ToolDefinition } from './types'
 import { CURRENT_VERSION } from './version'
 
@@ -28,6 +30,8 @@ export interface McpServerStatus {
   state: 'connecting' | 'ready' | 'error' | 'disabled'
   tools: number
   error?: string
+  /** non-fatal note — e.g. "npx not on PATH — using bunx" */
+  note?: string
 }
 
 interface RemoteTool {
@@ -77,6 +81,40 @@ function toolName(server: string, tool: string): string {
   return base.slice(0, 50) + '_' + Math.abs(h).toString(36)
 }
 
+/** find an executable on PATH — Bun.which when available (always, on the
+ *  bun runtime), a manual scan as the portable fallback. Windows gets its
+ *  PATHEXT extensions so `npx` resolves to npx.cmd. */
+function findOnPath(cmd: string, env: NodeJS.ProcessEnv): string | null {
+  try {
+    const bun = (globalThis as { Bun?: { which?: (c: string, o?: { PATH?: string }) => string | null } }).Bun
+    if (bun?.which) return bun.which(cmd, { PATH: env.PATH ?? '' }) ?? null
+  } catch { /* not the bun runtime */ }
+  const exts = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : ['']
+  for (const dir of (env.PATH ?? '').split(path.delimiter).filter(Boolean)) {
+    for (const ext of exts) {
+      try {
+        const f = path.join(dir, cmd + ext)
+        if (fs.statSync(f).isFile()) return f
+      } catch { /* keep scanning */ }
+    }
+  }
+  return null
+}
+
+/** launcher resolution — binary installs ship no Node.js, so a configured
+ *  `npx` may simply not exist on the machine. When bun IS there, bunx runs
+ *  the very same npm packages, so we transparently fall back to it instead
+ *  of failing three servers with a bare "exited (code 1)". */
+export function resolveMcpLauncher(
+  command: string,
+  env: NodeJS.ProcessEnv = process.env,
+): { command: string; via?: string } {
+  if (command !== 'npx') return { command }
+  if (findOnPath('npx', env)) return { command }
+  if (findOnPath('bunx', env)) return { command: 'bunx', via: 'npx not on PATH — using bunx' }
+  return { command } // let the spawn error explain (install Node.js, or bun)
+}
+
 function schemaToParams(schema?: Record<string, unknown>): Record<string, string> {
   const props = (schema?.properties ?? {}) as Record<string, Record<string, unknown>>
   const required = new Set((schema?.required ?? []) as string[])
@@ -95,8 +133,14 @@ class McpConnection {
   private proc: ChildProcess
   private nextId = 1
   private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>()
+  /** last ~1.5KB of the server's stderr — WHY it died, for doctor + status */
+  private stderrTail = ''
+  /** set the moment the process leaves the stage: the readable reason */
+  exitError?: string
   tools: RemoteTool[] = []
   serverInfo?: { name?: string; version?: string }
+  /** non-fatal note (e.g. "npx missing — using bunx") surfaced in status */
+  via?: string
   /** live handshake state — 'connecting' until initialize + tools/list land */
   state: 'connecting' | 'ready' | 'error' = 'connecting'
   error?: string
@@ -105,7 +149,9 @@ class McpConnection {
     public name: string,
     public cfg: McpServerConfig,
   ) {
-    this.proc = spawn(cfg.command, cfg.args ?? [], {
+    const resolved = resolveMcpLauncher(cfg.command)
+    this.via = resolved.via
+    this.proc = spawn(resolved.command, cfg.args ?? [], {
       env: { ...process.env, ...(cfg.env ?? {}) },
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
@@ -126,9 +172,18 @@ class McpConnection {
         }
       }
     })
+    // WHY a server died used to be thrown away — doctor could only say
+    // "exited (code 1)". Keep a tail of stderr so the real reason (npm
+    // network error, old node, missing API key, bad package) is surfaced.
     this.proc.stderr!.setEncoding('utf8')
-    this.proc.on('exit', (code) => {
-      const err = new Error(`server exited (code ${code})`)
+    this.proc.stderr!.on('data', (chunk: string) => {
+      this.stderrTail = (this.stderrTail + chunk).slice(-1500)
+    })
+    this.proc.on('exit', (code, signal) => {
+      const why = signal ? `signal ${signal}` : `code ${code}`
+      const tail = this.stderrSummary()
+      this.exitError = `server exited (${why})${tail ? `: ${tail}` : ''}`
+      const err = new Error(this.exitError)
       for (const p of this.pending.values()) {
         clearTimeout(p.timer)
         p.reject(err)
@@ -136,12 +191,33 @@ class McpConnection {
       this.pending.clear()
     })
     this.proc.on('error', (err) => {
+      const e = err as NodeJS.ErrnoException
+      let msg: string
+      if (e?.code === 'ENOENT') {
+        msg = `cannot start '${resolved.command}' — not found on PATH`
+        if (cfg.command === 'npx') {
+          msg += resolved.command === 'bunx'
+            ? ' (bunx was resolved from your bun install)'
+            : ' — install Node.js (npmjs.com), or bun (bun.sh, ships bunx which tagent uses automatically)'
+        }
+      } else {
+        msg = err instanceof Error ? err.message : String(err)
+      }
+      this.exitError = msg
       for (const p of this.pending.values()) {
         clearTimeout(p.timer)
-        p.reject(err instanceof Error ? err : new Error(String(err)))
+        p.reject(new Error(msg))
       }
       this.pending.clear()
     })
+  }
+
+  /** compact the captured stderr: the last couple of non-empty lines —
+   *  enough to name the disease ("npm ERR! code ENOTFOUND"…), short enough
+   *  for a doctor line. */
+  private stderrSummary(): string {
+    const lines = this.stderrTail.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+    return lines.slice(-2).join(' | ').slice(0, 180)
   }
 
   private receive(msg: Record<string, unknown>) {
@@ -158,7 +234,7 @@ class McpConnection {
   private request(method: string, params: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
     return new Promise((resolve, reject) => {
       if (this.proc.killed || this.proc.exitCode !== null) {
-        return reject(new Error('server process is not running'))
+        return reject(new Error(this.exitError ? `server is not running — ${this.exitError}` : 'server process is not running'))
       }
       const id = this.nextId++
       const timer = setTimeout(() => {
@@ -351,6 +427,7 @@ export class McpManager {
         state: cfg.enabled === false ? 'disabled' : conn ? conn.state : 'connecting',
         tools: conn?.tools.length ?? 0,
         error: conn?.state === 'error' ? conn.error : undefined,
+        note: conn?.via,
       }
     })
   }

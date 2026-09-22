@@ -1,6 +1,6 @@
 {
-  "version": "0.22.1",
-  "date": "2026-09-21",
-  "notes": "v0.22.0 made bare enter send, which exposed a corner: in terminals without bracketed-paste support, a pasted multi-line blob arrived as raw keystrokes and the first line’s newline submitted the composer. The raw-paste heuristic now recognizes that burst and reroutes it into the editor as text — newlines land as newlines, CRLF pairs collapse, blank lines survive, a trailing copy-newline drops, and pasted terminal escape garbage never reaches the composer. Typed input is untouched: a bare enter at the end of its own keystroke burst still sends.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.22.1"
+  "version": "0.22.2",
+  "date": "2026-09-22",
+  "notes": "A dead MCP server used to report nothing but \"error — server exited (code 1)\": the reason it died (npm network error, old Node, missing launcher) was thrown away because stderr was never read. The full story is now captured and surfaced — doctor and /mcp name the disease, a missing npx transparently falls back to bunx on bun machines (same npm packages), and calls made after a death explain themselves. The navbar also grew a workspace segment, so the facts row reads build · 📂 my-project · model.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.22.2"
 }

@@ -3821,7 +3821,7 @@ export class TuiApp {
         actions.push({
           label: s.name,
           hint: String(state),
-          detail: s.error ? red(s.error.slice(0, 70)) : s.command.slice(0, 70),
+          detail: s.error ? red(s.error.slice(0, 160)) : s.note ? yellow(s.note) : s.command.slice(0, 70),
           value: `server:${s.name}`,
         })
       }
@@ -4510,7 +4510,7 @@ export class TuiApp {
    * context bar, mode and session clock live here now.
    *
    *   ╭─ ✻ Tagent v0.19.0 ── 💬 <session title> ──────────────╮
-   *   ╰─ 🤖 build · glm-4.7 · 🔌 2✓ 31 · [██░░] 9% · 4m ────╯ */
+   *   ╰─ 🤖 build · 📂 <workspace> · glm-4.7 · 🔌 2✓ 31 · 4m ─╯ */
   private headerRows(W: number): string[] {
     const boxW = Math.max(34, Math.min(W - 2, 78))
     const cfg = this.cfgFast() as { defaultModel: string }
@@ -4542,7 +4542,10 @@ export class TuiApp {
       devSeg = ` · ${green(`◉ ${who} online`)}`
     }
     const title = `${orange('✻')} ${bold('Tagent')} ${dim(`v${CURRENT_VERSION}`)} · ${dim('💬')} ${truncateStyled(this.sessionTitle, Math.max(6, boxW - 34))}`
-    const foot = `🤖 ${this.mode} · ${shortModelName(cfg.defaultModel)} · 🔌 ${mcp}${ctx}${devSeg} · ${fmtElapsed(Date.now() - this.startedAt)}`
+    // workspace — which folder the agent is working in; the hint row's ⎇
+    // segment shows the sync REPO, this shows the local folder itself
+    const wsName = path.basename(this.opts.workspaceRoot || '.') || this.opts.workspaceRoot || '.'
+    const foot = `🤖 ${this.mode} · 📂 ${truncateStyled(wsName, 18)} · ${shortModelName(cfg.defaultModel)} · 🔌 ${mcp}${ctx}${devSeg} · ${fmtElapsed(Date.now() - this.startedAt)}`
     return roundBox({ title, footer: foot, rows: [], width: boxW })
   }
 

@@ -46,7 +46,7 @@ process when you want a browser. Same engine, same sessions, same permissions.
 | 🩺 **Auto-diagnostics** | Arm a gate like `/diag "tsc --noEmit"` — runs after edit turns and feeds failures back so the agent self-corrects before saying "done" |
 | ⚡ **Smart cache** | The token economist — unchanged-file re-reads return a tiny stub, `read_files` batches known paths into one turn, "read X" subagent prompts get fast-pathed, `@path` mentions attach files inline, old tool outputs auto-compact, and repeated fetches/searches hit a TTL cache (`tagent cache` to inspect) |
 | 🔐 **Credentials store** | Secrets live in `~/.tagent/credentials.json` (chmod 600), separate from the shareable config — resolution order: credentials → config → env |
-| 🧩 **MCP servers** | Any stdio [Model Context Protocol](https://modelcontextprotocol.io) server — Context7, filesystem, memory, sequential-thinking or your own. Tools appear as `mcp_<server>_<tool>`, same permission gates (`/mcp` in the TUI, Settings → MCP in the GUI) |
+| 🧩 **MCP servers** | Any stdio [Model Context Protocol](https://modelcontextprotocol.io) server — Context7, filesystem, memory, sequential-thinking or your own. Tools appear as `mcp_<server>_<tool>`, same permission gates (`/mcp` in the TUI, Settings → MCP in the GUI). Failures say why (stderr surfaced), and a missing npx falls back to bunx automatically (v0.22.2) |
 | 🔌 **Multi-provider** | 40-provider catalog (OpenAI, Anthropic, Google, Groq, DeepSeek, xAI, Mistral, Qwen, Kimi, Zhipu, OpenRouter, …) + custom endpoints — BYOK or env vars. Anthropic prompt caching on by default; live token usage in the TUI done-line |
 | 🧩 **Plugins v2** | Hook into the loop AND contribute custom agent tools (`plugin_<name>_<tool>`) and slash commands — hot-reloading `.mjs` files |
 | 🖥️ **App TUI** | Claude Code-style inline terminal app: the transcript lives in your terminal's own scrollback (scroll with mouse wheel / touch / shift+pgup), a rounded editor box + hint row redraw at the bottom, slash-command palette with tab completion, `@file` mentions, `?` shortcuts, `ctrl+x` quick-action menu (`--classic` for the readline TUI) |
@@ -540,6 +540,7 @@ export const hooks = {
 - [x] Chat memory across restarts + `/clear [count|all]` text-only wipe + device presence in the navbar + `/repo status` sync history + per-call MCP budgets (v0.21.0)
 - [x] Agent directives: ask_user for questions, MCP tools used on own initiative, professional-grade default output + enter=send key swap (v0.22.0)
 - [x] Raw-paste fallback: multi-line pastes land as newlines even in terminals without bracketed-paste support; CRLF collapses, blank lines survive, escape garbage strips (v0.22.1)
+- [x] MCP failure diagnostics (stderr surfaced in doctor + /mcp, ENOENT named with install advice, npx→bunx fallback) + navbar workspace segment 📂 (v0.22.2)
 
 Ideas for the next versions (unordered, unpromised):
 

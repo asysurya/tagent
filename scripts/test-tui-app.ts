@@ -1053,6 +1053,10 @@ test('fullscreen: alternate screen + mouse on, navbar sticky, transcript visible
   const rows = app.lastFrame.map(stripAnsi)
   if (!rows[0].includes('╭─') || !rows[0].includes('Tagent')) throw new Error('navbar top row missing')
   if (!rows[1].includes('build') || !rows[1].includes('glm-4.7')) throw new Error('navbar facts row missing')
+  // v0.22.2: the navbar carries the workspace folder next to the mode
+  if (!rows[1].includes('📂')) throw new Error('workspace segment missing from the navbar facts row')
+  const wsName = path.basename(tmp)
+  if (!rows[1].includes(wsName.slice(0, 12))) throw new Error(`workspace name not shown: ${rows[1]}`)
   if (!rows.some((r) => r.includes('terminal-native coding agent'))) throw new Error('boot intro missing from the transcript viewport')
   if (!rows.some((r) => r.includes('Message tagent'))) throw new Error('editor missing')
   if (rows.length > 24) throw new Error(`frame taller than the screen: ${rows.length}`)

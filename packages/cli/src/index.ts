@@ -1534,12 +1534,16 @@ async function mainDoctor() {
       await mgr.ensureStarted()
       for (const st of mgr.status()) {
         const timedOut = st.state !== 'ready' && /timed out/i.test(st.error ?? '')
+        const dead = st.state !== 'ready' && /server exited|cannot start|not running/i.test(st.error ?? '')
         check(
           st.state === 'ready',
-          `mcp ${st.name}: ${st.state}${st.state === 'ready' ? ` · ${st.tools} tools` : st.error ? ` — ${st.error.slice(0, 60)}` : ''}` +
+          `mcp ${st.name}: ${st.state}${st.state === 'ready' ? ` · ${st.tools} tools` : st.error ? ` — ${st.error.slice(0, 160)}` : ''}` +
+            (st.note ? ` (${st.note})` : '') +
             (timedOut
               ? ' (first run downloads the server via npx — try doctor again once warm; raise it with TAGENT_MCP_INIT_TIMEOUT_MS)'
-              : ''),
+              : dead
+                ? ' — full reason above; /mcp reload retries after fixing, /mcp remove+template re-adds with a working launcher'
+                : ''),
         )
       }
     } finally {
