@@ -1,6 +1,6 @@
 {
-  "version": "0.23.1",
-  "date": "2026-09-22",
-  "notes": "Tool titles, status pills and report headers get a background: every tool box now opens with a filled chip (💻 bash on tomato, 🔌 MCP on red…), the run verdict and result rows ride status pills (✔ done on green, ✗ error on red), and every report — MCP servers, repo sync, skills, memory, checkpoints — opens with a themed header chip plus per-line state chips. Each of the six themes ships its own hand-tuned badge table (saturated chips with white text, or pastel neon with near-black), switched live by /theme like everything else. `tagent doctor` got the same treatment.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.23.1"
+  "version": "0.24.0",
+  "date": "2026-09-23",
+  "notes": "Logging in now auto-creates a private tagent-config repo that carries your WHOLE global config — providers, api keys, models, MCP servers, permissions, theme — encrypted, identical on every device. /config is the new cockpit: add mcp/providers/keys, push and pull the config, and manage the new multi-key keychain (several named API keys per provider — pick the active one in /model, or stack them into the fallback chain). `tagent start` checks the repo every boot and warns if it was deleted on GitHub; /config push recreates it. The project vault now travels the keychain too.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.24.0"
 }

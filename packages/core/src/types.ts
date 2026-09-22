@@ -343,6 +343,12 @@ export interface TagentConfig {
   recentWorkspaces?: { path: string; at: number }[]
   /** Model Context Protocol servers (stdio) — extra tools for the agent */
   mcp?: McpConfig
+  /** multi-key per provider: named API keys ("work", "backup", "free tier"…).
+   *  The ACTIVE key is always apiKeys[provider] — every existing resolution
+   *  path keeps working untouched; the keychain is the drawer, apiKeys is
+   *  the one key currently in the slot. Stored in the GLOBAL config so the
+   *  config repo carries it across devices (never in project files). */
+  keychain?: ProviderKeyEntry[]
   /** smart caching layer — the token economist */
   cache?: {
     /** file-state cache: unchanged-file re-reads return a stub (default true) */
@@ -372,4 +378,18 @@ export interface FallbackEntry {
   enabled?: boolean
   /** short display name, e.g. "openrouter backup key" */
   label?: string
+}
+
+/** One named API key of a provider — the multi-key model. The ACTIVE key is
+ *  apiKeys[provider]; picking a different entry copies it there (and so feeds
+ *  every existing resolveApiKey/getAdapter path). */
+export interface ProviderKeyEntry {
+  /** short stable id (k1, k2…) */
+  id: string
+  /** provider id this key belongs to */
+  provider: string
+  /** human label — "work", "backup", "free tier"… */
+  label: string
+  key: string
+  createdAt: number
 }

@@ -57,6 +57,7 @@ import {
   unlinkProject,
   authStatus,
   getCredential,
+  loadConfig,
   readGlobalConfig,
   updateGlobalConfig,
   renderContextBar,
@@ -71,8 +72,22 @@ import {
   MIN_INTERVAL_MS,
   DEFAULT_INTERVAL_MS,
   readSyncHistory,
+  recordSyncHistory,
   onlineOthers,
   PRESENCE_EVERY_MS,
+  smartConfigSync,
+  pushConfigSync,
+  pullConfigSync,
+  checkConfigRepo,
+  readConfigSyncState,
+  CONFIG_REPO_NAME,
+  listProviderKeys,
+  keychainProviders,
+  activeKeyLabel,
+  addProviderKey,
+  removeProviderKey,
+  selectProviderKey,
+  describeProviderKeys,
   type LoopSummary,
   type PermissionRequest,
   type AskFormRequest,
@@ -679,6 +694,7 @@ const SLASH_COMMANDS: { name: string; desc: string }[] = [
   { name: 'grep', desc: 'search the workspace' },
   { name: 'sh', desc: 'run a shell command' },
   { name: 'auth', desc: 'GitHub login' },
+  { name: 'config', desc: 'global config · keys · pull/push' },
   { name: 'repo', desc: 'auto-sync · status · interval · vault' },
   { name: 'push', desc: 'push to GitHub [msg]' },
   { name: 'checkpoints', desc: 'snapshot list' },
@@ -947,6 +963,9 @@ export class TuiApp {
       this.startStatsTicker()
       this.startNavTicker()
       this.startSyncEngine()
+      // global config repo: warn when it's gone, apply/pull silently otherwise
+      // ("config sama meskipun beda device" — checked at every `tagent start`)
+      void this.startupConfigSync()
       this.banner()
       // MCP servers connect at BOOT now (they used to wait for the first
       // chat — the navbar reads their live state every second, so "connecting"
@@ -3535,9 +3554,22 @@ export class TuiApp {
           )) ?? ''
           if (!prov) return this.println(dim('  cancelled'))
         }
-        const key = await this.askHidden(`api key for ${prov}`)
+        // multi-key: the first key lands unlabeled as "main"; from the second
+        // one on, ask for a label — the keychain is what /model and /config
+        // use to offer the pick
+        const existing = listProviderKeys(readGlobalConfig(), prov)
+        let label = 'main'
+        if (existing.length) {
+          label = ((await this.ask('label (e.g. "backup", "free tier")')) ?? '').trim() || `key ${existing.length + 1}`
+        }
+        const key = (await this.askHidden(`api key for ${prov}`)).trim()
+        if (!key) return this.println(dim('  cancelled — empty key'))
+        const r = addProviderKey(prov, label, key)
         host.settingsSave({ apiKey: { provider: prov, key } })
-        this.println(`  ${okPill()} key saved for ${prov}`)
+        this.println(`  ${okPill()} key saved for ${prov}${existing.length ? ` — ${bold(r.entry.label)}` : ''}`)
+        if (existing.length) {
+          this.println(dim('    switch keys: /config keys (or re-run /model) · travels: /config push'))
+        }
         return
       }
 
@@ -3645,6 +3677,11 @@ export class TuiApp {
 
       case 'auth': {
         await this.authWizard()
+        return
+      }
+
+      case 'config': {
+        await this.configManager(arg)
         return
       }
 
@@ -3887,6 +3924,32 @@ export class TuiApp {
       if (!key) return this.println(dim('  cancelled — empty key'))
       host.settingsSave({ apiKey: { provider: provId, key } })
       this.println(`  ${okPill()} key saved for ${provId}`)
+    }
+    // multi-key provider ("jadi kita adaptasiin juga /model biar bisa multi
+    // apikey"): more than one named key in the drawer → pick which one feeds
+    // the requests. Single-key providers skip straight to the model list.
+    {
+      const keys = describeProviderKeys(readGlobalConfig(), provId)
+      if (keys.length > 1) {
+        const kid = await this.pick(
+          keys.map((k) => ({
+            label: `${k.active ? green('●') : '○'} ${k.label}`,
+            hint: k.active ? 'active' : 'switch to this key',
+            detail: k.masked,
+            value: k.id,
+          })),
+          `${provId} — api key`,
+          { footer: 'the picked key feeds every request · manage: /config keys' },
+        )
+        if (kid) {
+          const e = selectProviderKey(provId, kid)
+          if (e) {
+            // write the workspace slot too — the effective key changes NOW
+            host.settingsSave({ apiKey: { provider: provId, key: e.key } })
+            this.println(`  ${okPill()} ${provId} → ${bold(e.label)} ${dim('(api key)')}`)
+          }
+        }
+      }
     }
     if (info.models.length === 0 && !info.custom) {
       const wantRefresh = await this.askYesNo(`  no cached models for ${provId} — discover now?`, true)
@@ -4484,6 +4547,423 @@ export class TuiApp {
     }
   }
 
+  /* ---------------- config manager (/config) ---------------- */
+
+  /**
+   * /config — the GLOBAL config cockpit: "ini config keseluruhan, bukan
+   * provider/mcp doang". Everything here reads/writes ~/.tagent/config.json
+   * (the config-repo layer), not the workspace one:
+   *   add mcp / provider / api keys (multi!) · pick the default model ·
+   *   push/pull the encrypted tagent-config repo across devices.
+   */
+  private async configManager(arg: string) {
+    const sub = arg.split(/\s+/)[0]?.trim() ?? ''
+    const rest = arg.slice(sub.length).trim()
+
+    if (sub === 'push') return this.configPushFlow()
+    if (sub === 'pull') return this.configPullFlow()
+    if (sub === 'status') return this.configStatus()
+    if (sub === 'add' || sub === 'new') return this.configAddFlow(rest)
+    if (sub === 'keys' || sub === 'key') return this.configKeysFlow(rest)
+    if (sub === 'use') return this.configUseFlow(rest)
+
+    // interactive dashboard
+    for (;;) {
+      const g = readGlobalConfig()
+      const st = readConfigSyncState()
+      const logged = authStatus().logged || !!getCredential('github')
+      const keyN = (g.keychain ?? []).length
+      const mcpN = Object.keys(g.mcp?.servers ?? {}).length
+      const actions: PickItem<string>[] = [
+        {
+          label: `${st.repo ? green('⎇ repo ok') : yellow('⎇ repo —')} ${st.repo ?? CONFIG_REPO_NAME}`,
+          hint: logged ? 'status · health' : 'login first (/auth)',
+          value: 'status',
+          detail: `push ${st.lastPushAt ? fmtWhen(st.lastPushAt) : '—'} · pull ${st.lastPullAt ? fmtWhen(st.lastPullAt) : '—'}`,
+        },
+        { label: '↑ push', hint: 'this device → every device', value: 'push', detail: 'seal the whole global config into the repo' },
+        { label: '↓ pull', hint: 'every device → this device', value: 'pull', detail: 'remote is the truth — per-key merge' },
+        {
+          label: `🔑 api keys ${keyN ? yellow(`· ${keyN} named`) : ''}`,
+          hint: 'multi-key per provider — pick / fallback',
+          value: 'keys',
+          detail: 'add, select the active key, stack as fallback',
+        },
+        { label: '+ add mcp', hint: 'global — every project', value: 'add mcp' },
+        { label: '+ add provider', hint: 'custom endpoint', value: 'add provider' },
+        { label: 'Ⓜ default model', hint: `now ${g.defaultProvider}/${g.defaultModel}`, value: 'use' },
+        { label: 'done', hint: 'esc', value: 'done' },
+      ]
+      const pick = await this.pick(actions, 'global config', {
+        footer: `~/.tagent/config.json${mcpN ? ` · ${mcpN} global mcp` : ''}${keyN ? ` · ${keyN} keys` : ''}`,
+      })
+      if (!pick || pick === 'done') return
+      if (pick === 'status') { await this.configStatus(); continue }
+      if (pick === 'push') { await this.configPushFlow(); continue }
+      if (pick === 'pull') { await this.configPullFlow(); continue }
+      if (pick === 'keys') { await this.configKeysFlow(''); continue }
+      if (pick === 'add mcp') { await this.configAddFlow('mcp'); continue }
+      if (pick === 'add provider') { await this.configAddFlow('provider'); continue }
+      if (pick === 'use') { await this.configUseFlow(''); continue }
+    }
+  }
+
+  /** /config status — the global card: scope, repo health, keys, vault. */
+  private async configStatus(): Promise<void> {
+    const g = readGlobalConfig()
+    const st = readConfigSyncState()
+    const logged = authStatus().logged || !!getCredential('github')
+    this.println(`  ${chip('⚙ config', 'blue')} ${bold('global — status')}`)
+    this.println(`    ${dim('scope')}     ~/.tagent/config.json (every project, every device)`)
+    this.println(`    ${dim('default')}   ${bold(g.defaultProvider)} / ${bold(g.defaultModel)}`)
+    this.println(`    ${dim('repo')}     ${st.repo ? st.repo : dim(`${CONFIG_REPO_NAME} — created on the next /config push`)}`)
+    if (logged && st.repo) {
+      this.println(dim('    checking GitHub…'))
+      const h = await checkConfigRepo()
+      if (h.status === 'ok') this.println(`    ${dim('health')}   ${green('● repo exists')}${st.lastPushAt ? dim(` · last push ${fmtWhen(st.lastPushAt)}`) : ''}`)
+      else if (h.status === 'missing') this.println(`    ${dim('health')}   ${red('● repo deleted on GitHub')} ${yellow('— /config push recreates it')}`)
+      else this.println(`    ${dim('health')}   ${yellow('○ unreachable (offline?)')}`)
+    }
+    if (st.lastPushAt) this.println(`    ${dim('pushed')}   ${fmtWhen(st.lastPushAt)}`)
+    if (st.lastPullAt) this.println(`    ${dim('pulled')}   ${fmtWhen(st.lastPullAt)}`)
+    const chain = g.keychain ?? []
+    if (chain.length) {
+      const byProv = new Map<string, number>()
+      for (const k of chain) byProv.set(k.provider, (byProv.get(k.provider) ?? 0) + 1)
+      this.println(`    ${dim('keys')}     ${[...byProv.entries()].map(([p, n]) => `${p}(${n})`).join(dim(' · '))}`)
+    }
+    const mcpN = Object.keys(g.mcp?.servers ?? {}).length
+    if (mcpN) this.println(`    ${dim('mcp')}      ${mcpN} global server${mcpN === 1 ? '' : 's'}`)
+    const provs = (g.customProviders ?? []).length
+    if (provs) this.println(`    ${dim('custom')}   ${provs} provider${provs === 1 ? '' : 's'}`)
+    this.println(`    ${dim('vault')}    ${getVaultPassphrase() ? green('passphrase saved on this device') : yellow('no passphrase yet — generated on first push (/config push)')}`)
+    this.println(dim('    actions: /config push · /config pull · /config add key|mcp|provider · /config keys'))
+  }
+
+  /** /config push — seal + upload the global config. Recreates a deleted repo. */
+  private async configPushFlow(): Promise<void> {
+    const logged = authStatus().logged || !!getCredential('github')
+    if (!logged) return this.println(red('  not logged in — /auth first'))
+    this.println(dim('  sealing the global config (keys, mcp, providers…)…'))
+    try {
+      const r = await pushConfigSync({ onLog: (l) => this.println(dim(`  ${l}`)) })
+      this.println(`  ${pushPill()} ${bold(r.repo)}${r.created ? ' ' + chip('new', 'green') : ''}`)
+      if (r.passphrase) {
+        this.println(`  ${warnPill('vault passphrase')} ${bold(r.passphrase)}`)
+        this.println(yellow('    save it — other devices need it to unlock the config (/repo passphrase)'))
+      }
+      this.println(dim('    every device picks this up on its next `tagent start` (or /config pull)'))
+    } catch (e) {
+      this.println(`  ${errPill()} ${red((e as Error).message)}`)
+    }
+  }
+
+  /** /config pull — remote is the truth; per-key merge into the global config. */
+  private async configPullFlow(): Promise<void> {
+    const logged = authStatus().logged || !!getCredential('github')
+    if (!logged) return this.println(red('  not logged in — /auth first'))
+    this.println(dim('  pulling the config repo…'))
+    try {
+      const r = await pullConfigSync({ onLog: (l) => this.println(dim(`  ${l}`)) })
+      if (r.status === 'empty') {
+        return this.println(dim('  the repo has no config yet (fresh?) — /config push uploads this device\'s config'))
+      }
+      if (r.status === 'needs-passphrase') {
+        return this.println(yellow('  🔐 the synced config is locked — set this device\'s passphrase (/repo passphrase) to unlock'))
+      }
+      if (r.status === 'up-to-date') {
+        return this.println(`  ${okPill()} already in sync with ${r.repo}`)
+      }
+      this.refreshLiveConfigFromGlobal()
+      this.println(`  ${pullPill()} ${bold(r.repo ?? CONFIG_REPO_NAME)} — ${r.changed.length} key${r.changed.length === 1 ? '' : 's'} moved`)
+      for (const c of r.changed.slice(0, 8)) this.println(dim(`    · ${c}`))
+      if (r.changed.length > 8) this.println(dim(`    … +${r.changed.length - 8} more`))
+      if (r.changed.some((c) => c.startsWith('mcp:'))) this.println(dim('    mcp changed — restart tagent (or /mcp reload) to reconnect servers'))
+    } catch (e) {
+      this.println(`  ${errPill()} ${red((e as Error).message)}`)
+    }
+  }
+
+  /** re-layer a freshly pulled global config onto the LIVE host cfg — the
+   *  workspace file keeps its own overrides (loadConfig semantics). */
+  private refreshLiveConfigFromGlobal(): void {
+    try {
+      this.host.cfg = loadConfig(this.host.root)
+    } catch {
+      /* never break the session over a refresh */
+    }
+  }
+
+  /** /config add mcp|provider|key — the global variants. */
+  private async configAddFlow(rest: string): Promise<void> {
+    const what = rest.split(/\s+/)[0]?.trim() ?? ''
+    if (!what || !['mcp', 'provider', 'key'].includes(what)) {
+      const pick = await this.pick(
+        [
+          { label: 'mcp server', hint: 'global — every project', value: 'mcp' },
+          { label: 'custom provider', hint: 'endpoint + models', value: 'provider' },
+          { label: 'api key', hint: 'named, multi per provider', value: 'key' },
+        ],
+        'add to the global config',
+      )
+      if (!pick) return this.println(dim('  cancelled'))
+      return this.configAddFlow(pick)
+    }
+    if (what === 'mcp') return this.configAddMcpFlow()
+    if (what === 'provider') return this.configAddProviderFlow()
+    return this.configAddKeyFlow()
+  }
+
+  /** add a GLOBAL mcp server — hot-loads here too, travels via the config repo. */
+  private async configAddMcpFlow(): Promise<void> {
+    const host = this.host
+    const templates = host.mcpTemplates()
+    const mode = await this.pick(
+      [
+        { label: 'from template', hint: 'context7 · memory · filesystem…', value: 'tpl' },
+        { label: 'custom', hint: 'command + args', value: 'custom' },
+      ],
+      'add mcp — global',
+    )
+    if (!mode) return this.println(dim('  cancelled'))
+    let name = ''
+    let server: { command: string; args?: string[]; env?: Record<string, string> } | undefined
+    if (mode === 'tpl') {
+      const t = await this.pick(
+        templates.map((tpl) => ({ label: tpl.label, hint: tpl.name, detail: `${tpl.command} ${tpl.args.join(' ')} — ${tpl.note}`, value: tpl.name })),
+        'add server — templates',
+        { filterable: true },
+      )
+      if (!t) return this.println(dim('  cancelled'))
+      const tpl = templates.find((x) => x.name === t)!
+      name = tpl.name
+      server = { command: tpl.command, args: tpl.args }
+    } else {
+      name = ((await this.ask('server name')) ?? '').trim()
+      if (!name) return this.println(dim('  cancelled'))
+      const command = ((await this.ask('command (e.g. npx / uvx / node)')) ?? '').trim()
+      if (!command) return this.println(dim('  cancelled'))
+      const rawArgs = ((await this.ask('args (space separated)')) ?? '').trim()
+      const envLine = ((await this.ask('env KEY=VAL (comma separated, enter = none)')) ?? '').trim()
+      const env: Record<string, string> = {}
+      for (const part of envLine.split(',').map((s) => s.trim()).filter(Boolean)) {
+        const [k, ...v] = part.split('=')
+        if (k?.trim()) env[k.trim()] = v.join('=').trim()
+      }
+      server = { command, args: rawArgs ? rawArgs.split(/\s+/) : [], ...(Object.keys(env).length ? { env } : {}) }
+    }
+    // validate by starting it HERE (the battle-tested path), then mirror the
+    // definition into the GLOBAL config so it travels with /config push
+    this.println(dim(`  starting ${name}…`))
+    const r = await host.mcpSave({ name, command: server.command, args: server.args, env: server.env })
+    if (r.error) return this.println(`  ${errPill()} ${red(`${r.error}`)}`)
+    const g = readGlobalConfig()
+    updateGlobalConfig({
+      mcp: {
+        ...(g.mcp ?? {}),
+        servers: {
+          ...(g.mcp?.servers ?? {}),
+          [name]: { command: server.command, ...(server.args?.length ? { args: server.args } : {}), ...(server.env && Object.keys(server.env).length ? { env: server.env } : {}) },
+        },
+      },
+    })
+    this.println(`  ${okPill()} ${name} — global (every project) + active here`)
+    this.println(dim('    travels to every device: /config push'))
+  }
+
+  /** add a GLOBAL custom provider (mirrors the wizard, writes global). */
+  private async configAddProviderFlow(): Promise<void> {
+    this.println(bold('  add a custom provider — global'))
+    const label = (await this.ask('label — how it shows in lists (e.g. "My Ollama")'))?.trim()
+    if (!label) return this.println(dim('  cancelled'))
+    const baseUrl = (await this.ask('base url (e.g. http://localhost:11434/v1)'))?.trim()
+    if (!baseUrl) return this.println(dim('  cancelled — a base url is required'))
+    const kind = await this.pick<{ kind: 'openai' | 'anthropic' | 'google' }>(
+      [
+        { label: 'openai-compatible', hint: '/chat/completions — ollama · lm studio · vllm · most providers', value: { kind: 'openai' as const } },
+        { label: 'anthropic', hint: '/v1/messages — claude-style endpoints', value: { kind: 'anthropic' as const } },
+        { label: 'google', hint: 'gemini generateContent endpoints', value: { kind: 'google' as const } },
+      ],
+      'api kind',
+      { maxVisible: 3 },
+    )
+    if (!kind) return this.println(dim('  cancelled'))
+    const apiKey = (await this.askHidden('api key — enter to skip (local endpoints usually need none)')).trim()
+    const modelsRaw = (await this.ask('models, comma separated (e.g. llama3.1, qwen2.5)')) ?? ''
+    const models = modelsRaw.split(/[,\s]+/).map((m) => m.trim()).filter(Boolean)
+    const base = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'custom'
+    const g = readGlobalConfig()
+    const taken = new Set<string>([
+      ...(g.customProviders ?? []).map((p) => p.id),
+      ...listProviderInfos(this.host.cfg).map((p) => p.id),
+    ])
+    let id = base
+    for (let n = 2; taken.has(id); n++) id = `${base}-${n}`
+    const entry = { id, label, baseUrl, kind: kind.kind, ...(apiKey ? { apiKey } : {}), models }
+    updateGlobalConfig({ customProviders: [...(g.customProviders ?? []), entry] })
+    this.println(`  ${okPill()} ${label} (${id}) — global`)
+    this.println(dim(`    use it: /model ${id}${models[0] ? `/${models[0]}` : ' <model-id>'} · travels: /config push`))
+  }
+
+  /** add a named api key (multi-key per provider) to the GLOBAL keychain. */
+  private async configAddKeyFlow(): Promise<void> {
+    const infos = listProviderInfos(this.host.cfg)
+    const prov = (await this.pick(
+      infos.map((p) => ({
+        label: p.label,
+        hint: p.needsKey ? (p.hasKey ? 'key ✓' : 'no key') : 'keyless',
+        detail: p.id,
+        value: p.id,
+      })),
+      'provider — add an api key',
+      { filterable: true },
+    )) ?? ''
+    if (!prov) return this.println(dim('  cancelled'))
+    const mine = listProviderKeys(readGlobalConfig(), prov)
+    if (mine.length) {
+      for (const k of describeProviderKeys(readGlobalConfig(), prov)) {
+        this.println(dim(`    ${k.active ? green('●') : '○'} ${k.label} ${dim(k.masked)}`))
+      }
+    }
+    const label = ((await this.ask(`label (e.g. ${mine.length ? '"backup"' : '"work"'})`)) ?? '').trim() || 'key'
+    const key = (await this.askHidden(`api key for ${prov}`)).trim()
+    if (!key) return this.println(dim('  cancelled — empty key'))
+    const r = addProviderKey(prov, label, key)
+    if (r.duplicate) {
+      return this.println(`  ${okPill()} already in the keychain as ${bold(r.entry.label)} — nothing to add`)
+    }
+    const active = activeKeyLabel(readGlobalConfig(), prov)
+    this.println(`  ${okPill()} ${prov} · ${bold(r.entry.label)}${active === r.entry.label ? ' — active' : ''}`)
+    this.println(dim(`    switch any time: /config keys · fallback: /fallback add · travels: /config push`))
+  }
+
+  /** /config keys — the multi-key manager: pick the active key, remove, stack. */
+  private async configKeysFlow(rest: string): Promise<void> {
+    const g = readGlobalConfig()
+    const provs = keychainProviders(g)
+    if (provs.length === 0) {
+      return this.println(dim('  no named keys yet — /config add key creates the first one'))
+    }
+    const prov = (await this.pick(
+      provs.map((p) => {
+        const active = activeKeyLabel(g, p.provider)
+        return {
+          label: `${p.provider}${active ? ` ${dim(`· using ${active}`)}` : ''}`,
+          hint: `${p.keys} key${p.keys === 1 ? '' : 's'}`,
+          value: p.provider,
+        }
+      }),
+      'keys — provider',
+      { filterable: true },
+    )) ?? ''
+    if (!prov) return this.println(dim('  cancelled'))
+
+    for (;;) {
+      const entries = describeProviderKeys(readGlobalConfig(), prov)
+      const active = entries.find((e) => e.active)
+      const actions: PickItem<string>[] = [
+        ...entries.map((e) => ({
+          label: `${e.active ? green('●') : '○'} ${e.label}`,
+          hint: e.active ? 'active' : 'select to use',
+          detail: e.masked,
+          value: `use:${e.id}`,
+        })),
+        { label: '+ add another key', hint: 'multi-key', value: 'add' },
+        { label: '− remove a key', hint: 'delete from the keychain', value: 'rm' },
+        { label: '↳ use as fallback', hint: 'stack this provider under the failover chain', value: 'fb' },
+        { label: 'done', hint: 'esc', value: 'done' },
+      ]
+      const pick = await this.pick(actions, `${prov} — keys${active ? ` · active: ${active.label}` : ''}`, {
+        footer: 'the active key feeds every request; others wait in the drawer',
+      })
+      if (!pick || pick === 'done') return
+      if (pick === 'add') { await this.configAddKeyFlowFor(prov); continue }
+      if (pick === 'rm') {
+        const id = (await this.pick(entries.map((e) => ({ label: e.label, hint: e.masked, value: e.id })), 'remove — key')) ?? ''
+        if (!id) continue
+        const r = removeProviderKey(id)
+        if (r) {
+          this.println(`  ${okPill()} removed ${bold(r.removed.label)}${r.nowActive !== undefined ? ' — next key took over' : ''}`)
+        }
+        continue
+      }
+      if (pick === 'fb') {
+        await this.keychainFallbackFlow(prov)
+        continue
+      }
+      if (pick.startsWith('use:')) {
+        const e = selectProviderKey(prov, pick.slice(4))
+        if (e) {
+          // the workspace slot too — the effective key changes NOW even when
+          // this project had its own override
+          this.host.settingsSave({ apiKey: { provider: prov, key: e.key } })
+          const masked = describeProviderKeys(readGlobalConfig(), prov).find((x) => x.id === e.id)?.masked ?? ''
+          this.println(`  ${okPill()} ${prov} now uses ${bold(e.label)} ${dim(`(${masked})`)}`)
+        } else this.println(`  ${errPill()} key not found`)
+        continue
+      }
+    }
+  }
+
+  /** add a key for a KNOWN provider (from the keys manager). */
+  private async configAddKeyFlowFor(prov: string): Promise<void> {
+    const label = ((await this.ask('label (e.g. "backup")')) ?? '').trim() || 'key'
+    const key = (await this.askHidden(`api key for ${prov}`)).trim()
+    if (!key) return this.println(dim('  cancelled — empty key'))
+    const r = addProviderKey(prov, label, key)
+    this.println(r.duplicate
+      ? `  ${okPill()} already in the keychain as ${bold(r.entry.label)}`
+      : `  ${okPill()} ${prov} · ${bold(r.entry.label)}${activeKeyLabel(readGlobalConfig(), prov) === r.entry.label ? ' — active' : ''}`)
+  }
+
+  /** stack a keychain key into the fallback chain (key-level failover). */
+  private async keychainFallbackFlow(prov: string): Promise<void> {
+    const entries = describeProviderKeys(readGlobalConfig(), prov)
+    if (!entries.length) return this.println(dim('  no keys to stack'))
+    const id = (await this.pick(entries.map((e) => ({ label: e.label, hint: e.masked, value: e.id })), 'fallback — pick the key')) ?? ''
+    if (!id) return this.println(dim('  cancelled'))
+    const entry = listProviderKeys(readGlobalConfig(), prov).find((k) => k.id === id)
+    if (!entry) return this.println(dim('  cancelled'))
+    const infos = listProviderInfos(this.host.cfg)
+    const info = infos.find((p) => p.id === prov)
+    const defModel = this.host.cfg.defaultProvider === prov ? this.host.cfg.defaultModel : (info?.models[0]?.id ?? '')
+    const model = ((await this.ask(`model for the fallback entry${defModel ? ` (enter = ${defModel})` : ''}`)) ?? '').trim() || defModel
+    if (!model) return this.println(dim('  cancelled — a model is required'))
+    const list = [...(this.host.cfg.fallback ?? []), { provider: prov, model, apiKey: entry.key, enabled: true, label: `${prov} ${entry.label}` }]
+    this.host.settingsSave({ fallback: list })
+    this.println(`  ${okPill()} fallback #${list.length}: ${prov}/${model} ${dim(`· key "${entry.label}"`)}`)
+    this.println(dim('    chain: /fallback · it takes over when the primary key fails'))
+  }
+
+  /** /config use <provider>/<model> — set the GLOBAL default. */
+  private async configUseFlow(rest: string): Promise<void> {
+    if (!rest) {
+      const infos = listProviderInfos(this.host.cfg)
+      const ready = infos.filter((p) => !p.needsKey || p.hasKey)
+      const p = (await this.pick(
+        ready.map((x) => ({ label: x.label, hint: `${x.models.length} models`, value: x.id })),
+        'default provider — global',
+        { filterable: true },
+      )) ?? ''
+      if (!p) return this.println(dim('  cancelled'))
+      const info = infos.find((x) => x.id === p)!
+      if (info.models.length === 0) return this.println(red(`  ${p} has no models — /model refresh`))
+      const m = (await this.pick(info.models.map((mm) => ({ label: mm.id, hint: mm.label, value: mm.id })), `${p} — model`, { filterable: true })) ?? ''
+      if (!m) return this.println(dim('  cancelled'))
+      return this.configUseFlow(`${p}/${m}`)
+    }
+    const ref = parseModelRef(rest, this.host.cfg)
+    if (!ref) return this.println(dim('  usage: /config use <provider>/<model>'))
+    const info = listProviderInfos(this.host.cfg).find((p) => p.id === ref.provider)
+    if (!info) return this.println(red(`  unknown provider "${ref.provider}"`))
+    if (info.needsKey && !info.hasKey) return this.println(red(`  ${ref.provider} has no key — /config add key`))
+    updateGlobalConfig({ defaultProvider: ref.provider, defaultModel: ref.model })
+    this.println(`  ${okPill()} global default: ${ref.provider} · ${ref.model}`)
+    const local = this.host.cfg.defaultProvider === ref.provider && this.host.cfg.defaultModel === ref.model
+    if (!local) this.println(dim('    this project keeps its own /model choice — /model to change it here'))
+    this.println(dim('    travels to every device: /config push'))
+  }
+
   /* ---------------- auth wizard ---------------- */
 
   private async authWizard() {
@@ -4524,9 +5004,32 @@ export class TuiApp {
         return this.println(dim('  cancelled'))
       }
       this.refreshSyncBadge()
+      await this.authConfigBootstrap()
       this.println(dim('  sync this workspace any time with `tagent sync`'))
     } catch (e) {
       this.println(`  ${errPill()} ${red(`${(e as Error).message}`)}`)
+    }
+  }
+
+  /**
+   * Post-auth: "tagent otomatis bikin repo private" — ensure
+   * login/tagent-config exists and carries this device's config. Pull-first:
+   * when another device already set the repo up, its config merges in BEFORE
+   * the push, so a defaults-only device can never clobber a richer remote.
+   */
+  private async authConfigBootstrap(): Promise<void> {
+    try {
+      await pullConfigSync().catch(() => undefined)
+      this.println(dim('  setting up your private config repo…'))
+      const r = await pushConfigSync()
+      this.println(`  ${okPill()} config repo ${bold(r.repo)}${r.created ? ` ${chip('private', 'green')}` : ''}`)
+      if (r.passphrase) {
+        this.println(`  ${warnPill('vault passphrase')} ${bold(r.passphrase)}`)
+        this.println(yellow('    save it — other devices need it to unlock the config'))
+      }
+      this.println(dim('    providers · api keys · mcp · models — same on every device (/config)'))
+    } catch (e) {
+      this.println(`  ${warnPill('config repo')} ${yellow(`setup skipped — ${(e as Error).message}`)}`)
     }
   }
 
@@ -4993,6 +5496,48 @@ export class TuiApp {
     } catch {
       /* never break boot over sync */
     }
+  }
+
+  /**
+   * The `tagent start` config-repo pass — "kalo reponya diapus tagent bakal
+   * ngecek terus dan kasih warn setiap tagent start":
+   *
+   *   repo deleted on GitHub  → a yellow warning banner (every start)
+   *   remote config moved     → pulled + applied (banner shows what moved)
+   *   local config moved      → pushed (devices converge, zero clicks)
+   *   offline / not logged in → silence (the next start checks again)
+   */
+  private startupConfigSync(): void {
+    void smartConfigSync()
+      .then((r) => {
+        if (this.exited || this.destroyed) return
+        if (r.health.status === 'missing') {
+          this.bannerBox(
+            '⚙ config sync',
+            'config repo deleted on GitHub — /config push recreates it',
+            yellow,
+            'yellow',
+          )
+          return
+        }
+        if (r.error) {
+          this.println(`  ${warnPill('config sync')} ${yellow(r.error.slice(0, 140))}`)
+          return
+        }
+        const pulled = r.pulled
+        if (pulled && pulled.status === 'applied' && pulled.changed.length) {
+          this.refreshLiveConfigFromGlobal()
+          this.bannerBox('⚙ config sync', `pulled — ${pulled.changed.slice(0, 5).join(', ')}${pulled.changed.length > 5 ? ` +${pulled.changed.length - 5}` : ''}`, cyan, 'cyan')
+        }
+        if (r.pushed) {
+          if (r.pushed.passphrase) {
+            this.println(`  ${warnPill('vault passphrase')} ${bold(r.pushed.passphrase)}`)
+            this.println(yellow('    save it — other devices need it to unlock the config (/repo passphrase)'))
+          }
+          this.bannerBox('⚙ config sync', `pushed → ${r.pushed.repo}`, green, 'green')
+        }
+      })
+      .catch(() => undefined) // never break boot over the config repo
   }
 
   /** engine events → banner boxes + a fresh badge. System happenings ride

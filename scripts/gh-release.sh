@@ -36,112 +36,61 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — Chips: background badges on tool titles & reports
+## v__VER__ — Config sync: one private repo, every device
 
-Titles get a background. Every tool box now opens with a filled
-chip — 💻 bash on tomato, 🔌 MCP on red, 📖 reads on blue — and
-the results, verdicts and reports follow one pill vocabulary:
-✔ done on green, ✗ error on red, ⊘ denied on yellow. Every
-report (MCP servers · repo sync · skills · memory · checkpoints)
-opens with a themed header chip, MCP server states ride their
-own chips, and the sync history chips each round. Each of the
-six themes ships its own hand-tuned badge table — switched live
-by /theme like everything else, degrading to plain text (same
-widths) under NO_COLOR. `tagent doctor` matches on the CLI side.
+Log in once and tagent now creates a private `tagent-config` repo that
+carries your WHOLE global config — providers, api keys, MCP servers,
+models, permissions, theme — sealed with AES-256-GCM and identical on
+every device. `/config` is the new cockpit (push · pull · add mcp ·
+add provider · keys), providers can hold SEVERAL named api keys, and
+`tagent start` warns every boot if the repo gets deleted on GitHub.
 
 ```
-╭─[💻 bash]──────────────────────────╮
-│ bash setup.sh --with-flags             │
-│ [✔ done] 0.8s — setup complete         │
-╰───────────────────────────────────╯
-
-  [🔌 MCP] servers (3)
-    [ ready ✓ ]  context7       · 12 tools
-    [ error ]    memory         · 0 tools
-         ✗ No space left on device
-         → free disk, then /mcp reload
-
-  [⎇ sync] repo — status
-      12:00:01 [ pushed ] manual — /push  · a1b2c3d
+\u2699 config sync \u2014 pushed \u2192 octocat/tagent-config
+\u2570\u2500 \U0001F916 build \u00b7 \U0001F4C2 tagent-proyek \u00b7 glm-4.7 \u00b7 \U0001F50C 2\u2713 31 \u00b7 4m \u2500\u256f
 ```
 
-### Tool titles & status pills
+### The config repo — auto-created on auth
 
-- tool-call titles ride a bg chip: `╭─[💻 bash]──…` — the icon
-  + name on the category color, the border still carrying the
-  tool's hue behind it (composed in segments so the chip's
-  reset never bleeds into the rail)
-- result rows ride status pills — ✔ done / ✗ error / ⊘ denied
-  — next to duration and the output tail
-- run verdicts and auto-sync banners carry the chip in the top
-  rail (✔ done green · ■ stopped yellow · ✗ error red · ⎇ auto-sync)
+- `tagent auth` (terminal, TUI /auth, web GUI) ensures a PRIVATE
+  login/tagent-config repo and pushes the global config into it —
+  the GitHub token never leaves the device's credential store
+- the vault carries everything: default provider/model, api keys,
+  the keychain, custom providers, MCP servers, permissions, fallback
+  chain, theme, caveman, compact, cache, diagnostics
+- pull = remote wins per key; push = local wins; conflicts abort
+  with "nothing was lost" — a defaults-only device can never
+  clobber a richer remote (every bootstrap pulls first)
 
-### Reports with chip headers
+### /config — the global cockpit
 
-- `/mcp list` — 🔌 MCP header chip, per-server state chips
-  (ready ✓ / error / connecting / off) with names still aligned
-- `/repo status` — ⎇ sync header chip, history rounds chipped
-  (pushed · pulled · error), `/push` and manual sync report
-  ↑ pushed / ✗ pills
-- `/skills`, `/memory`, `/checkpoints` — 🎯 · 🧠 · 💾 headers
-  with counts; permission verdicts, compaction, notify errors
-  and the chat-error line all ride the same pills
+- `/config push` \u00b7 `/config pull` \u2014 explicit whole-config sync;
+  `/config status` shows repo health (exists / deleted / offline),
+  last push & pull, key counts per provider
+- `/config add mcp` \u2014 global servers (every project, hot-loads in the
+  current one too); `/config add provider`; `/config use <prov>/<model>`
+  sets the global default
+- `/config keys` \u2014 the multi-key manager: \u25cf active / \u25cb idle,
+  switch, remove, or stack a key into the fallback chain
 
-### Per-theme badge tables
+### Multi-key everywhere
 
-- nine hand-tuned badge pairs per theme: dark uses the classic
-  Unix combos (white on red/blue, black on green/yellow/cyan),
-  tokyo-night & dracula go pastel neon with near-black text,
-  nord & gruvbox ride their strong colors, light keeps dark
-  chips with white text
-- /theme recolors chips on the next frame; NO_COLOR and non-TTY
-  degrade to plain text with identical widths — layout never
-  shifts between terminals
-- `tagent doctor`, `tagent sync`, `tagent clone` and `tagent
-  auth` ride the same chip look on the CLI side
+- several named keys per provider ("work", "backup", "free tier");
+  the ACTIVE one stays apiKeys[provider] so every resolution path
+  works untouched
+- `/model` asks which key to use when a provider has several;
+  `/apikey` registers every key into the keychain (first = "main")
+- the keychain rides the config repo AND the project vault, so it
+  shows up on every device
 
----
-## Single-file binaries: download, run, done
+### Boot health + doctor
 
-One self-contained executable per platform — like the Node.js/Python
-downloads. No runtime, no install, no clone: grab the file for your OS,
-run it, and both the TUI and the browser GUI just work (the web GUI is
-embedded inside the binary and self-extracts on first run).
-
-| File | Platform |
-| --- | --- |
-| `tagent-v__VER__-windows-x64.exe` | Windows 10+ (64-bit) |
-| `tagent-v__VER__-windows-arm64.exe` | Windows 10+ on ARM |
-| `tagent-v__VER__-linux-x64` | Linux (glibc, 64-bit) |
-| `tagent-v__VER__-linux-arm64` | Linux ARM64 (incl. Raspberry Pi 5) |
-| `tagent-v__VER__-macos-x64` | macOS Intel |
-| `tagent-v__VER__-macos-arm64` | macOS Apple silicon |
-
-| `SHA256SUMS.txt` | checksums for everything above |
-
-Also linked from the website's [download page](https://tagent-website.vercel.app/download),
-which auto-detects your platform.
-
-### Native Windows — no WSL needed
-- The builds run the full stack natively: TUI, daemon, web GUI, relay, the 40-provider catalog
-- The bash tool uses Git for Windows' bash.exe (auto-detected, override with `TAGENT_BASH`); `tagent doctor` tells you if it's missing
-- Home/config/sessions live in the real Windows user profile (`~/.tagent` via USERPROFILE)
-- Windows 10+ 64-bit is required (Windows 7/8 and 32-bit are no longer covered)
-
-**Install / upgrade**
-
-```bash
-# Linux / macOS
-chmod +x tagent-v__VER__-linux-x64 && ./tagent-v__VER__-linux-x64 doctor
-# Windows (PowerShell) — the .exe runs as-is
-.\tagent-v__VER__-windows-x64.exe doctor
-```
-
-**Verify a download**
-
-```bash
-sha256sum --check SHA256SUMS.txt   # certutil -hashfile <file> SHA256 on Windows
-```
+- every `tagent start`: repo deleted \u2192 yellow banner (until
+  /config push recreates it); remote moved \u2192 pulled + applied;
+  local moved \u2192 pushed \u2014 devices converge with zero clicks
+- offline stays silent, the next start checks again; existing
+  installs bootstrap the repo lazily after upgrading
+- `tagent doctor` reports the config repo + the keychain
 EOF
 )
 
@@ -151,7 +100,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — Chips: background badges on tool titles & reports" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — Config sync: one private repo, every device" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")

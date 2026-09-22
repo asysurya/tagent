@@ -28,9 +28,51 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.23.1'
+export const LATEST = '0.24.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.24.0',
+    date: '2026-09-23',
+    title: 'Config sync — one repo, every device',
+    summary:
+      'Logging in now auto-creates a private tagent-config repo that carries your WHOLE global config — providers, api keys, models, MCP servers, permissions, theme — encrypted, identical on every device. /config is the new cockpit: add mcp/providers/keys, push and pull the config, and manage the new multi-key keychain (several named API keys per provider — pick the active one in /model, or stack them into the fallback chain). `tagent start` checks the repo every boot and warns if it was deleted on GitHub; /config push recreates it. The project vault now travels the keychain too.',
+    stable: true,
+    sections: [
+      {
+        name: 'The config repo — auth auto-creates it',
+        items: [
+          'tagent auth (terminal, TUI /auth, web GUI) now ensures a PRIVATE login/tagent-config repo right after login and pushes the global config into it — AES-256-GCM sealed vault.json, token never leaves the device',
+          'the vault carries the WHOLE config: default provider/model, api keys, the keychain, custom providers, MCP servers, permissions, fallback chain, theme, caveman, compact, cache, diagnostics… (device-local paths and the GitHub token never travel)',
+          'a defaults-only device can never clobber a richer remote: every bootstrap pulls first and pushes the union — pull = remote wins per key, push = local wins, conflicts abort with "nothing was lost"',
+        ],
+      },
+      {
+        name: '/config — the global cockpit',
+        items: [
+          '/config dashboard: repo health, push/pull, named keys, add mcp (global — every project, hot-loads here too), add provider, set the global default model',
+          '/config push · /config pull — explicit sync of the whole config; /config status shows repo health (exists / deleted / offline), last push & pull, key counts per provider',
+          '/config add key <provider> — name your keys ("work", "backup", "free tier"); /config keys lists them with ● active / ○ idle, switches the active one, removes, or stacks one into the fallback chain',
+        ],
+      },
+      {
+        name: 'Multi-key everywhere',
+        items: [
+          'the keychain lives in the GLOBAL config → the config repo carries it to every device; the ACTIVE key stays apiKeys[provider], so every existing resolution path works untouched',
+          '/model now asks which key to use when a provider has several — pick once, it feeds every request (the choice also lands in the workspace so it is effective immediately)',
+          '/apikey registers each key into the keychain (first = "main", later ones ask for a label); /fallback stacking uses keychain keys for key-level failover',
+        ],
+      },
+      {
+        name: 'Boot health + doctor',
+        items: [
+          'every `tagent start` checks the config repo: deleted on GitHub → a yellow banner every single boot until /config push recreates it; remote moved → pulled and applied automatically; local moved → pushed — devices converge with zero clicks',
+          'offline / not logged in → silence, next start checks again ("ngecek terus"); existing installs bootstrap the repo lazily on the first start after upgrading',
+          'tagent doctor reports the config repo (exists / deleted / not set up) and the keychain (named keys across providers)',
+        ],
+      },
+    ],
+  },
   {
     version: '0.23.1',
     date: '2026-09-22',

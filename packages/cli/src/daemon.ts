@@ -9,7 +9,7 @@ import {
   validatePat, saveGithubLogin, authStatus, logout as coreLogout, syncProject,
   getLinkedProject, linkProject, unlinkProject, listProjects, refuseLink,
   workspaceHasWork, isLinkRefused, defaultRepoName, ensureRepoDetailed,
-  getCredential, readGlobalConfig,
+  getCredential, readGlobalConfig, pushConfigSync, pullConfigSync,
   type RelayEntry,
   type AgentMode,
 } from '@tagent/core'
@@ -496,11 +496,25 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
         // validatePat round-trip; the token itself never lands in config files
         host.cfg.github = { ...host.cfg.github, login }
         host.bus.emit('notify', { level: 'info', message: `GitHub connected as @${login}` })
+        // v0.24: the private config repo — auto-created on auth, pull-first
+        // so a defaults-only device never clobbers a richer remote
+        let configRepo = ''
+        try {
+          await pullConfigSync().catch(() => undefined)
+          const cr = await pushConfigSync()
+          configRepo = cr.repo
+          host.bus.emit('notify', {
+            level: 'info',
+            message: `Config repo ${cr.repo} ready — providers, keys and MCP sync across devices`,
+          })
+        } catch (err) {
+          host.bus.emit('notify', { level: 'warn', message: `Config repo setup skipped: ${(err as Error).message}` })
+        }
         // guest→login prompt payload: ask ONCE per workspace that has work,
         // is not linked yet and was not refused (owner's requested UX)
         const promptLink =
           workspaceHasWork(host.root) && !getLinkedProject(host.root) && !isLinkRefused(host.root)
-        cb?.({ ok: true, login, promptLink })
+        cb?.({ ok: true, login, promptLink, ...(configRepo ? { configRepo } : {}) })
       } catch (e) { cb?.({ ok: false, error: (e as Error).message }) }
     })
 

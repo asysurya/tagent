@@ -1,60 +1,72 @@
 #!/usr/bin/env python3
-"""swap gh-release.sh BODY to the v0.22.2 story (MCP diagnostics + navbar workspace)"""
+"""swap gh-release.sh BODY to the v0.24.0 story (config sync + multi-key)."""
 import re
 import sys
 
 P = '/home/z/my-project/scripts/gh-release.sh'
 src = open(P, encoding='utf-8').read()
 
-NEW = """## v__VER__ — MCP failures that say why, and a navbar that says where
+NEW = """## v__VER__ — Config sync: one private repo, every device
 
-A dead MCP server used to report nothing but "error — server exited
-(code 1)": the reason it died (npm network error, old Node, a launcher
-that isn't installed) was thrown away because stderr was never read. Now
-the full story is captured and surfaced — and a missing npx transparently
-falls back to bunx on machines that have bun. The navbar also grew a
-workspace segment so you always know which folder the agent is in.
+Log in once and tagent now creates a private `tagent-config` repo that
+carries your WHOLE global config — providers, api keys, MCP servers,
+models, permissions, theme — sealed with AES-256-GCM and identical on
+every device. `/config` is the new cockpit (push · pull · add mcp ·
+add provider · keys), providers can hold SEVERAL named api keys, and
+`tagent start` warns every boot if the repo gets deleted on GitHub.
 
 ```
-\\u276f tagent doctor \\u00b7 v__VER__
-  \\u2718 mcp context7: error \\u2014 server exited (code 1): npm ERR! code
-    ENOTFOUND \\u2014 full reason above; /mcp reload retries after fixing
+\\u2699 config sync \\u2014 pushed \\u2192 octocat/tagent-config
 \\u2570\\u2500 \\U0001F916 build \\u00b7 \\U0001F4C2 tagent-proyek \\u00b7 glm-4.7 \\u00b7 \\U0001F50C 2\\u2713 31 \\u00b7 4m \\u2500\\u256f
 ```
 
-### MCP: the failure says why
+### The config repo — auto-created on auth
 
-- server stderr is captured \\u2014 the exit error carries the last lines of
-  it, so "code 1" becomes "code 1: npm ERR! code ENOTFOUND"
-- a missing launcher is named ("cannot start 'npx' \\u2014 not found on
-  PATH") with install advice instead of a bare exit code
-- doctor and the /mcp menu show 160 chars of the reason; calls made
-  after a death include it too
+- `tagent auth` (terminal, TUI /auth, web GUI) ensures a PRIVATE
+  login/tagent-config repo and pushes the global config into it —
+  the GitHub token never leaves the device's credential store
+- the vault carries everything: default provider/model, api keys,
+  the keychain, custom providers, MCP servers, permissions, fallback
+  chain, theme, caveman, compact, cache, diagnostics
+- pull = remote wins per key; push = local wins; conflicts abort
+  with "nothing was lost" — a defaults-only device can never
+  clobber a richer remote (every bootstrap pulls first)
 
-### MCP: npx \\u2192 bunx fallback
+### /config — the global cockpit
 
-- binary installs ship no Node.js \\u2014 a configured npx may simply not
-  exist. When bun is installed, tagent transparently launches the
-  server with bunx (runs the very same npm packages)
-- the fallback shows as a note ("npx not on PATH \\u2014 using bunx")
-  instead of three dead servers; custom launchers are untouched
+- `/config push` \\u00b7 `/config pull` \\u2014 explicit whole-config sync;
+  `/config status` shows repo health (exists / deleted / offline),
+  last push & pull, key counts per provider
+- `/config add mcp` \\u2014 global servers (every project, hot-loads in the
+  current one too); `/config add provider`; `/config use <prov>/<model>`
+  sets the global default
+- `/config keys` \\u2014 the multi-key manager: \\u25cf active / \\u25cb idle,
+  switch, remove, or stack a key into the fallback chain
 
-### Navbar: workspace segment
+### Multi-key everywhere
 
-- the facts row now reads \\U0001F916 build \\u00b7 \\U0001F4C2 my-project \\u00b7 glm-4.7 \\u00b7 \\U0001F50C 2\\u2713 31
-  \\u2014 you always know which folder the agent is working in
-- truncated to 18 cells so long folder names never push the model or
-  MCP status off the bar
+- several named keys per provider ("work", "backup", "free tier");
+  the ACTIVE one stays apiKeys[provider] so every resolution path
+  works untouched
+- `/model` asks which key to use when a provider has several;
+  `/apikey` registers every key into the keychain (first = "main")
+- the keychain rides the config repo AND the project vault, so it
+  shows up on every device
 
----
+### Boot health + doctor
+
+- every `tagent start`: repo deleted \\u2192 yellow banner (until
+  /config push recreates it); remote moved \\u2192 pulled + applied;
+  local moved \\u2192 pushed \\u2014 devices converge with zero clicks
+- offline stays silent, the next start checks again; existing
+  installs bootstrap the repo lazily after upgrading
+- `tagent doctor` reports the config repo + the keychain
 """
 
-m = re.search(r"(BODY=\$\(cat <<'EOF'\n)(.*?)(## Single-file binaries)", src, re.S)
-if not m:
-    print('PATTERN NOT FOUND')
-    sys.exit(1)
+BODY_RE = re.compile(r"BODY=\$\(cat <<'EOF'\n[\s\S]*?\nEOF\n\)", re.M)
+if not BODY_RE.search(src):
+    print('BODY block not found'); sys.exit(1)
 
-body = NEW.encode().decode('unicode_escape')
-src = src[:m.start(2)] + body + src[m.end(2):]
+src = BODY_RE.sub(lambda m: "BODY=$(cat <<'EOF'\n" + NEW + "EOF\n)", src, count=1)
 open(P, 'w', encoding='utf-8').write(src)
-print('BODY swapped ok')
+print('gh-release.sh BODY swapped to the v0.24.0 story')

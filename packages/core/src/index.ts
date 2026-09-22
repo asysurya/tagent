@@ -96,6 +96,20 @@ export {
   type VaultFile,
 } from './vault'
 export {
+  listProviderKeys, keychainProviders, activeKeyLabel, addProviderKey,
+  removeProviderKey, selectProviderKey, describeProviderKeys, mergeKeychain,
+  type ProviderKeyEntry,
+} from './keychain'
+export {
+  CONFIG_REPO_NAME, configRepoDir, configSyncAuth,
+  readConfigSyncState, writeConfigSyncState,
+  exportConfigPayload, applyConfigPayload, hashConfigPayload,
+  pushConfigSync, pullConfigSync, checkConfigRepo, smartConfigSync,
+  type ConfigPayload, type ConfigSyncState, type ConfigSyncOpts,
+  type ConfigPushResult, type ConfigPullResult, type ConfigRepoHealth,
+  type SmartSyncResult,
+} from './configsync'
+export {
   getStorageAdapter, LocalAdapter, MegaAdapter, syncMemoryToMega, pullMemoryFromMega,
   type StorageAdapter,
 } from './storage'

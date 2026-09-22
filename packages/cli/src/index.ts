@@ -73,6 +73,12 @@ import {
   recordSyncHistory,
   getVaultPassphrase,
   setVaultPassphrase,
+  pushConfigSync,
+  pullConfigSync,
+  checkConfigRepo,
+  readConfigSyncState,
+  CONFIG_REPO_NAME,
+  keychainProviders,
   workspaceHasWork,
   refuseLink,
   isLinkRefused,
@@ -688,7 +694,30 @@ async function finishLogin(root: string, token: string, preValidated?: string): 
   const login = preValidated ?? (await validatePat(token)) // throws on an invalid token
   saveGithubLogin(token, login) // credential store + login cached in the global config
   console.log(`\n  ${okChip('logged in')} ${bold(login)}`)
+  await authConfigBootstrapCli()
   await maybePromptLinkWorkspace(root)
+}
+
+/**
+ * Post-auth: "kalo auth nanti tagent otomatis bikin repo private untuk
+ * default config / global" — ensure login/tagent-config exists and carries
+ * this device's config. Pull-first, so a defaults-only device never
+ * clobbers a config another device already pushed.
+ */
+async function authConfigBootstrapCli(): Promise<void> {
+  try {
+    await pullConfigSync().catch(() => undefined)
+    console.log(dim('  setting up your private config repo…'))
+    const r = await pushConfigSync()
+    console.log(`  ${okChip('config repo')} ${bold(r.repo)}${r.created ? ' (private, new)' : ''}`)
+    if (r.passphrase) {
+      console.log(`  ${warnChip('vault passphrase')} ${bold(r.passphrase)}`)
+      console.log(yellow('    save it — other devices need it to unlock the config'))
+    }
+    console.log(dim('    providers · api keys · mcp · models — same on every device (/config in the TUI)'))
+  } catch (e) {
+    console.log(`  ${warnChip('config repo')} ${yellow(`setup skipped — ${(e as Error).message}`)}`)
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1538,6 +1567,26 @@ async function mainDoctor() {
   // report "✗ connected as <user>" on perfectly healthy installs.
   const ghToken = getCredential('github') || cfg.github?.token
   check(!!ghToken, `github: ${cfg.github?.login ? `connected as ${cfg.github.login}` : 'not connected (tagent auth)'}`)
+
+  // v0.24 — the global config repo + the multi-key keychain
+  if (ghToken) {
+    const st = readConfigSyncState()
+    if (st.repo) {
+      const h = await checkConfigRepo()
+      if (h.status === 'missing') {
+        check(false, `config repo: ${st.repo} deleted on GitHub — /config push in the TUI recreates it`)
+      } else {
+        check(h.status === 'ok', `config repo: ${st.repo}${st.lastPushAt ? ` · pushed ${new Date(st.lastPushAt).toLocaleString()}` : ''}`)
+      }
+    } else {
+      results.push([true, `config repo: not set up yet — created on the next ${bold('tagent start')} or /config push`])
+    }
+  }
+  {
+    const provs = keychainProviders(readGlobalConfig())
+    const n = provs.reduce((a, p) => a + p.keys, 0)
+    results.push([true, `keychain: ${n ? `${n} named key${n === 1 ? '' : 's'} across ${provs.length} provider${provs.length === 1 ? '' : 's'} — /config keys to manage` : 'no named keys (single-key mode) — /config add key'}`])
+  }
 
   // mcp servers
   const mcpServers = Object.entries(cfg.mcp?.servers ?? {})

@@ -22,13 +22,14 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import type { CustomProviderConfig, McpServerConfig, MemoryFact, TagentConfig } from './types'
+import type { CustomProviderConfig, McpServerConfig, MemoryFact, ProviderKeyEntry, TagentConfig } from './types'
 import { ensureDir } from './util'
 import { getCredential } from './credentials'
 import { loadConfig, saveConfig } from './config'
 import { getLinkedProject, markSynced, syncProject } from './projects'
 import { DEFAULT_REMOTE_BASE, authUrl, defaultRepoName, type PushResult } from './github'
 import { listFacts } from './memory'
+import { mergeKeychain } from './keychain'
 import {
   encryptVaultJSON,
   decryptVaultJSON,
@@ -316,6 +317,8 @@ export interface VaultPayload {
   v: 1
   savedAt: number
   apiKeys?: Record<string, string>
+  /** named multi-keys — rides with the apiKeys toggle (the keychain is keys) */
+  keychain?: ProviderKeyEntry[]
   customProviders?: CustomProviderConfig[]
   mcpServers?: Record<string, McpServerConfig>
   memoryFacts?: MemoryFact[]
@@ -328,6 +331,9 @@ export function exportVaultPayload(root: string, cfg: TagentConfig, s: VaultSett
     const keys: Record<string, string> = {}
     for (const [k, v] of Object.entries(cfg.apiKeys ?? {})) if (v) keys[k] = v
     if (Object.keys(keys).length) p.apiKeys = keys
+    // the keychain travels with the keys — the drawer plus the active slot
+    const chain = (cfg.keychain ?? []).filter((k) => k?.key)
+    if (chain.length) p.keychain = chain
   }
   if (s.customProviders && cfg.customProviders?.length) p.customProviders = cfg.customProviders
   if (s.mcp && cfg.mcp?.servers && Object.keys(cfg.mcp.servers).length) p.mcpServers = cfg.mcp.servers
@@ -365,6 +371,10 @@ export function applyVaultPayload(
         changed.push(`apikey:${k}`)
       }
     }
+  }
+  if (payload.keychain?.length) {
+    const fresh = mergeKeychain(payload.keychain)
+    if (fresh.length) changed.push(`keys(${fresh.length})`)
   }
   if (payload.customProviders?.length) {
     cfg.customProviders ??= []
