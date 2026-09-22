@@ -36,58 +36,86 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — MCP failures that say why, in plain language
+## v__VER__ — TUI maximalization: themes, tool boxes, taps
 
-v0.22.2 taught doctor to capture a dead server's stderr, but a node
-style crash still summarized as "} | Node.js v24.20.0" — the banner,
-not the disease. The real reason sat two lines above and was dropped.
-The summarizer now picks the actual diagnosis, and every known cause
-carries the ONE move that fixes it.
+The transcript gets the design it deserved. Every tool call rides a
+rounded box in its category color, run stats and sync pushes ride
+two-line banner boxes, and the AI reply renders as live markdown
+while it streams — no more raw ## and ** on screen. Six themes
+ship (dark, light, Tokyo Night, Dracula, Nord, Gruvbox) switched
+live via /theme, menus grew number badges — press 1-9, or tap the
+row on touch terminals — and the input box no longer collides
+with the reply on narrow screens.
 
 ```
-❯ tagent doctor · v__VER__
-  ✔ disk space: 18.2 GB free
-  ✗ mcp context7: error — server exited (code 1):
-    Error: Cannot find module 'zod' | code: 'MODULE_NOT_FOUND'
-    — broken npx cache (common after a full disk) —
-      rm -rf ~/.npm/_npx, then /mcp reload
+❯ /theme tokyo-night   ✔ theme → Tokyo Night · every surface recolors now
 
-  ✗ mcp ddg_tools: error — server exited (code 1):
-    No space left on device (os error 28) — disk full
-    — free disk space (npm cache clean --force ·
-      bun pm cache rm · docker system prune), then /mcp reload
+╭─ 🔧 write_file ─────────────────────────╮
+│ src/app.ts                              │
+│ ✔ done · 1.2s — 12 lines written        │
+╰──────────────────────────────────────────╯
+╭─ 💻 bash ────────────────────────────────╮
+│ bash setup.sh --with-flags               │
+│ ✔ done · 0.8s — setup complete           │
+╰──────────────────────────────────────────╯
+╭─ ✔ done ── 3 turns · 7 tool calls · 12.3s ─╮
+╰──────────────────────────────────────────────╯
 ```
 
-### MCP: reasons a human can read
+### Themes — /theme [name]
 
-- a node-style crash surfaces the `Error: …` headline plus its `code:`
-  ("Cannot find module 'zod' | code: 'MODULE_NOT_FOUND'") — stack
-  frames, `}` and the `Node.js v24.20.0` banner are dropped
-- ENOSPC ("No space left on device (os error 28)") is named plainly
-  and flagged as a full disk; the package manager's multi-line hint
-  essay is dropped
-- stderr tail raised from 1.5KB to 2.5KB so long node stacks no longer
-  push the headline out of the capture window
+- six built-ins: dark (default, byte-identical to the old palette),
+  light, tokyo-night, dracula, nord, gruvbox — 256-color SGR so
+  every terminal renders them; NO_COLOR still wins
+- switching is LIVE: navbar, editor, tool boxes, banners and
+  markdown recolor on the very next frame; the pick is saved to
+  the global config (~/.tagent) and reapplied at boot
+- the markdown body follows the theme — headings, list markers,
+  code chips and fence labels re-hue per palette
 
-### MCP: one actionable hint per known cause
+### Tool-call boxes
 
-- disk full → "free disk space (npm cache clean --force · bun pm cache
-  rm · docker system prune), then /mcp reload"
-- MODULE_NOT_FOUND launched via npx/bunx → "broken npx cache (common
-  after a full disk) — rm -rf ~/.npm/_npx, then /mcp reload" (Windows
-  path included)
-- network, permissions, port-in-use and connection-refused each map
-  to their one fixing move; unknown causes show the raw reason only
-- hints appear in doctor, /mcp list and the /mcp menu
+- every call rides a rounded box: icon + tool name in the title
+  rail, the summarized input as the body, the result row closing
+  it (drawn open at tool:start, closed at tool:end — the
+  transcript stays append-only)
+- the border carries the category color: bash tomato, MCP red,
+  reads blue, writes green, search magenta, web cyan, ask yellow
 
-### Doctor: disk-space check
+### System banner boxes
 
-- new check right after the global dir — free bytes on the home
-  filesystem (statfs, `df -k` fallback): the disk npx/uvx install
-  servers onto
-- under 256 MB free it fails with cleanup commands; under 1 GB it
-  warns — before you spend minutes wondering why every server
-  exits (code 1)
+- run verdicts: ✔ done / ■ stopped / ✗ error in the top rail, the
+  stats (turns · tool calls · seconds · tokens) in the bottom rail
+- auto-sync pushes and pulls get the same two-line frame —
+  non-chat output stands apart from chat
+
+### Live markdown streaming
+
+- the streaming tail renders with the SAME renderer as the final
+  flush — headings, lists, bold and links appear styled, not as
+  raw markers
+- a streaming code block renders as a code box: an unclosed fence
+  is auto-closed mid-stream so partial code shows as code
+
+### Mobile-friendly menus
+
+- number badges: non-searchable lists pick directly with 1-9 (the
+  ctrl+x menu, mode picker, theme picker); permission prompts take
+  1-4 alongside y/a/s/n
+- touch support in fullscreen: menu rows, permission options,
+  ask-form options and submit, the /-palette and @-file completion
+  all respond to a tap (SGR mouse reporting)
+- the ctrl+x menu dropped type-to-filter — digits and taps are the
+  path on phones (searchable pickers like the model list filter)
+
+### Rendering fixes
+
+- input-box / reply collisions fixed on narrow terminals: every
+  sticky row is hard-truncated to the terminal width and the
+  navbar's hard 34-column floor went responsive — the sticky-region
+  geometry can no longer break and paint the editor over the
+  transcript
+- stale tap zones can no longer double-fire a menu action
 
 ---
 ## Single-file binaries: download, run, done
@@ -140,7 +168,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — MCP reasons in plain language + doctor disk check" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — TUI maximalization: themes, tool boxes, taps" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")

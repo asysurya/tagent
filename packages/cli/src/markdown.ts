@@ -33,16 +33,18 @@ const sty = (code: string, s: string): string =>
 
 const S_BOLD = '1'
 const S_DIM = '2'
-/** inline code chip — soft dark bg + light gold text (reads as a chip on
+/* theme-driven styles (v0.23.0) — read LIVE so /theme recolors the next
+ * render without any reload; dark keeps the exact v0.22 palette */
+const S_CODE = () => activeTheme().md.code
+/** inline code chip — soft bg + contrasting text (reads as a chip on
  *  both dark and light themes; degrades to plain text under NO_COLOR) */
-const S_CODE = '48;5;237;38;5;222'
 const S_URL = '2;4' // dim + underline — bare urls
 const S_LINK_URL = '2' // dim — the (url) part of [text](url)
-const S_SOFT = '38;5;152' // soft steel blue — fenced code content
-const S_FENCE_LANG = '36' // cyan — the fence's language label
-const S_MARK = '36' // cyan — list markers
+const S_SOFT = () => activeTheme().md.soft
+const S_FENCE_LANG = () => activeTheme().md.fenceLang
+const S_MARK = () => activeTheme().md.mark
 /** h1–h3 get a hue, h4+ are plain bold */
-const HEADING_STYLES = ['1;36', '1;35', '1;33', '1', '1', '1']
+const HEADING_STYLES = () => activeTheme().md.heading
 const BULLETS = ['•', '◦', '▪', '·']
 
 /** combine two SGR codes: joinStyle('1;36', '3') → '1;36;3' */
@@ -60,6 +62,7 @@ function joinStyle(a: string, b: string): string {
 /* ================================================================== */
 
 import { cpW } from './ui'
+import { activeTheme } from './theme'
 
 /** display width of one code point (string-width backed) */
 const cpWidth = cpW
@@ -231,7 +234,7 @@ function parseInline(src: string, budget: number, depth = 0): Piece[] {
         // a chip: padded when colored, plain under NO_COLOR (text identical)
         if (code !== '') {
           const pad = colorOn() ? ' ' : ''
-          out.push({ text: `${pad}${code}${pad}`, style: S_CODE, chip: true })
+          out.push({ text: `${pad}${code}${pad}`, style: S_CODE(), chip: true })
         }
         i = close + run
         continue
@@ -500,7 +503,7 @@ function wrapRender(pieces: Piece[], firstW: number, restW: number): string[] {
 /* ================================================================== */
 
 function headingBlock(text: string, level: number, width: number): string[] {
-  const style = HEADING_STYLES[Math.min(level, 6) - 1]
+  const style = HEADING_STYLES()[Math.min(level, 6) - 1]
   const pieces = parseInline(text, width).map((p) => ({ text: p.text, style: joinStyle(style, p.style) }))
   return wrapRender(pieces, width, width)
 }
@@ -513,7 +516,7 @@ function fenceBlock(body: string[], lang: string, width: number): string[] {
   const tag = lang !== '' ? `[${cutPlain(lang, Math.max(1, width - 10))[0]}]` : ''
   const tagW = strWidth(tag)
   const fill = Math.max(0, width - 3 - tagW)
-  out.push(sty(S_DIM, `╭─`) + (tag !== '' ? sty(S_FENCE_LANG, tag) : '') + sty(S_DIM, `${'─'.repeat(fill)}╮`))
+  out.push(sty(S_DIM, `╭─`) + (tag !== '' ? sty(S_FENCE_LANG(), tag) : '') + sty(S_DIM, `${'─'.repeat(fill)}╮`))
   for (const bl of body) {
     if (bl.trim() === '') {
       out.push(sty(S_DIM, '│'))
@@ -522,7 +525,7 @@ function fenceBlock(body: string[], lang: string, width: number): string[] {
     let rest = bl
     while (rest !== '') {
       const cut = cutPlain(rest, inner)
-      out.push(sty(S_DIM, '│ ') + sty(S_SOFT, cut[0]))
+      out.push(sty(S_DIM, '│ ') + sty(S_SOFT(), cut[0]))
       rest = cut[1]
     }
   }
@@ -547,7 +550,7 @@ function listBlock(items: ListItem[], loose: boolean, width: number): string[] {
     const textCol = Math.min(it.level * 2 + markW + 1, Math.max(0, width - 4))
     const avail = Math.max(4, width - textCol)
     const wrapped = layoutWords(wordsOf(parseInline(it.text, avail)), avail, avail)
-    out.push(indent + sty(S_MARK, marker) + ' ' + renderPieces(wrapped[0] ?? []))
+    out.push(indent + sty(S_MARK(), marker) + ' ' + renderPieces(wrapped[0] ?? []))
     const hang = ' '.repeat(textCol)
     for (let r = 1; r < wrapped.length; r++) out.push(hang + renderPieces(wrapped[r]))
     if (loose && k < items.length - 1) out.push('')

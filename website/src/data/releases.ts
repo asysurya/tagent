@@ -28,9 +28,65 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.22.3'
+export const LATEST = '0.23.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.23.0',
+    date: '2026-09-22',
+    title: 'TUI maximalization — themes, tool boxes, taps',
+    summary:
+      'The transcript gets the design it deserved. Every tool call rides a rounded box in its category color (bash tomato, MCP red, reads blue…), run stats and sync pushes ride two-line banner boxes, and the AI reply renders as live markdown while it streams — no more raw ## and ** on screen. Six themes ship (dark, light, Tokyo Night, Dracula, Nord, Gruvbox) switched live via /theme, menus grew number badges — press 1-9 or tap the row on touch terminals — and the input box no longer collides with the reply on narrow screens.',
+    stable: true,
+    sections: [
+      {
+        name: 'Themes — /theme [name]',
+        items: [
+          'six built-in themes: dark (default, byte-identical to the old palette), light, tokyo-night, dracula, nord, gruvbox — 256-color SGR so every terminal renders them, NO_COLOR still wins',
+          '/theme switches LIVE: navbar, editor, tool boxes, banners and markdown recolor on the very next frame — and the pick is saved to the global config (~/.tagent), reapplied at boot',
+          'markdown body follows the theme — headings, list markers, code chips and fence labels re-hue per palette (light themes get dark-leaning shades that read on white)',
+        ],
+      },
+      {
+        name: 'Tool-call boxes',
+        items: [
+          'every tool call rides a rounded box: icon + tool name in the title rail, the summarized input as the body, and the result row closing it — drawn open at tool:start, closed at tool:end (the transcript stays append-only)',
+          'the border carries the tool\u0027s category color: bash tomato, MCP red, reads blue, writes green, search magenta, web cyan, ask yellow — tools read at a glance while scrolling',
+          'the result row shows status + duration + the first line of output (✔ done · 1.2s — …)',
+        ],
+      },
+      {
+        name: 'System banner boxes',
+        items: [
+          'run verdicts ride a two-line banner box: ✔ done / ■ stopped / ✗ error in the top rail, the stats (turns · tool calls · seconds · tokens) in the bottom rail',
+          'auto-sync pushes and pulls get the same frame — non-chat output now stands apart from chat without reading the fine print',
+        ],
+      },
+      {
+        name: 'Live markdown streaming',
+        items: [
+          'while the model streams, the tail renders with the SAME renderer as the final flush — headings, lists, bold and links appear styled, not as raw markers',
+          'a streaming code block renders as a code box: an unclosed fence is auto-closed mid-stream so partial code shows as code',
+          'the rendered tail is cached by length (chunks only append) so live re-rendering stays cheap',
+        ],
+      },
+      {
+        name: 'Mobile-friendly menus',
+        items: [
+          'number badges: non-searchable lists pick directly with 1-9 — the ctrl+x menu, mode picker, theme picker; permission prompts take 1-4 alongside y/a/s/n. One tap, no arrow dance',
+          'touch support in fullscreen: menu rows, permission options, ask-form options and submit, the /-palette and @-file completion all respond to a tap (SGR mouse reporting)',
+          'the ctrl+x menu dropped type-to-filter — digits and taps are the path on phones (searchable pickers like the model list still filter)',
+        ],
+      },
+      {
+        name: 'Rendering fixes',
+        items: [
+          'input-box / reply collisions fixed on narrow terminals: every sticky row is hard-truncated to the terminal width and the navbar\u0027s hard 34-column floor went responsive — the sticky-region geometry can no longer break and paint the editor over the transcript',
+          'stale tap zones can no longer double-fire a menu action after a re-render',
+        ],
+      },
+    ],
+  },
   {
     version: '0.22.3',
     date: '2026-09-22',

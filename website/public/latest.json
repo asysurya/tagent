@@ -1,6 +1,6 @@
 {
-  "version": "0.22.3",
+  "version": "0.23.0",
   "date": "2026-09-22",
-  "notes": "v0.22.2 taught doctor to capture stderr, but a node crash still summarized as \"} | Node.js v24.20.0\" — the banner, not the disease. The summarizer now picks the actual diagnosis (the Error: headline plus its code), names a full disk plainly instead of quoting the package manager's multi-line essay, and attaches one actionable hint per known cause (disk full → free space; MODULE_NOT_FOUND via npx → clear the npx cache). Doctor also grew a disk-space check, so the #1 environmental killer of MCP servers is caught before the symptoms.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.22.3"
+  "notes": "The transcript gets the design it deserved. Every tool call rides a rounded box in its category color (bash tomato, MCP red, reads blue…), run stats and sync pushes ride two-line banner boxes, and the AI reply renders as live markdown while it streams — no more raw ## and ** on screen. Six themes ship (dark, light, Tokyo Night, Dracula, Nord, Gruvbox) switched live via /theme, menus grew number badges — press 1-9 or tap the row on touch terminals — and the input box no longer collides with the reply on narrow screens.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.23.0"
 }

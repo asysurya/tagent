@@ -58,6 +58,7 @@ import {
   authStatus,
   getCredential,
   readGlobalConfig,
+  updateGlobalConfig,
   renderContextBar,
   contextPct,
   SyncEngine,
@@ -93,8 +94,24 @@ import type { DaemonHandle } from './daemon'
 import { selfUpdate } from './updater'
 import {
   vw, truncateV, fitV, padCol, roundBox, labelRow, kvRow, toolIcon,
-  setUiColor, STATUS_ICONS, SYM, F, cpW, wrapV,
+  setUiColor, STATUS_ICONS, SYM, F, cpW, wrapV, boxTop, boxRow, boxBottom,
 } from './ui'
+import { activeTheme, setTheme, THEMES, themeLabel, themeSwatch } from './theme'
+
+/** per-tool-category box colors — the tool-call frame's identity (v0.23.0):
+ *  bash tomato, mcp red, reads blue, writes green, search magenta… */
+function toolColor(tool: string | undefined): (s: string) => string {
+  if ((tool ?? '').startsWith('mcp_')) return red
+  const t = (tool ?? '').toLowerCase()
+  if (/^(bash|exec|run_command|sh$|shell|diag)/.test(t)) return orange
+  if (/^(write_file|edit_file|apply_patch|save|todos|todo_write|read_todos)/.test(t)) return green
+  if (/^(read_file|list_files|files|read$|glob|checkpoint|memory|facts|skills|skill_run|load_skill|worklog)/.test(t)) return blue
+  if (/^(grep|search_files|search|find|web_search|ddg)/.test(t)) return magenta
+  if (/^(web_fetch|fetch_url|browser|open_url|serve|report|test_report|test$)/.test(t)) return cyan
+  if (/^(ask_user|ask$|plan$)/.test(t)) return yellow
+  if (/^(task|subagent|agent)/.test(t)) return magenta
+  return dim
+}
 /* ------------------------------------------------------------------ */
 /* ansi + format helpers                                                */
 /* ------------------------------------------------------------------ */
@@ -106,15 +123,18 @@ export function setAppColor(enabled: boolean): void {
   setUiColor(enabled)
 }
 const c = (code: string, s: string) => (USE_COLOR && process.env.NO_COLOR === undefined ? `\x1b[${code}m${s}\x1b[0m` : s)
-const bold = (s: string) => c('1', s)
-const dim = (s: string) => c('2', s)
-const red = (s: string) => c('31', s)
-const green = (s: string) => c('32', s)
-const yellow = (s: string) => c('33', s)
-const blue = (s: string) => c('34', s)
-const magenta = (s: string) => c('35', s)
-const cyan = (s: string) => c('36', s)
-const orange = (s: string) => c('38;5;208', s)
+/** theme slots, read LIVE — /theme recolors the very next frame */
+const T = () => activeTheme().sgr
+const bold = (s: string) => c(T().bold, s)
+const dim = (s: string) => c(T().dim, s)
+const red = (s: string) => c(T().red, s)
+const green = (s: string) => c(T().green, s)
+const yellow = (s: string) => c(T().yellow, s)
+const blue = (s: string) => c(T().blue, s)
+const magenta = (s: string) => c(T().magenta, s)
+const cyan = (s: string) => c(T().cyan, s)
+const orange = (s: string) => c(T().orange, s)
+const accent = (s: string) => c(T().accent, s)
 
 const SPINNER = ['🌑', '🌒', '🌓', '🌔', '🌕', '🌖', '🌗', '🌘']
 
@@ -329,6 +349,7 @@ export type Key =
   | { t: 'pgdn' }
   | { t: 'wheel'; dy: number }
   | { t: 'ctrl'; ch: string }
+  | { t: 'click'; x: number; y: number }
 
 interface Parsed {
   key?: Key
@@ -620,6 +641,7 @@ const SLASH_COMMANDS: { name: string; desc: string }[] = [
   { name: 'test', desc: 'run test mode [url]' },
   { name: 'model', desc: 'pick a model [custom]' },
   { name: 'caveman', desc: 'terse replies [on|off]' },
+  { name: 'theme', desc: 'colors: dark · light · tokyo-night…' },
   { name: 'compact', desc: 'ringkas memory lama [keep-tok]' },
   { name: 'worklog', desc: 'journal + todos [on|off]' },
   { name: 'webgui', desc: 'start gui with tagent [on|off]' },
@@ -663,7 +685,7 @@ const HELP_ROWS: [string, string][] = [
   ['agents · mcp · plugins', 'custom subagents · MCP servers · plugin manager'],
   ['fallback [add <p> <m> [key]|rm <n>|clear]', 'provider failover chain'],
   ['diag [cmd|off|test]', 'auto-diagnostics gate (lint/typecheck loop)'],
-  ['caveman [on|off] · compact [keep-tok] · worklog [on|off] · maxturns <n>', 'agent behavior · context'],
+  ['caveman [on|off] · theme [name] · compact [keep-tok] · maxturns <n>', 'agent behavior · colors · context'],
   ['todos · log [n]', 'live plan · journal tail'],
   ['apikey <provider> · permissions · allow/deny/ask <tool>', 'access'],
   ['files [path] · read <f> · grep <pat> · sh <cmd>', 'workspace'],
@@ -785,6 +807,9 @@ export class TuiApp {
   /** the assistant message while it streams — rendered in the sticky region;
    * flushed into the scrollback as markdown once the message completes */
   private streamText = ''
+  /** markdown-render cache of the streaming tail — keyed by length, cleared
+   *  whenever the stream restarts or completes */
+  private streamCache: { len: number; lines: string[] } | undefined
   private lastCtrlC = 0
   private notice = ''
   private lastDoneLabel = ''
@@ -837,6 +862,14 @@ export class TuiApp {
   private relayServer?: DaemonHandle
   private relayBase?: string
 
+  /* tap targets (v0.23.0, fullscreen only) — the LAST built frame's
+   * clickable rows: menus, permission options, ask-form rows. Built fresh
+   * in buildFrame; clicks are matched against them in onClick. */
+  private clickZones: { y: number; hit: () => void }[] = []
+  /** zones collected while an overlay renders — row index WITHIN the
+   * overlay's returned rows; buildFrame converts to absolute screen rows */
+  private ovZones: { i: number; hit: () => void }[] = []
+
   /* project auto-sync engine (/repo — push + pull every few seconds) */
   private sync?: SyncEngine
   private syncHint = ''
@@ -865,6 +898,16 @@ export class TuiApp {
     USE_COLOR = this.color
     this.mode = host.session?.mode ?? 'build'
     this.sessionTitle = host.session?.title ?? 'New session'
+    // theme (v0.23.0) — a personal preference from the GLOBAL config; the
+    // workspace config (host.cfg.theme) still overrides per-project. Every
+    // paint reads the live palette, so this is the only application point.
+    try {
+      const want = (host as { cfg?: { theme?: string } }).cfg?.theme
+        ?? (() => { try { return readGlobalConfig().theme } catch { return undefined } })()
+      setTheme(want || 'dark')
+    } catch {
+      setTheme('dark')
+    }
   }
 
   /* ---------------- lifecycle ---------------- */
@@ -1125,25 +1168,53 @@ export class TuiApp {
   private onAssistantMessage(content: string): void {
     this.hideStatus()
     this.streamText = ''
+    this.streamCache = undefined
     if (!content.trim()) return
     const lines = this.mdRender ? this.mdRender(content, this.transcriptW()) : content.split('\n')
     lines.forEach((l, i) => this.println(i === 0 ? `${orange('\u25CF')} ${l}` : l, i === 0 ? 1 : undefined))
   }
 
   private onToolStart(call: ToolCallRecord): void {
-    // aligned tool column: every summary starts at the same column no
-    // matter how long the tool name is (padCol — CJK/emoji proof)
-    const name = bold(padCol(call.tool, 14))
-    this.println(`  ${toolIcon(call.tool)} ${name} ${dim(summarizeInput(call))}`)
+    // a colored rounded BOX per tool call (v0.23.0) — the category color
+    // frames the whole call so tools read at a glance while scrolling:
+    //   ╭─ 💻 bash ───────────────────────╮
+    //   │ bash setup.sh --with-flags      │
+    //   │ ✔ done · 1.2s — 3 lines         │   ← onToolEnd
+    //   ╰────────────────────────────────╯
+    // the transcript is append-only, so the box is drawn open and closed
+    // by its two events — the same immutability contract as every line
+    const colFn = toolColor(call.tool)
+    const boxW = Math.min(this.transcriptW() - 2, 78)
+    this.println(boxTop(`${toolIcon(call.tool)} ${call.tool}`, boxW, colFn))
+    const summary = summarizeInput(call)
+    if (summary) {
+      for (const l of wrapV(summary, Math.max(4, boxW - 4))) this.println(boxRow(l, boxW, colFn))
+    }
   }
 
   private onToolEnd(call: ToolCallRecord): void {
+    const colFn = toolColor(call.tool)
+    const boxW = Math.min(this.transcriptW() - 2, 78)
     const icon =
       call.status === 'done' ? green(SYM.tick) : call.status === 'error' ? red(SYM.cross) : call.status === 'denied' ? yellow('⊘') : '·'
-    const dur = call.startedAt && call.endedAt ? ` ${dim(((call.endedAt - call.startedAt) / 1000).toFixed(1) + 's')}` : ''
+    const dur = call.startedAt && call.endedAt ? `${((call.endedAt - call.startedAt) / 1000).toFixed(1)}s` : ''
+    const status = call.status === 'done' ? 'done' : call.status === 'error' ? 'error' : call.status === 'denied' ? 'denied' : call.status
     const out = (call.output ?? '').split('\n').find((l) => l.trim()) ?? ''
-    const tail = out ? ` ${dim('— ' + truncateStyled(out, Math.max(20, this.termW - 60)))}` : ''
-    this.println(`    ${dim('⎿')} ${icon}${dur}${tail}`)
+    const bits = [icon, status]
+    if (dur) bits.push(dim(dur))
+    if (out) bits.push(dim(`— ${out}`))
+    this.println(boxRow(bits.join(' '), boxW, colFn))
+    this.println(boxBottom('', boxW, colFn))
+  }
+
+  /** two-line banner box — the frame for non-chat system events (run
+   *  stats, sync pushes) that deserve to stand out in the scrollback:
+   *    ╭─ ✔ done ───────────────────╮
+   *    ╰─ 3 turns · 12.3s ─────────╯ */
+  private bannerBox(title: string, foot: string, color: (s: string) => string): void {
+    const boxW = Math.min(this.transcriptW() - 2, 78)
+    this.println(boxTop(title, boxW, color))
+    this.println(boxBottom(foot, boxW, color))
   }
 
   private onTodos(todos: TodoItem[]): void {
@@ -1239,6 +1310,7 @@ export class TuiApp {
     if (this.streamText.trim()) {
       const raw = this.streamText
       this.streamText = ''
+      this.streamCache = undefined
       raw.split('\n').forEach((l, i) => this.println(i === 0 ? `${orange('\u25CF')} ${l}` : l, i === 0 ? 1 : undefined))
     }
     const mark = summary.finished === 'complete' ? green('✔ done') : summary.finished === 'aborted' ? yellow('■ stopped') : red('✗ error')
@@ -1249,7 +1321,9 @@ export class TuiApp {
     }
     const tok = u ? ` · ${fmtTok(u.input)} in / ${fmtTok(u.output)} out${u.cacheRead ? ` (${fmtTok(u.cacheRead)} cache-hit)` : ''}` : ''
     this.lastDoneLabel = `${summary.turns} turns · ${summary.toolCalls} tool calls · ${secs}s${tok}`
-    this.println(`  ${dim('⎿')} ${mark} ${dim(`· ${this.lastDoneLabel}`)}`)
+    // the run's verdict rides a banner box (v0.23.0) — green when complete,
+    // yellow aborted, red failed; the stats sit in the bottom rail
+    this.bannerBox(mark, this.lastDoneLabel, summary.finished === 'complete' ? green : summary.finished === 'aborted' ? yellow : red)
     if (summary.error) this.println(`  ${red(summary.error)}`)
     this.running = false
     // the run's text is complete — persist it right now (crash-safe, and
@@ -1479,6 +1553,7 @@ export class TuiApp {
     this.viewing = false
     this.viewOffset = 0
     this.streamText = ''
+    this.streamCache = undefined
     this.lastDoneLabel = ''
     if (loaded) {
       this.sessionTitle = loaded.title
@@ -1713,7 +1788,13 @@ export class TuiApp {
           const btn = Number(m[1].split(';')[0] ?? '0')
           if (m[2] === 'M' && btn === 64) return { key: { t: 'wheel', dy: -1 }, skip: m[0].length }
           if (m[2] === 'M' && btn === 65) return { key: { t: 'wheel', dy: 1 }, skip: m[0].length }
-          return { skip: m[0].length } // clicks/releases — the app is keyboard-first
+          // left-press = a TAP (v0.23.0) — the frame's click zones carry the
+          // target; fullscreen menus become touch-friendly
+          if (m[2] === 'M' && btn === 0) {
+            const [, x, y] = m[1].split(';').map(Number)
+            return { key: { t: 'click', x, y }, skip: m[0].length }
+          }
+          return { skip: m[0].length } // releases + other buttons — unused
         }
         const m = /^\x1b\[([0-9;:<>?]*)([A-Za-z~])/.exec(s)
         if (!m) {
@@ -1779,6 +1860,8 @@ export class TuiApp {
   private onKey(k: Key): void {
     this.notice = ''
     if (k.t === 'ctrl' && k.ch === 'c') return this.onCtrlC()
+    // a tap lands wherever it lands — overlays, editor, transcript
+    if (k.t === 'click') return this.onClick(k.x, k.y)
     const top = this.overlayStack[this.overlayStack.length - 1]
     if (top) {
       this.overlayKey(top, k)
@@ -1789,6 +1872,19 @@ export class TuiApp {
       return
     }
     this.editorKey(k)
+  }
+
+  /** SGR mouse tap (fullscreen — mouse tracking runs on the alt screen).
+   *  Coordinates are 1-based; zones were registered at build time with
+   *  0-based frame rows. A tap outside every zone is a friendly no-op. */
+  private onClick(x: number, y: number): void {
+    if (!this.fullscreen) return
+    const z = this.clickZones.find((z) => z.y === y - 1)
+    if (z) {
+      this.notice = ''
+      z.hit()
+      this.requestRender()
+    }
   }
 
   private onCtrlC(): void {
@@ -2206,7 +2302,10 @@ export class TuiApp {
 
   private settle(ov: Overlay, value: unknown): void {
     const i = this.overlayStack.indexOf(ov)
-    if (i >= 0) this.overlayStack.splice(i, 1)
+    // already settled (a stale tap zone after a re-render) — never resolve
+    // twice: the second call would re-fire the menu action
+    if (i < 0) return
+    this.overlayStack.splice(i, 1)
     this.requestRender()
     switch (ov.kind) {
       case 'list':
@@ -2318,6 +2417,15 @@ export class TuiApp {
         return
       }
       case 'print': {
+        // number-row quick pick (v0.23.0) — the badges on screen select
+        // directly: one tap on a phone instead of arrows + enter. Only on
+        // non-searchable lists, so digits stay free for filtering elsewhere
+        if (!ov.filter && !ov.filterable && k.ch >= '1' && k.ch <= '9') {
+          const vis = this.listVisible(ov)
+          const it = vis[ov.offset + (k.ch.charCodeAt(0) - 49)]
+          if (it && !it.disabled) this.settle(ov, it.value)
+          return
+        }
         // quick-quit ONLY on non-searchable lists — 'q' is a search letter
         // (try typing "qwen" in a filterable picker otherwise…)
         if (k.ch === 'q' && !ov.filter && !ov.filterable) return this.settle(ov, undefined)
@@ -2423,6 +2531,10 @@ export class TuiApp {
       return this.settle(ov, choice)
     }
     if (k.t === 'print') {
+      // number-row picks match the on-screen badges (mobile friendly)
+      if (k.ch >= '1' && k.ch <= '4') {
+        return this.settle(ov, (['once', 'always', 'session', 'deny'] as const)[k.ch.charCodeAt(0) - 49])
+      }
       const ch = k.ch.toLowerCase()
       if (ch === 'y') return this.settle(ov, 'once')
       if (ch === 'a') return this.settle(ov, 'always')
@@ -2633,6 +2745,7 @@ export class TuiApp {
       { label: 'Pick model…', hint: 'provider + model', value: 'model', group: 'session' },
       { label: 'Undo checkpoint', hint: 'rollback last snapshot', value: 'undo', group: 'session' },
       { label: 'Toggle caveman mode', hint: 'terse replies', value: 'caveman', group: 'more' },
+      { label: 'Theme…', hint: 'dark · light · tokyo night · dracula…', value: 'theme', group: 'more' },
       { label: 'Compact memory…', hint: 'summarize old turns (no AI)', value: 'compact', group: 'more' },
       { label: 'Skills…', hint: 'installed skills', value: 'skills', group: 'more' },
       { label: 'Subagents…', hint: 'custom subagents', value: 'agents', group: 'more' },
@@ -2643,7 +2756,7 @@ export class TuiApp {
       { label: 'Help', hint: 'every command', value: 'help', group: 'more' },
       { label: 'Exit', hint: 'quit tagent', value: 'exit', group: 'exit' },
     ]
-    void this.pick(items, 'menu — ctrl+x', { footer: '↑↓ move · enter run · esc close' }).then((v) => {
+    void this.pick(items, 'menu — ctrl+x', { filterable: false, footer: '1-9 pick · tap a row · esc close' }).then((v) => {
       if (v === undefined) return
       void this.menuAction(String(v))
     })
@@ -2700,6 +2813,8 @@ export class TuiApp {
         this.println(green(`  ✔ caveman mode ${v ? 'ON — outputs summarized (head+tail digests), old action echoes slimmed, terse replies' : 'off'}`))
         return
       }
+      case 'theme':
+        return this.themeFlow()
       case 'compact': {
         this.runCompact(undefined)
         return
@@ -2735,6 +2850,50 @@ export class TuiApp {
   }
 
   /* ---------------- smaller menus ---------------- */
+
+  /** /theme [name] — the TUI color system (v0.23.0). Switching applies
+   *  LIVE: every paint reads the active palette (navbar, editor, tool
+   *  boxes, markdown) so the next frame is already the new theme, and the
+   *  choice persists in the GLOBAL config — a personal preference, not a
+   *  workspace fact. */
+  private async themeFlow(arg?: string): Promise<void> {
+    const names = THEMES.map((t) => t.name).join(' · ')
+    if (arg) {
+      if (!setTheme(arg)) {
+        this.println(red(`  ✗ no theme "${arg}" — themes: ${names}`))
+        return
+      }
+      try {
+        updateGlobalConfig({ theme: activeTheme().name })
+      } catch {
+        /* read-only home — the live switch still holds for this run */
+      }
+      this.println(green(`  ✔ theme → ${bold(activeTheme().label)} ${dim('· every surface recolors now · saved')}`))
+      this.requestRender()
+      return
+    }
+    const cur = activeTheme().name
+    const items = THEMES.map((t) => ({
+      label: t.label,
+      hint: t.dark ? 'dark bg' : 'light bg',
+      value: t.name,
+      detail: themeSwatch(t, USE_COLOR),
+    }))
+    const pick = await this.pick(items, 'theme', {
+      selected: THEMES.findIndex((t) => t.name === cur),
+      filterable: false,
+      footer: '1-6 pick · tap a row · live switch',
+    })
+    if (!pick) return this.println(dim('  theme unchanged'))
+    setTheme(pick)
+    try {
+      updateGlobalConfig({ theme: pick })
+    } catch {
+      /* read-only home — live still holds */
+    }
+    this.println(green(`  ✔ theme → ${bold(themeLabel(pick) ?? pick)} ${dim('· every surface recolors now · saved')}`))
+    this.requestRender()
+  }
 
   private async newSessionFlow(): Promise<void> {
     const pick = await this.pick(
@@ -3191,6 +3350,10 @@ export class TuiApp {
         host.settingsSave({ caveman: v })
         this.println(green(`  ✔ caveman mode ${v ? 'ON — terse replies, compact prompts' : 'off'}`))
         return
+      }
+
+      case 'theme': {
+        return this.themeFlow(arg || undefined)
       }
 
       case 'worklog': {
@@ -4437,7 +4600,11 @@ export class TuiApp {
     if (this.fullscreen) {
       out = '\x1b[H'
       for (let i = 0; i < rows.length; i++) {
-        out += '\r\x1b[2K' + rows[i]
+        // every row hard-truncated to the terminal width — a soft-wrap
+        // here would grow the frame's real row count and the next redraw
+        // would paint the editor OVER the transcript (the "input box
+        // nabrak response" bug on narrow/mobile terminals)
+        out += '\r\x1b[2K' + truncateStyled(rows[i], this.termW)
         if (i < rows.length - 1) out += '\n'
       }
       out += '\x1b[J'
@@ -4451,7 +4618,7 @@ export class TuiApp {
         this.flushed++
       }
       for (let i = 0; i < rows.length; i++) {
-        out += '\r\x1b[2K' + rows[i]
+        out += '\r\x1b[2K' + truncateStyled(rows[i], this.termW)
         if (i < rows.length - 1) out += '\n'
       }
     }
@@ -4474,6 +4641,9 @@ export class TuiApp {
     const hintRow = safeRow(this.hintRow(W))
     // how many rows overlays may take without pushing the editor off-screen
     const avail = Math.max(0, H - head.length - edRows.length - 2)
+    // overlay renderers register their tap zones while they build (relative
+    // row indices) — reset the list first so zones never leak across frames
+    this.ovZones = []
     const ovRows = this.overlayRows(W, avail)
     const transAvail = Math.max(0, avail - ovRows.length)
     for (const r of head) rows.push(safeRow(r))
@@ -4493,12 +4663,28 @@ export class TuiApp {
         : this.streamTailRows(W, Math.max(0, transAvail))
       for (const r of src) rows.push(safeRow(r))
     }
+    const ovStart = rows.length
     for (const r of ovRows) rows.push(safeRow(r))
+    // tap zones of THIS frame — absolute rows, only in fullscreen (mouse
+    // tracking runs there); overlays may be clamped by slice(-H) at the top
+    // but never their zones (only the navbar/transcript shrink from above)
+    this.clickZones = this.fullscreen
+      ? this.ovZones
+          .filter((z) => z.i >= 0 && z.i < ovRows.length)
+          .map((z) => ({ y: ovStart + z.i, hit: z.hit }))
+      : []
     rows.push(statusRow)
     for (const r of edRows) rows.push(safeRow(r))
     rows.push(hintRow)
     // last-resort clamp — dropping the top-most rows keeps the editor visible
-    return rows.length > H ? rows.slice(rows.length - H) : rows
+    const final = rows.length > H ? rows.slice(rows.length - H) : rows
+    if (final.length !== rows.length) {
+      // the top was clipped — shift the zones up by the same amount so taps
+      // still land on the rows that are actually on screen
+      const cut = rows.length - final.length
+      for (const z of this.clickZones) z.y -= cut
+    }
+    return final
   }
 
   /** sanitized config with a 1s cache — the hint row reads it every frame */
@@ -4517,7 +4703,10 @@ export class TuiApp {
    *   ╭─ ✻ Tagent v0.19.0 ── 💬 <session title> ──────────────╮
    *   ╰─ 🤖 build · 📂 <workspace> · glm-4.7 · 🔌 2✓ 31 · 4m ─╯ */
   private headerRows(W: number): string[] {
-    const boxW = Math.max(34, Math.min(W - 2, 78))
+    // responsive floor: never wider than the terminal — a hard 34-col floor
+    // soft-wrapped on narrow (phone/split) terminals and the wrapped rails
+    // broke the sticky-region math (the input box painted over the reply)
+    const boxW = Math.max(14, Math.min(W - 2, 78))
     const cfg = this.cfgFast() as { defaultModel: string }
     const st = this.host.mcpStatus()
     const ready = st.filter((s) => s.state === 'ready')
@@ -4617,15 +4806,35 @@ export class TuiApp {
     this.requestRender()
   }
 
-  /** the live message tail while streaming — the last few wrapped lines of
-   *  streamText ride the sticky region (the final markdown render is flushed
-   *  into the scrollback when the message completes) */
+  /** the live message tail while streaming — rendered as MARKDOWN live
+   *  (v0.23.0): the same renderer as the final flush, on the partial text
+   *  (an unclosed fence is auto-closed so a streaming code block shows as
+   *  a block instead of raw backticks). Cached by text length — chunks only
+   *  append, so the parse is skipped when nothing new landed. */
   private streamTailRows(W: number, availH: number): string[] {
     if (this.statusKind !== 'stream' || !this.streamText || availH <= 0) return []
     const w = Math.max(10, Math.min(W - 4, 78))
-    const wrapped = wrapStyled(this.streamText.trimEnd(), w)
+    let text = this.streamText
+    const fenceOpens = (text.match(/^[ \t]*(`{3,}|~{3,})/gm) ?? []).length
+    if (fenceOpens % 2 === 1) text += '\n```'
+    let lines: string[]
+    if (this.streamCache?.len === text.length) {
+      lines = this.streamCache.lines
+    } else {
+      if (this.mdRender) {
+        try {
+          lines = this.mdRender(text, w)
+        } catch {
+          lines = wrapStyled(this.streamText.trimEnd(), w)
+        }
+      } else {
+        lines = wrapStyled(this.streamText.trimEnd(), w)
+      }
+      this.streamCache = { len: text.length, lines }
+    }
+    while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
     const max = Math.max(1, Math.min(8, availH))
-    const tail = wrapped.slice(-max)
+    const tail = lines.slice(-max)
     return tail.map((l, i) => (i === tail.length - 1 ? `  ${l}${dim('▌')}` : `  ${l}`))
   }
 
@@ -4755,17 +4964,18 @@ export class TuiApp {
     }
   }
 
-  /** engine events → one transcript line each + a fresh badge */
+  /** engine events → banner boxes + a fresh badge. System happenings ride
+   *  the v0.23.0 frame so they stand out from chat like everything else. */
   private onSyncEvent(e: SyncEvent): void {
     if (e.type === 'pushed') {
       this.syncHint = `↑ ${e.commit}`
-      this.println(green(`  ⎇ auto-sync pushed ${e.commit} → ${e.repo}`))
+      this.bannerBox('⎇ auto-sync', `pushed ${e.commit} → ${e.repo}`, green)
     } else if (e.type === 'pulled') {
       this.syncHint = `↓ ${e.files || ''}${e.applied.length ? ' 🔐' : ''}`.trim()
       const bits: string[] = []
       if (e.files > 0) bits.push(`${e.files} file${e.files === 1 ? '' : 's'}`)
       if (e.applied.length) bits.push(`vault: ${e.applied.join(', ')}`)
-      this.println(cyan(`  ⎇ auto-sync pulled${bits.length ? ` — ${bits.join(' · ')}` : ''}`))
+      this.bannerBox('⎇ auto-sync', `pulled${bits.length ? ` — ${bits.join(' · ')}` : ' — up to date'}`, cyan)
     } else if (e.type === 'vault-passphrase') {
       this.println(yellow('  🔐 shared settings are locked — set this device\'s passphrase (/repo) to unlock'))
     } else if (e.type === 'error') {
@@ -4919,6 +5129,9 @@ export class TuiApp {
     ov.offset = Math.min(ov.offset, Math.max(0, vis.length - maxVis))
 
     const inner: string[] = []
+    const zones: { i: number; hit: () => void }[] = []
+    // number badges — the mobile pick: 1-9 select without the arrow dance
+    const useDigits = !ov.filterable
     if (ov.filter) inner.push(dim(`/${ov.filter}▌`))
     if (ov.filter && this.listMatchCount(ov) === 0) {
       inner.push(dim(`  no matches for "${ov.filter}"`))
@@ -4934,19 +5147,32 @@ export class TuiApp {
         inner.push(dim(bold(truncateStyled(it.group.toUpperCase(), innerW))))
         lastGroup = it.group
       }
-      const mark = isCursor ? cyan('❯') : ' '
+      const mark = isCursor ? accent('❯') : ' '
+      const badge = useDigits && i < 9 ? dim(`${i + 1} `) : ''
       const label = truncateStyled(it.label, Math.max(6, innerW - 34))
       const pad = ' '.repeat(Math.max(1, Math.min(30, innerW - 30) - vwidthANSI(label)))
-      let line = ` ${mark} ${isCursor ? bold(cyan(label)) : it.disabled ? dim(label) : label}${pad}`
+      let line = ` ${mark} ${badge}${isCursor ? bold(accent(label)) : it.disabled ? dim(label) : label}${pad}`
       if (it.hint) line += ' ' + dim(truncateStyled(it.hint, 28))
       inner.push(line)
+      // tap target — a touch on the row picks it (fullscreen mouse)
+      zones.push({
+        i: inner.length - 1,
+        hit: () => {
+          if (this.overlayStack.includes(ov) && !it.disabled) this.settle(ov, it.value)
+        },
+      })
       if (isCursor && it.detail) inner.push(`     ${dim(truncateStyled(it.detail, Math.max(10, innerW - 6)))}`)
     }
     if (vis.length > maxVis) {
       inner.push(dim(`  ${ov.offset > 0 ? '↑' : ' '} ${ov.offset + maxVis < vis.length ? '↓' : ' '} ${ov.offset + 1}–${Math.min(ov.offset + maxVis, vis.length)} of ${vis.length}`))
     }
     const footer = ov.footer ?? (ov.filterable ? 'type to filter' : '')
-    return this.box(ov.title, inner, `${footer ? `↑↓ move · enter select · ${footer}` : '↑↓ move · enter select · esc cancel'}`, W)
+    const keys = useDigits ? '1-9 pick · ↑↓ move · enter select' : '↑↓ move · enter select'
+    const rows = this.box(ov.title, inner, `${keys} · ${footer || 'esc cancel'}`, W)
+    // box() puts the first inner row at rows[1] — the offsets survive the
+    // clamp because only the TOP of the frame is ever sliced, never overlays
+    for (const z of zones) this.ovZones.push({ i: z.i + 1, hit: z.hit })
+    return rows
   }
 
   private renderInputOverlay(ov: Extract<Overlay, { kind: 'input' }>, W: number): string[] {
@@ -4971,9 +5197,20 @@ export class TuiApp {
   }
 
   private renderConfirmOverlay(ov: Extract<Overlay, { kind: 'confirm' }>, W: number): string[] {
-    const yes = ov.value ? bold(cyan(` ${'yes'} `)) : dim(' yes ')
+    const yes = ov.value ? bold(accent(` ${'yes'} `)) : dim(' yes ')
     const no = !ov.value ? bold(yellow(` ${'no'} `)) : dim(' no ')
-    return this.box(ov.title, [`${yes} ${no}  ${dim('←→ · enter')}`], 'esc cancel', W)
+    const rows = this.box(ov.title, [`${yes} ${no}  ${dim('←→ · enter · tap')}`], 'esc cancel', W)
+    // a tap on the choice row toggles it (mobile: no ←/→ keys to reach for)
+    this.ovZones.push({
+      i: 1,
+      hit: () => {
+        if (this.overlayStack.includes(ov)) {
+          ov.value = !ov.value
+          this.requestRender()
+        }
+      },
+    })
+    return rows
   }
 
   private renderPermissionOverlay(ov: Extract<Overlay, { kind: 'permission' }>, W: number, viewportH: number): string[] {
@@ -4991,13 +5228,25 @@ export class TuiApp {
       ['allow this session', 'until Tagent exits'],
       ['deny', 'stop this call'],
     ]
+    const zones: { i: number; hit: () => void }[] = []
     for (const [i, [label, hint]] of options.entries()) {
       const isCursor = i === ov.cursor
-      const mark = isCursor ? cyan('❯') : ' '
-      inner.push(` ${mark} ${isCursor ? bold(cyan(label)) : label}  ${dim(hint)}`)
+      const mark = isCursor ? accent('❯') : ' '
+      inner.push(` ${mark} ${dim(`${i + 1} `)}${isCursor ? bold(accent(label)) : label}  ${dim(hint)}`)
+      // tap the option (or press its number) — one gesture, no arrows
+      const choice = (['once', 'always', 'session', 'deny'] as const)[i]
+      zones.push({
+        i: inner.length - 1,
+        hit: () => {
+          if (this.overlayStack.includes(ov)) this.settle(ov, choice)
+        },
+      })
     }
-    const footer = 'y=once · a=always · s=session · n=deny'
-    return this.box('permission needed', inner.slice(0, Math.max(3, viewportH - 4)), footer, W)
+    const footer = '1-4 · y/a/s/n · tap or enter'
+    const shown = inner.slice(0, Math.max(3, viewportH - 4))
+    const rows = this.box('permission needed', shown, footer, W)
+    for (const z of zones) if (z.i < shown.length) this.ovZones.push({ i: z.i + 1, hit: z.hit })
+    return rows
   }
 
   /** the ask_user form — questions, radio/checkbox options, inputs, notes, submit */
@@ -5042,12 +5291,12 @@ export class TuiApp {
           const sel = (ov.selected[f.id] ?? []).includes(opt)
           const mark = f.type === 'option' ? (sel ? green('●') : dim('○')) : (sel ? green('☑') : dim('☐'))
           const label = truncateStyled(opt, innerW - 8)
-          push(`${isCursor ? cyan('❯') : ' '} ${mark} ${isCursor ? bold(cyan(label)) : label}`, rowIdx)
+          push(`${isCursor ? accent('❯') : ' '} ${mark} ${isCursor ? bold(accent(label)) : label}`, rowIdx)
         })
         if (f.allowAddOption !== false) {
           const rowIdx = rowIndexOf((r) => r.kind === 'add' && r.fieldIndex === i)
           const isCursor = cur && cur.kind === 'add' && cur.fieldIndex === i
-          push(`${isCursor ? cyan('❯') : ' '} ${isCursor ? bold(cyan('+ add option…')) : dim('+ add option…')}`, rowIdx)
+          push(`${isCursor ? accent('❯') : ' '} ${isCursor ? bold(accent('+ add option…')) : dim('+ add option…')}`, rowIdx)
         }
       }
       push('')
@@ -5059,10 +5308,10 @@ export class TuiApp {
       const focused = cur && cur.kind === 'notes'
       const shown = ov.notes.isEmpty ? [] : ov.notes.lines.slice(0, 3)
       if (!shown.length) {
-        push(`${focused ? cyan('❯') : ' '} ${dim('…')}`, rowIdx)
+        push(`${focused ? accent('❯') : ' '} ${dim('…')}`, rowIdx)
       } else {
         shown.forEach((l, li) => {
-          const mark = li === 0 ? (focused ? cyan('❯') : ' ') : '  '
+          const mark = li === 0 ? (focused ? accent('❯') : ' ') : '  '
           if (focused && ov.notes.row === li) {
             push(`${mark} ${blockCursorLine(l, ov.notes.col)}`, rowIdx)
           } else {
@@ -5076,7 +5325,7 @@ export class TuiApp {
     {
       const rowIdx = rowIndexOf((r) => r.kind === 'submit')
       const isCursor = cur && cur.kind === 'submit'
-      push(`${isCursor ? cyan('❯') : ' '} ${isCursor ? bold(green('submit answers')) : dim('submit answers')}`, rowIdx)
+      push(`${isCursor ? accent('❯') : ' '} ${isCursor ? bold(green('submit answers')) : dim('submit answers')}`, rowIdx)
     }
 
     const footer = '↑↓ move · space/enter pick · a add option · tab next field · esc cancel'
@@ -5094,7 +5343,31 @@ export class TuiApp {
     ov.scroll = start
     const shown = textLines.slice(start, start + visibleH)
     while (shown.length < Math.min(visibleH, 3)) shown.push('')
-    return this.box(ov.form.title ?? 'agent asks', shown, footer, W)
+    const rows = this.box(ov.form.title ?? 'agent asks', shown, footer, W)
+    // tap targets — every VISIBLE interactive row (options, add CTAs,
+    // inputs, notes, submit): a touch focuses + activates it
+    for (let i = start; i < Math.min(start + visibleH, lines.length); i++) {
+      const l = lines[i]
+      if (l.row >= 0) {
+        const rowIndex = l.row
+        this.ovZones.push({ i: i - start + 1, hit: () => this.askFormTap(ov, rowIndex) })
+      }
+    }
+    return rows
+  }
+
+  /** tap on an ask-form row (fullscreen click) — focus it, then act like
+   *  enter: options toggle, the submit row submits, inputs/notes take
+   *  focus so the next keystroke lands in them (the mobile flow). */
+  private askFormTap(ov: Extract<Overlay, { kind: 'askform' }>, rowIndex: number): void {
+    if (!this.overlayStack.includes(ov)) return
+    const row = ov.rows[rowIndex]
+    if (!row) return
+    ov.cursor = rowIndex
+    ov.missing = []
+    if (row.kind === 'submit') return this.askFormSubmit(ov)
+    this.askFormKey(ov, { t: 'enter' })
+    this.requestRender()
   }
 
   private renderPlanOverlay(ov: Extract<Overlay, { kind: 'plan' }>, W: number, viewportH: number): string[] {
@@ -5137,33 +5410,56 @@ export class TuiApp {
     const off = Math.min(Math.max(0, this.palCursor - maxVis + 1), Math.max(0, pal.items.length - maxVis))
     const inner: string[] = []
     if (pal.token) inner.push(dim(`commands matching "${pal.token}"`))
+    const zones: { i: number; hit: () => void }[] = []
     const win = pal.items.slice(off, off + maxVis)
     for (let i = 0; i < win.length; i++) {
       const isCursor = off + i === this.palCursor
-      const mark = isCursor ? cyan('❯') : ' '
+      const mark = isCursor ? accent('❯') : ' '
       const name = truncateStyled('/' + win[i].name, 18)
       const pad = ' '.repeat(Math.max(1, 18 - vwidthANSI(name)))
-      inner.push(`${mark} ${isCursor ? bold(cyan(name)) : name}${pad}${dim(win[i].desc)}`)
+      inner.push(`${mark} ${isCursor ? bold(accent(name)) : name}${pad}${dim(win[i].desc)}`)
+      // tap → pick this command into the editor + run it
+      zones.push({
+        i: inner.length - 1,
+        hit: () => {
+          this.palCursor = off + i
+          this.palToken = null
+          this.paletteEnter()
+        },
+      })
     }
     if (pal.items.length > maxVis) {
       inner.push(dim(`  ${off > 0 ? '↑' : ' '} ${off + maxVis < pal.items.length ? '↓' : ' '} ${off + 1}–${Math.min(off + maxVis, pal.items.length)} of ${pal.items.length}`))
     }
     const rows = this.box('commands', inner, '↑↓ select · enter run · tab complete · esc hide', W, Math.min(W - 2, 66))
-    return rows.slice(0, Math.max(1, viewportH))
+    const clipped = rows.slice(0, Math.max(1, viewportH))
+    for (const z of zones) if (z.i + 1 < clipped.length) this.ovZones.push({ i: z.i + 1, hit: z.hit })
+    return clipped
   }
 
   private renderFileCompletion(file: { token: string; items: string[] }, W: number, viewportH: number): string[] {
     if (this.fileCursor >= file.items.length) this.fileCursor = Math.max(0, file.items.length - 1)
     const maxVis = Math.max(1, Math.min(8, viewportH - 5))
     const inner: string[] = []
+    const zones: { i: number; hit: () => void }[] = []
     for (let i = 0; i < Math.min(file.items.length, maxVis); i++) {
       const isCursor = i === this.fileCursor
-      const mark = isCursor ? cyan('❯') : ' '
-      inner.push(`${mark} ${isCursor ? bold(cyan(file.items[i])) : file.items[i]}`)
+      const mark = isCursor ? accent('❯') : ' '
+      inner.push(`${mark} ${isCursor ? bold(accent(file.items[i])) : file.items[i]}`)
+      // tap → insert the @file mention
+      zones.push({
+        i: inner.length - 1,
+        hit: () => {
+          this.fileCursor = i
+          this.insertFileCandidate()
+        },
+      })
     }
     if (file.items.length > maxVis) inner.push(dim(`  ↓ ${Math.min(file.items.length, maxVis)} of ${file.items.length}`))
     const rows = this.box(`@ files — ${file.token}`, inner, '↑↓ select · enter/tab insert · esc hide', W, Math.min(W - 2, 66))
-    return rows.slice(0, Math.max(1, viewportH))
+    const clipped = rows.slice(0, Math.max(1, viewportH))
+    for (const z of zones) if (z.i + 1 < clipped.length) this.ovZones.push({ i: z.i + 1, hit: z.hit })
+    return clipped
   }
 }
 

@@ -668,7 +668,7 @@ test('streaming status: thinking + streamed partial render in the status row', a
   app.destroy()
 })
 
-test('tool lines: ⎿ connector + status icon + duration flush to the scrollback', async () => {
+test('tool lines: colored box per tool call — top rail + summary + result + bottom rail', async () => {
   const host = new FakeHost(tmp)
   const { app, out } = await started(host)
   host.bus.emit('tool:start', { call: { id: 't1', tool: 'bash', input: { command: 'ls -la' }, status: 'running' } })
@@ -679,11 +679,18 @@ test('tool lines: ⎿ connector + status icon + duration flush to the scrollback
   await sleep(10)
   app.renderNow()
   const plain = stripAnsi(out.text())
-  if (!plain.includes('⎿')) throw new Error('tool line missing the ⎿ connector')
-  if (!plain.includes('bash')) throw new Error('tool line missing tool name')
-  if (!plain.includes('ls -la')) throw new Error('tool line missing summarized input')
-  if (!plain.includes('1.5s')) throw new Error('tool line missing duration')
-  if (!plain.includes('file-a')) throw new Error('tool line missing output tail')
+  // v0.23.0: the call rides a rounded box — 💻 bash in the title rail
+  if (!/╭[─━ ]*[💻 ]*bash/.test(plain.replace('╭─ ', '╭─'))) throw new Error('tool box missing the titled top rail')
+  if (!plain.includes('╭─ 💻 bash')) throw new Error('tool box top rail missing tool name')
+  if (!plain.includes('ls -la')) throw new Error('tool box missing summarized input row')
+  if (!plain.includes('✔')) throw new Error('tool result row missing status icon')
+  if (!plain.includes('done')) throw new Error('tool result row missing status word')
+  if (!plain.includes('1.5s')) throw new Error('tool result row missing duration')
+  if (!plain.includes('file-a')) throw new Error('tool result row missing output tail')
+  // the box closes — a bottom rail lands after the result row
+  const lines = plain.split('\n')
+  const resultIdx = lines.findIndex((l) => l.includes('file-a'))
+  if (resultIdx < 0 || !/^\s*╰/.test(lines[resultIdx + 1] ?? '')) throw new Error('tool box missing the closing bottom rail')
   app.exit()
   await sleep(10)
   app.destroy()
@@ -930,7 +937,7 @@ test('ask form: renders questions, options, inputs, notes, submit', async () => 
   if (!text.includes('submit answers')) throw new Error('submit row missing')
   // esc dismisses → host.askRespond(null)
   app.feed('\x1b')
-  await sleep(90)
+  await sleep(150)
   if (host.askResponses.length !== 1 || host.askResponses[0].response !== null) throw new Error('esc should dismiss with null')
   if (!stripAnsi(out.text()).includes('dismissed')) throw new Error('dismissed trail missing from scrollback')
   app.exit()

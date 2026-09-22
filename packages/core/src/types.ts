@@ -319,6 +319,10 @@ export interface TagentConfig {
   }
   /** caveman mode — ultra-terse replies + compact prompts. Big token saver. */
   caveman?: boolean
+  /** TUI color theme (v0.23.0): dark · light · tokyo-night · dracula · nord ·
+   *  gruvbox — stored in the GLOBAL config (a personal preference); every
+   *  paint reads the live palette, /theme switches it instantly. */
+  theme?: string
   /** context-window management: live usage bar + deterministic compaction.
   *  Compaction is 100% local code — no AI call, no invented content. */
   compact?: {

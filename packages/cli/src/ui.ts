@@ -19,6 +19,8 @@ import pc from 'picocolors'
 import cliBoxes from 'cli-boxes'
 import wrapAnsi from 'wrap-ansi'
 
+import { activeTheme, type ThemeSgr } from './theme'
+
 /* ------------------------------------------------------------------ */
 /* color gate                                                          */
 /* ------------------------------------------------------------------ */
@@ -31,17 +33,21 @@ export function setUiColor(enabled: boolean): void {
 }
 export const uiColorOn = (): boolean => UI_COLOR && process.env.NO_COLOR === undefined
 
-/** color a border/glyph through picocolors, honoring the gate */
-const col = (fn: (s: string) => string) => (s: string) => (uiColorOn() ? fn(s) : s)
-export const cDim = col(pc.dim)
-export const cBold = col(pc.bold)
-export const cRed = col(pc.red)
-export const cGreen = col(pc.green)
-export const cYellow = col(pc.yellow)
-export const cBlue = col(pc.blue)
-export const cMagenta = col(pc.magenta)
-export const cCyan = col(pc.cyan)
-export const cOrange = col((s) => `\x1b[38;5;208m${s}\x1b[0m`)
+/** color a string through the ACTIVE THEME, honoring the gate. v0.23.0:
+ *  themes swap these live — dark is byte-identical to the old palette. */
+const tcol =
+  (slot: keyof ThemeSgr) =>
+  (s: string): string =>
+    uiColorOn() ? `\x1b[${activeTheme().sgr[slot]}m${s}\x1b[0m` : s
+export const cDim = tcol('dim')
+export const cBold = tcol('bold')
+export const cRed = tcol('red')
+export const cGreen = tcol('green')
+export const cYellow = tcol('yellow')
+export const cBlue = tcol('blue')
+export const cMagenta = tcol('magenta')
+export const cCyan = tcol('cyan')
+export const cOrange = tcol('orange')
 
 /* ------------------------------------------------------------------ */
 /* width — the alignment backbone                                     */
@@ -269,6 +275,34 @@ export function roundBox(o: BoxOpts): string[] {
 /** horizontal rule of box-drawing dashes (plain, no box) */
 export function rule(width: number, color: (s: string) => string = cDim): string {
   return color(B.top.repeat(Math.max(0, width)))
+}
+
+/* ------------------------------------------------------------------ */
+/* open box parts — tool-call boxes are drawn in TWO passes            */
+/* ------------------------------------------------------------------ */
+
+/** the top border of a round box with an embedded title: ╭─ title ──╮ */
+export function boxTop(title: string, width: number, color: (s: string) => string): string {
+  const innerW = Math.max(2, width - 2)
+  if (!title) return color(B.topLeft + B.top.repeat(innerW) + B.topRight)
+  const text = ` ${truncateV(title, Math.max(1, innerW - 4))} `
+  const fill = Math.max(0, innerW - vw(text) - 1)
+  return color(B.topLeft + B.top + text + B.top.repeat(fill) + B.topRight)
+}
+
+/** one body row: │ text │ — fitted to the exact inner width */
+export function boxRow(text: string, width: number, color: (s: string) => string): string {
+  const cellW = Math.max(0, width - 4)
+  return color(B.left) + ' ' + fitV(text, cellW) + ' ' + color(B.right)
+}
+
+/** the bottom border, optionally with an embedded footer: ╰─ foot ──╯ */
+export function boxBottom(footer: string, width: number, color: (s: string) => string): string {
+  const innerW = Math.max(2, width - 2)
+  if (!footer) return color(B.bottomLeft + B.top.repeat(innerW) + B.bottomRight)
+  const text = ` ${truncateV(footer, Math.max(1, innerW - 4))} `
+  const fill = Math.max(0, innerW - vw(text) - 1)
+  return color(B.bottomLeft + B.top + text + B.top.repeat(fill) + B.bottomRight)
 }
 
 /** aligned icon + label + value banner row:  `│ 📂 workspace  value…` */
