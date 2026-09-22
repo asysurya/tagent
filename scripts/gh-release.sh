@@ -36,47 +36,58 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — MCP failures that say why, and a navbar that says where
+## v__VER__ — MCP failures that say why, in plain language
 
-A dead MCP server used to report nothing but "error — server exited
-(code 1)": the reason it died (npm network error, old Node, a launcher
-that isn't installed) was thrown away because stderr was never read. Now
-the full story is captured and surfaced — and a missing npx transparently
-falls back to bunx on machines that have bun. The navbar also grew a
-workspace segment so you always know which folder the agent is in.
+v0.22.2 taught doctor to capture a dead server's stderr, but a node
+style crash still summarized as "} | Node.js v24.20.0" — the banner,
+not the disease. The real reason sat two lines above and was dropped.
+The summarizer now picks the actual diagnosis, and every known cause
+carries the ONE move that fixes it.
 
 ```
 ❯ tagent doctor · v__VER__
-  ✘ mcp context7: error — server exited (code 1): npm ERR! code
-    ENOTFOUND — full reason above; /mcp reload retries after fixing
+  ✔ disk space: 18.2 GB free
+  ✗ mcp context7: error — server exited (code 1):
+    Error: Cannot find module 'zod' | code: 'MODULE_NOT_FOUND'
+    — broken npx cache (common after a full disk) —
+      rm -rf ~/.npm/_npx, then /mcp reload
 
-╭─ ✻ Tagent v__VER__ ── 💬 porting the API ────────╮
-╰─ 🤖 build · 📂 tagent-proyek · glm-4.7 · 🔌 2✓ 31 · 4m ─╯
+  ✗ mcp ddg_tools: error — server exited (code 1):
+    No space left on device (os error 28) — disk full
+    — free disk space (npm cache clean --force ·
+      bun pm cache rm · docker system prune), then /mcp reload
 ```
 
-### MCP: the failure says why
+### MCP: reasons a human can read
 
-- server stderr is captured — the exit error carries the last lines of
-  it, so "code 1" becomes "code 1: npm ERR! code ENOTFOUND"
-- a missing launcher is named ("cannot start 'npx' — not found on
-  PATH") with install advice instead of a bare exit code
-- doctor and the /mcp menu show 160 chars of the reason; calls made
-  after a death include it too
+- a node-style crash surfaces the `Error: …` headline plus its `code:`
+  ("Cannot find module 'zod' | code: 'MODULE_NOT_FOUND'") — stack
+  frames, `}` and the `Node.js v24.20.0` banner are dropped
+- ENOSPC ("No space left on device (os error 28)") is named plainly
+  and flagged as a full disk; the package manager's multi-line hint
+  essay is dropped
+- stderr tail raised from 1.5KB to 2.5KB so long node stacks no longer
+  push the headline out of the capture window
 
-### MCP: npx → bunx fallback
+### MCP: one actionable hint per known cause
 
-- binary installs ship no Node.js — a configured npx may simply not
-  exist. When bun is installed, tagent transparently launches the
-  server with bunx (runs the very same npm packages)
-- the fallback shows as a note ("npx not on PATH — using bunx")
-  instead of three dead servers; custom launchers are untouched
+- disk full → "free disk space (npm cache clean --force · bun pm cache
+  rm · docker system prune), then /mcp reload"
+- MODULE_NOT_FOUND launched via npx/bunx → "broken npx cache (common
+  after a full disk) — rm -rf ~/.npm/_npx, then /mcp reload" (Windows
+  path included)
+- network, permissions, port-in-use and connection-refused each map
+  to their one fixing move; unknown causes show the raw reason only
+- hints appear in doctor, /mcp list and the /mcp menu
 
-### Navbar: workspace segment
+### Doctor: disk-space check
 
-- the facts row now reads 🤖 build · 📂 my-project · glm-4.7 · 🔌 2✓ 31
-  — you always know which folder the agent is working in
-- truncated to 18 cells so long folder names never push the model or
-  MCP status off the bar
+- new check right after the global dir — free bytes on the home
+  filesystem (statfs, `df -k` fallback): the disk npx/uvx install
+  servers onto
+- under 256 MB free it fails with cleanup commands; under 1 GB it
+  warns — before you spend minutes wondering why every server
+  exits (code 1)
 
 ---
 ## Single-file binaries: download, run, done
@@ -129,7 +140,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — MCP failures say why; navbar shows the workspace" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — MCP reasons in plain language + doctor disk check" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")

@@ -76,6 +76,7 @@ import {
   workspaceHasWork,
   refuseLink,
   isLinkRefused,
+  diskFreeBytes,
   type SessionData,
   type ToolCallRecord,
   type ProjectReg,
@@ -1468,6 +1469,19 @@ async function mainDoctor() {
     check(false, `global dir not writable: ${GLOBAL_DIR}`)
   }
 
+  // disk space — npx/uvx download MCP servers onto this disk; a full one is
+  // the #1 cause of "server exited (code 1)" that no retry can fix
+  {
+    const free = diskFreeBytes(os.homedir() || GLOBAL_DIR)
+    const fmt = (n: number) =>
+      n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(n / 1024 ** 2))} MB`
+    if (free === undefined) results.push([true, 'disk space: unknown on this platform'])
+    else if (free < 256 * 1024 * 1024)
+      check(false, `disk space: ${fmt(free)} free — too low for npx/uvx server installs; free space (npm cache clean --force · bun pm cache rm · docker system prune)`)
+    else if (free < 1024 * 1024 * 1024) check(true, `disk space: ${fmt(free)} free — low (large MCP installs may fail)`)
+    else check(true, `disk space: ${fmt(free)} free`)
+  }
+
   // config
   let cfg
   try {
@@ -1539,11 +1553,13 @@ async function mainDoctor() {
           st.state === 'ready',
           `mcp ${st.name}: ${st.state}${st.state === 'ready' ? ` · ${st.tools} tools` : st.error ? ` — ${st.error.slice(0, 160)}` : ''}` +
             (st.note ? ` (${st.note})` : '') +
-            (timedOut
-              ? ' (first run downloads the server via npx — try doctor again once warm; raise it with TAGENT_MCP_INIT_TIMEOUT_MS)'
-              : dead
-                ? ' — full reason above; /mcp reload retries after fixing, /mcp remove+template re-adds with a working launcher'
-                : ''),
+            (st.hint
+              ? ` — ${st.hint}`
+              : timedOut
+                ? ' (first run downloads the server via npx — try doctor again once warm; raise it with TAGENT_MCP_INIT_TIMEOUT_MS)'
+                : dead
+                  ? ' — /mcp reload retries after fixing'
+                  : ''),
         )
       }
     } finally {

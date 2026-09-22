@@ -106,6 +106,7 @@ export {
 } from './plugins'
 export {
   McpManager, normalizeMcpServer, MCP_TEMPLATES,
+  resolveMcpLauncher, summarizeStderr, mcpFailureHint, diskFreeBytes,
   type McpServerStatus, mcpServersFromConfig,
 } from './mcp'
 export * from './util'

@@ -15,12 +15,23 @@
  * 5) a server that dies AFTER handshake reports why it died
  * 6) stderr chatter does not corrupt a healthy server
  *
+ * v0.22.3 — the reason itself had to become readable:
+ *
+ * 7) a node-style crash no longer surfaces the banner ("}" + "Node.js
+ *    v24.20.0") — the `Error: …` headline and its `code:` are named
+ * 8) ENOSPC ("No space left on device (os error 28)") is named plainly,
+ *    dropping the package manager's multi-line hint essay
+ * 9) known causes map to ONE actionable hint (disk full → free space;
+ *    MODULE_NOT_FOUND via npx → clear the npx cache)
+ * 10) a banner-only tail yields NO summary instead of garbage
+ * 11) diskFreeBytes probes the filesystem the servers install onto
+ *
  * Run: bun scripts/test-mcp-diag.ts
  */
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { McpManager, resolveMcpLauncher } from '../packages/core/src/mcp'
+import { McpManager, resolveMcpLauncher, summarizeStderr, mcpFailureHint, diskFreeBytes } from '../packages/core/src/mcp'
 
 let pass = 0
 let fail = 0
@@ -149,6 +160,106 @@ console.log('\n7) an absolute-path server connects (launcher resolution untouche
   const st = await oneServer(file, [])
   ok(st.state === 'ready', 'absolute-path server connects', JSON.stringify(st))
   fs.rmSync(dir, { recursive: true, force: true })
+}
+
+/** helper: a server whose only job is to dump a file to stderr, then die */
+async function stderrServer(file: string): Promise<{ state: string; error?: string; hint?: string }> {
+  const st = await oneServer('bash', ['-c', `cat "${file}" >&2; exit 1`])
+  return st
+}
+
+console.log('\n8) node-style crash — banner junk dropped, headline + code named:')
+{
+  // the EXACT shape v0.22.2 summarized as "} | Node.js v24.20.0"
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tagent-node-crash-'))
+  const file = path.join(dir, 'crash.txt')
+  fs.writeFileSync(
+    file,
+    [
+      'node:internal/modules/cjs/loader:1143',
+      '  throw err;',
+      '  ^',
+      '',
+      "Error: Cannot find module 'zod'",
+      'Require stack:',
+      '- /home/u/.npm/_npx/abc/node_modules/@modelcontextprotocol/server-memory/dist/index.js',
+      '    at Module._resolveFilename (node:internal/modules/cjs/loader:1143:15)',
+      '    at Module._load (node:internal/modules/cjs/loader:977:17)',
+      "  code: 'MODULE_NOT_FOUND',",
+      '  requireStack: [',
+      "    '/home/u/.npm/_npx/abc/node_modules/@modelcontextprotocol/server-memory/dist/index.js'",
+      '  ]',
+      '}',
+      'Node.js v24.20.0',
+      '',
+    ].join('\n'),
+  )
+  const st = await stderrServer(file)
+  ok(st.state === 'error', 'state is error', JSON.stringify(st))
+  ok(/Cannot find module 'zod'/.test(st.error ?? ''), 'the module is named', st.error)
+  ok(/MODULE_NOT_FOUND/.test(st.error ?? ''), 'the code is named', st.error)
+  ok(!/Node\.js v24/.test(st.error ?? ''), 'version banner dropped', st.error)
+  ok(!/\}\s*\|/.test(st.error ?? ''), 'closing-brace junk dropped', st.error)
+  ok(!/at Module\./.test(st.error ?? ''), 'stack frames dropped', st.error)
+  fs.rmSync(dir, { recursive: true, force: true })
+}
+
+console.log('\n9) ENOSPC (uv-style) — named plainly, essay dropped:')
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tagent-uv-crash-'))
+  const file = path.join(dir, 'crash.txt')
+  fs.writeFileSync(
+    file,
+    [
+      'error: failed to prepare `duckduckgo-mcp-server` (v0.7)',
+      'No space left on device (os error 28)',
+      'hint: `jsonschema-specifications` (v2025.9.1) was included because `duckduckgo-mcp-server` (v0.7) depends on `jsonschema` directly',
+      '',
+    ].join('\n'),
+  )
+  const st = await stderrServer(file)
+  ok(/No space left on device \(os error 28\) — disk full/.test(st.error ?? ''), 'ENOSPC named + flagged as disk full', st.error)
+  ok(!/jsonschema/.test(st.error ?? ''), 'package-manager hint essay dropped', st.error)
+  ok(/free disk space/.test(st.hint ?? ''), 'actionable hint attached', st.hint)
+  fs.rmSync(dir, { recursive: true, force: true })
+}
+
+console.log('\n10) mcpFailureHint — known causes map to the one fixing move:')
+{
+  const h1 = mcpFailureHint("server exited (code 1): No space left on device (os error 28) — disk full", 'uvx')
+  ok(/free disk space/.test(h1 ?? ''), 'ENOSPC → free-space hint', h1)
+  const h2 = mcpFailureHint("server exited (code 1): Error: Cannot find module 'zod' | code: 'MODULE_NOT_FOUND'", 'npx')
+  ok(/_npx/.test(h2 ?? ''), 'MODULE_NOT_FOUND via npx → cache hint', h2)
+  const h3 = mcpFailureHint("server exited (code 1): Error: Cannot find module 'zod' | code: 'MODULE_NOT_FOUND'", '/usr/local/bin/bunx')
+  ok(/_npx/.test(h3 ?? ''), '…also for a bunx launcher (same npm cache)', h3)
+  const h4 = mcpFailureHint("server exited (code 1): Error: Cannot find module 'zod' | code: 'MODULE_NOT_FOUND'", 'uvx')
+  ok(h4 === undefined, 'uvx module errors get no npx-cache advice', JSON.stringify(h4))
+  const h5 = mcpFailureHint('npm ERR! code ENOTFOUND', 'npx')
+  ok(/network/.test(h5 ?? ''), 'ENOTFOUND → network hint', h5)
+  const h6 = mcpFailureHint("server exited (code 1): listen EADDRINUSE", 'node')
+  ok(/port/.test(h6 ?? ''), 'EADDRINUSE → port hint', h6)
+  const h7 = mcpFailureHint('server exited (code 1): boom', 'bash')
+  ok(h7 === undefined, 'unknown causes get no invented hint', JSON.stringify(h7))
+}
+
+console.log('\n11) banner-only tail → no summary instead of garbage:')
+{
+  const s = summarizeStderr('}\nNode.js v24.20.0\n')
+  ok(s === '', 'banner-only tail summarized to nothing', JSON.stringify(s))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tagent-banner-'))
+  const file = path.join(dir, 'crash.txt')
+  fs.writeFileSync(file, '}\nNode.js v24.20.0\n')
+  const st = await stderrServer(file)
+  ok(st.error === 'server exited (code 1)', 'error carries no banner junk', st.error)
+  fs.rmSync(dir, { recursive: true, force: true })
+}
+
+console.log('\n12) diskFreeBytes probes this machine:')
+{
+  const free = diskFreeBytes('/')
+  ok(typeof free === 'number' && (free as number) > 0, 'free bytes on / is a positive number', String(free))
+  const home = diskFreeBytes(os.homedir())
+  ok(home === undefined || (typeof home === 'number' && home > 0), 'home probe sane (or unknown)', String(home))
 }
 
 /* ---------------- report ---------------- */

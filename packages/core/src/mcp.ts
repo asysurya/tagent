@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { McpConfig, McpServerConfig, ToolDefinition } from './types'
@@ -32,6 +32,8 @@ export interface McpServerStatus {
   error?: string
   /** non-fatal note — e.g. "npx not on PATH — using bunx" */
   note?: string
+  /** one actionable move for a known failure mode ("disk is full — …") */
+  hint?: string
 }
 
 interface RemoteTool {
@@ -115,6 +117,99 @@ export function resolveMcpLauncher(
   return { command } // let the spawn error explain (install Node.js, or bun)
 }
 
+/* ------------------------------------------------------------------ */
+/* failure diagnosis                                                    */
+/* ------------------------------------------------------------------ */
+
+/** lines around a node crash that never carry the diagnosis — banner
+ *  shrapnel like `}`, `^`, `Node.js v24.20.0`, stack frames, require stacks */
+const STDERR_JUNK = /^(?:Node\.js v|at |throw |node:internal\/|Require stack:|- |-----+|\^|\}$)/
+/** exception headlines — a node-style crash puts the disease on THIS line */
+const STDERR_HEADLINE = /^(?:Error|TypeError|ReferenceError|SyntaxError|RangeError|EvalError|URIError|AssertionError|FATAL ERROR|UnhandledPromiseRejection)\b/
+/** package-manager complaint prefixes (npm, uv, cargo, pip, …) */
+const STDERR_INFORMATIVE = /^(?:npm (?:error|ERR!)|error:|fatal:|hint:|caused by:|warning:)/i
+/** error codes worth surfacing wherever they appear in the tail */
+const STDERR_CODES = /ENOENT|ENOSPC|ENOTFOUND|EACCES|EPERM|EADDRINUSE|ECONNREFUSED|ERR_MODULE_NOT_FOUND|ERR_REQUIRE_ESM|Cannot find (?:module|package)|no space left on device|\(os error \d+\)/i
+
+/** Compact a server's stderr tail into the one-line diagnosis.
+ *
+ *  v0.22.2 took the LAST two non-empty lines — for a node crash that is
+ *  always the banner (`}` and `Node.js v24.20.0`), while the actual reason
+ *  ("Error: Cannot find module 'zod'", `code: 'MODULE_NOT_FOUND'`) sits a
+ *  few lines above and was thrown away. Order of preference:
+ *
+ *  1. disk-full — the #1 environment killer (ENOSPC / os error 28), named
+ *     plainly instead of the package manager's multi-line essay
+ *  2. node-style crash — the `Error: …` headline plus its `code:`
+ *  3. package-manager lines (npm error…, error:, fatal:, hint:…)
+ *  4. otherwise the last lines that aren't banner junk
+ */
+export function summarizeStderr(tail: string): string {
+  const lines = tail.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+  if (!lines.length) return ''
+  // 1) disk full
+  const enospc = lines.find((l) => /no space left on device|ENOSPC|\(os error 28\)/i.test(l))
+  if (enospc) {
+    const t = enospc.slice(0, 160)
+    return /disk (?:is )?full/i.test(t) ? t : `${t} — disk full`
+  }
+  // 2) node-style crash: headline + code
+  const headline = lines.find((l) => STDERR_HEADLINE.test(l))
+  if (headline) {
+    const code = [...lines]
+      .reverse()
+      .find((l) => /^code:\s*['"]?[A-Za-z_]/.test(l) || /^errno:\s*-?\d/.test(l))
+      ?.replace(/,\s*$/, '')
+    return (code && code !== headline ? `${headline} | ${code}` : headline).slice(0, 180)
+  }
+  // 3) package-manager complaints
+  const informative = lines.filter(
+    (l) => STDERR_INFORMATIVE.test(l) || STDERR_CODES.test(l) || /^code:\s*['"]?[A-Za-z_]/.test(l) || /^errno:\s*-?\d/.test(l),
+  )
+  if (informative.length) return informative.slice(-2).join(' | ').slice(0, 180)
+  // 4) unknown format — last lines that aren't crash shrapnel
+  const meaningful = lines.filter((l) => !STDERR_JUNK.test(l))
+  return meaningful.length ? meaningful.slice(-2).join(' | ').slice(0, 180) : ''
+}
+
+/** npx's package cache — corrupted regularly by a full disk mid-extract;
+ *  clearing it is always safe (npx just re-downloads) */
+function npxCacheDir(): string {
+  return process.platform === 'win32' ? '%LOCALAPPDATA%\\npm-cache\\_npx' : '~/.npm/_npx'
+}
+
+/** Map a surfaced MCP failure to the ONE move that usually fixes it.
+ *  Returns undefined for unknown causes — the raw reason speaks for itself. */
+export function mcpFailureHint(reason: string, command: string): string | undefined {
+  const r = reason.toLowerCase()
+  if (/no space left on device|enospc|os error 28|disk full/.test(r))
+    return 'free disk space (npm cache clean --force · bun pm cache rm · docker system prune), then /mcp reload'
+  if (/module_not_found|cannot find module|cannot find package/.test(r) && /(?:^|\/)(?:npx|bunx)(?:\.cmd)?$/.test(command))
+    return `broken npx cache (common after a full disk) — rm -rf ${npxCacheDir()}, then /mcp reload`
+  if (/enotfound|getaddrinfo|network/.test(r)) return 'network unreachable — check the connection, then /mcp reload'
+  if (/eacces|eperm|permission denied/.test(r)) return 'permissions — the launcher or its files are not accessible'
+  if (/eaddrinuse/.test(r)) return 'port already in use — stop the process holding it, then /mcp reload'
+  if (/econnrefused/.test(r)) return 'connection refused — the service this server needs is not running'
+  return undefined
+}
+
+/** Free bytes on the filesystem holding `p` — the disk npx/uvx install MCP
+ *  servers onto. statfs when the runtime has it (bun, node ≥18.15), `df -k`
+ *  as the portable fallback, undefined when unknowable. */
+export function diskFreeBytes(p: string): number | undefined {
+  try {
+    const st = fs.statfsSync(p) as { bsize?: number; bavail?: number }
+    if (typeof st?.bsize === 'number' && typeof st?.bavail === 'number' && st.bsize > 0) return st.bavail * st.bsize
+  } catch { /* runtime/OS without statfs — try df */ }
+  try {
+    const out = spawnSync('df', ['-k', p], { timeout: 5000, encoding: 'utf8' }).stdout ?? ''
+    const last = out.trim().split('\n').pop() ?? ''
+    const availKb = Number(last.trim().split(/\s+/)[3])
+    if (Number.isFinite(availKb) && availKb >= 0) return availKb * 1024
+  } catch { /* no df either */ }
+  return undefined
+}
+
 function schemaToParams(schema?: Record<string, unknown>): Record<string, string> {
   const props = (schema?.properties ?? {}) as Record<string, Record<string, unknown>>
   const required = new Set((schema?.required ?? []) as string[])
@@ -133,7 +228,9 @@ class McpConnection {
   private proc: ChildProcess
   private nextId = 1
   private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>()
-  /** last ~1.5KB of the server's stderr — WHY it died, for doctor + status */
+  /** last ~2.5KB of the server's stderr — WHY it died, for doctor + status.
+   *  Generous on purpose: a node crash can stack up hundreds of bytes of
+   *  frames between the "Error: …" headline and the banner at the end. */
   private stderrTail = ''
   /** set the moment the process leaves the stage: the readable reason */
   exitError?: string
@@ -177,7 +274,7 @@ class McpConnection {
     // network error, old node, missing API key, bad package) is surfaced.
     this.proc.stderr!.setEncoding('utf8')
     this.proc.stderr!.on('data', (chunk: string) => {
-      this.stderrTail = (this.stderrTail + chunk).slice(-1500)
+      this.stderrTail = (this.stderrTail + chunk).slice(-2500)
     })
     this.proc.on('exit', (code, signal) => {
       const why = signal ? `signal ${signal}` : `code ${code}`
@@ -212,12 +309,9 @@ class McpConnection {
     })
   }
 
-  /** compact the captured stderr: the last couple of non-empty lines —
-   *  enough to name the disease ("npm ERR! code ENOTFOUND"…), short enough
-   *  for a doctor line. */
+  /** compact the captured stderr into the diagnosis — see summarizeStderr */
   private stderrSummary(): string {
-    const lines = this.stderrTail.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
-    return lines.slice(-2).join(' | ').slice(0, 180)
+    return summarizeStderr(this.stderrTail)
   }
 
   private receive(msg: Record<string, unknown>) {
@@ -428,6 +522,7 @@ export class McpManager {
         tools: conn?.tools.length ?? 0,
         error: conn?.state === 'error' ? conn.error : undefined,
         note: conn?.via,
+        hint: conn?.state === 'error' && conn.error ? mcpFailureHint(conn.error, cfg.command) : undefined,
       }
     })
   }

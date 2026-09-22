@@ -3821,7 +3821,11 @@ export class TuiApp {
         actions.push({
           label: s.name,
           hint: String(state),
-          detail: s.error ? red(s.error.slice(0, 160)) : s.note ? yellow(s.note) : s.command.slice(0, 70),
+          detail: s.error
+            ? `${red(s.error.slice(0, 130))}${s.hint ? ` ${yellow(`→ ${s.hint.slice(0, 100)}`)}` : ''}`
+            : s.note
+              ? yellow(s.note)
+              : s.command.slice(0, 70),
           value: `server:${s.name}`,
         })
       }
@@ -3918,7 +3922,8 @@ export class TuiApp {
     for (const s of status) {
       const icon = s.state === 'ready' ? green('◉') : s.state === 'error' ? red('✗') : s.state === 'disabled' ? dim('○') : yellow('◌')
       this.println(`   ${icon} ${bold(padCol(s.name, 16))} ${dim(s.state)} · ${s.tools} tools${s.enabled === false ? dim(' (disabled)') : ''}`)
-      if (s.error) this.println(`      ${red(s.error.slice(0, 90))}`)
+      if (s.error) this.println(`      ${red(s.error.slice(0, 120))}`)
+      if (s.hint) this.println(`      ${yellow(`→ ${s.hint}`)}`)
     }
     this.println(dim('    tools: mcp_<server>_<tool> · permissions: /allow mcp_<server> · manage: /mcp'))
   }

@@ -1,6 +1,6 @@
 {
-  "version": "0.22.2",
+  "version": "0.22.3",
   "date": "2026-09-22",
-  "notes": "A dead MCP server used to report nothing but \"error — server exited (code 1)\": the reason it died (npm network error, old Node, missing launcher) was thrown away because stderr was never read. The full story is now captured and surfaced — doctor and /mcp name the disease, a missing npx transparently falls back to bunx on bun machines (same npm packages), and calls made after a death explain themselves. The navbar also grew a workspace segment, so the facts row reads build · 📂 my-project · model.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.22.2"
+  "notes": "v0.22.2 taught doctor to capture stderr, but a node crash still summarized as \"} | Node.js v24.20.0\" — the banner, not the disease. The summarizer now picks the actual diagnosis (the Error: headline plus its code), names a full disk plainly instead of quoting the package manager's multi-line essay, and attaches one actionable hint per known cause (disk full → free space; MODULE_NOT_FOUND via npx → clear the npx cache). Doctor also grew a disk-space check, so the #1 environmental killer of MCP servers is caught before the symptoms.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.22.3"
 }

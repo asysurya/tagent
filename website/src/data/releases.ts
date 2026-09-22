@@ -28,9 +28,43 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.22.2'
+export const LATEST = '0.22.3'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.22.3',
+    date: '2026-09-22',
+    title: 'MCP failures that say why — in plain language',
+    summary:
+      'v0.22.2 taught doctor to capture stderr, but a node crash still summarized as "} | Node.js v24.20.0" — the banner, not the disease. The summarizer now picks the actual diagnosis (the Error: headline plus its code), names a full disk plainly instead of quoting the package manager\u0027s multi-line essay, and attaches one actionable hint per known cause (disk full → free space; MODULE_NOT_FOUND via npx → clear the npx cache). Doctor also grew a disk-space check, so the #1 environmental killer of MCP servers is caught before the symptoms.',
+    stable: true,
+    sections: [
+      {
+        name: 'MCP: reasons a human can read',
+        items: [
+          'a node-style crash no longer surfaces "} | Node.js v24.20.0" — the `Error: Cannot find module \u0027zod\u0027` headline and its `code: \u0027MODULE_NOT_FOUND\u0027` are named, stack frames and version banners are dropped',
+          'ENOSPC ("No space left on device (os error 28)") is named plainly and flagged as a full disk; the package manager\u0027s hint essay is dropped',
+          'stderr tail raised from 1.5KB to 2.5KB so long node stacks no longer push the headline out of the window',
+        ],
+      },
+      {
+        name: 'MCP: one actionable hint per known cause',
+        items: [
+          'disk full → "free disk space (npm cache clean --force · bun pm cache rm · docker system prune), then /mcp reload"',
+          'MODULE_NOT_FOUND launched via npx/bunx → "broken npx cache (common after a full disk) — rm -rf ~/.npm/_npx, then /mcp reload"',
+          'network, permissions, port-in-use and connection-refused causes each map to their one fixing move; unknown causes show the raw reason only',
+          'hints appear in doctor, /mcp list and the /mcp menu',
+        ],
+      },
+      {
+        name: 'Doctor: disk-space check',
+        items: [
+          'new check right after the global dir: free bytes on the home filesystem (statfs, `df -k` fallback) — the disk npx/uvx install servers onto',
+          'under 256 MB free it fails with cleanup commands; under 1 GB it warns — before you spend minutes wondering why every server exits (code 1)',
+        ],
+      },
+    ],
+  },
   {
     version: '0.22.2',
     date: '2026-09-22',
