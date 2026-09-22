@@ -36,61 +36,63 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — Config sync: one private repo, every device
+## v__VER__ — OAuth login: one button, no token hunting
 
-Log in once and tagent now creates a private `tagent-config` repo that
-carries your WHOLE global config — providers, api keys, MCP servers,
-models, permissions, theme — sealed with AES-256-GCM and identical on
-every device. `/config` is the new cockpit (push · pull · add mcp ·
-add provider · keys), providers can hold SEVERAL named api keys, and
-`tagent start` warns every boot if the repo gets deleted on GitHub.
+`tagent auth --web` gets a **Connect with GitHub** button. Click it,
+GitHub opens with the code pre-filled, press **Authorize**, done —
+no creating tokens, no copy-pasting, no scopes to remember. The token
+arrives in tagent's credential store without ever being typed.
 
 ```
-\u2699 config sync \u2014 pushed \u2192 octocat/tagent-config
-\u2570\u2500 \U0001F916 build \u00b7 \U0001F4C2 tagent-proyek \u00b7 glm-4.7 \u00b7 \U0001F50C 2\u2713 31 \u00b7 4m \u2500\u256f
+  GitHub login — web connect
+
+  ✔ browser opened — press Connect with GitHub, then Authorize
+  waiting for the browser… Ctrl+C to cancel
+
+  ✔ logged in octocat
+  ⚙ config sync — pushed → octocat/tagent-config
 ```
 
-### The config repo — auto-created on auth
+### One-click OAuth (device flow, zero secrets shipped)
 
-- `tagent auth` (terminal, TUI /auth, web GUI) ensures a PRIVATE
-  login/tagent-config repo and pushes the global config into it —
-  the GitHub token never leaves the device's credential store
-- the vault carries everything: default provider/model, api keys,
-  the keychain, custom providers, MCP servers, permissions, fallback
-  chain, theme, caveman, compact, cache, diagnostics
-- pull = remote wins per key; push = local wins; conflicts abort
-  with "nothing was lost" — a defaults-only device can never
-  clobber a richer remote (every bootstrap pulls first)
+- the button appears when a GitHub OAuth App client id is configured:
+  `TAGENT_GH_CLIENT_ID`, config `github.clientId`, or the id baked
+  into the release — until then the page is the classic paste-a-PAT
+  form, unchanged
+- "Paste a token instead →" stays one click away even with OAuth on;
+  the old flow never blocks you
+- `tagent auth --device` now prints the one-click link too — GitHub
+  opens with the code pre-filled instead of typing ABCD-1234
+- `tagent auth` (picker) advertises "press Authorize on GitHub, done"
+  when OAuth is live
 
-### /config — the global cockpit
+### The flow under the button
 
-- `/config push` \u00b7 `/config pull` \u2014 explicit whole-config sync;
-  `/config status` shows repo health (exists / deleted / offline),
-  last push & pull, key counts per provider
-- `/config add mcp` \u2014 global servers (every project, hot-loads in the
-  current one too); `/config add provider`; `/config use <prov>/<model>`
-  sets the global default
-- `/config keys` \u2014 the multi-key manager: \u25cf active / \u25cb idle,
-  switch, remove, or stack a key into the fallback chain
+- click → 302 to github.com/login/device/<code>?user_code=… → the
+  CLI polls GitHub on its own clock until you authorize (or deny)
+- the code shows on the page (with a copy button) if GitHub didn't
+  open — UserLAnd/Termux friendly, same as before
+- ✔ Connected card + the terminal continues into the v0.24 config
+  bootstrap (private tagent-config repo, whole config sync)
 
-### Multi-key everywhere
+### Fixes riding along
 
-- several named keys per provider ("work", "backup", "free tier");
-  the ACTIVE one stays apiKeys[provider] so every resolution path
-  works untouched
-- `/model` asks which key to use when a provider has several;
-  `/apikey` registers every key into the keychain (first = "main")
-- the keychain rides the config repo AND the project vault, so it
-  shows up on every device
+- device-flow `slow_down` no longer kills the poll loop — GitHub's
+  back-off is honored now (was: fatal error)
+- the login server lingers ~2s after success so the browser always
+  gets its final "status: ok" poll and shows the ✔ card (was: the
+  page could hit a dead port at the exact moment of success)
+- security shape unchanged: loopback-only bind, one-time secret URL
+  path, origin checks on POST, one-shot after login, `no-store`
 
-### Boot health + doctor
+### Setup (one-time, ship the button to every user)
 
-- every `tagent start`: repo deleted \u2192 yellow banner (until
-  /config push recreates it); remote moved \u2192 pulled + applied;
-  local moved \u2192 pushed \u2014 devices converge with zero clicks
-- offline stays silent, the next start checks again; existing
-  installs bootstrap the repo lazily after upgrading
-- `tagent doctor` reports the config repo + the keychain
+GitHub requires a registered OAuth App for the flow. Create one at
+github.com/settings/developers (any name, homepage = the tagent site,
+callback = anything — device flow ignores it), then put the client id
+in `TAGENT_GH_CLIENT_ID` or `tagent config github.clientId` — or bake
+it into `BUILTIN_OAUTH_CLIENT_ID` in packages/core/src/github.ts and
+every install gets the button by default.
 EOF
 )
 

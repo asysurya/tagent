@@ -1,6 +1,6 @@
 {
-  "version": "0.24.0",
+  "version": "0.25.0",
   "date": "2026-09-23",
-  "notes": "Logging in now auto-creates a private tagent-config repo that carries your WHOLE global config — providers, api keys, models, MCP servers, permissions, theme — encrypted, identical on every device. /config is the new cockpit: add mcp/providers/keys, push and pull the config, and manage the new multi-key keychain (several named API keys per provider — pick the active one in /model, or stack them into the fallback chain). `tagent start` checks the repo every boot and warns if it was deleted on GitHub; /config push recreates it. The project vault now travels the keychain too.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.24.0"
+  "notes": "The web-connect page gets a \"Connect with GitHub\" button: click it, GitHub opens with the code pre-filled, press Authorize, done — no creating tokens, no copy-pasting scopes. It is the GitHub OAuth device flow (needs a registered OAuth App id via TAGENT_GH_CLIENT_ID or config github.clientId; without one the page stays the classic paste-a-PAT form). \"Paste a token instead\" stays one click away, tagent auth --device prints the one-click link too, slow_down no longer kills the poll loop, and the login server lingers 2s after success so the browser always shows the ✔ Connected card.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.25.0"
 }

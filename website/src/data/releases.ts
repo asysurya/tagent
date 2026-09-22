@@ -28,9 +28,43 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.24.0'
+export const LATEST = '0.25.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.25.0',
+    date: '2026-09-23',
+    title: 'OAuth login — one button, no token hunting',
+    summary:
+      'The web-connect page gets a "Connect with GitHub" button: click it, GitHub opens with the code pre-filled, press Authorize, done — no creating tokens, no copy-pasting scopes. It is the GitHub OAuth device flow (needs a registered OAuth App id via TAGENT_GH_CLIENT_ID or config github.clientId; without one the page stays the classic paste-a-PAT form). "Paste a token instead" stays one click away, tagent auth --device prints the one-click link too, slow_down no longer kills the poll loop, and the login server lingers 2s after success so the browser always shows the ✔ Connected card.',
+    stable: true,
+    sections: [
+      {
+        name: 'One-click OAuth (device flow, zero secrets shipped)',
+        items: [
+          'the button appears when a client id is configured: TAGENT_GH_CLIENT_ID env, config github.clientId, or the id baked into the release (BUILTIN_OAUTH_CLIENT_ID — empty until the tagent OAuth App exists, then every install gets the button by default)',
+          'click → 302 to github.com/login/device/<code>?user_code=… → the CLI polls GitHub on its own clock until you authorize (or deny); the code shows on the page with a copy button if GitHub didn\u2019t open — UserLAnd/Termux friendly',
+          '"Paste a token instead →" keeps the classic PAT flow one click away even with OAuth on; without a client id the page renders exactly the old paste-first form',
+          'tagent auth --device prints the one-click link too (verification_uri_complete) — GitHub opens with the code pre-filled instead of typing ABCD-1234',
+        ],
+      },
+      {
+        name: 'Fixes riding along',
+        items: [
+          'device-flow slow_down no longer kills the poll loop — GitHub\u2019s back-off is honored (was a fatal error); the poll is now a per-round-trip API (pollDeviceTokenOnce) the web page drives at its own cadence',
+          'the login server lingers ~2s after success so the browser\u2019s final poll gets "status: ok" and shows the ✔ Connected card — previously the page could hit a dead port at the exact moment of success',
+          'security shape unchanged: loopback-only bind, one-time secret URL path, origin checks on POST, one-shot after login, no-store',
+        ],
+      },
+      {
+        name: 'Setup (one-time, ship the button to every user)',
+        items: [
+          'GitHub requires a registered OAuth App: create one at github.com/settings/developers (any name, homepage = the tagent site, callback URL = anything — device flow ignores it)',
+          'then set TAGENT_GH_CLIENT_ID or tagent config github.clientId for yourself — or bake the id into BUILTIN_OAUTH_CLIENT_ID in packages/core/src/github.ts and release: every install gets the button by default',
+        ],
+      },
+    ],
+  },
   {
     version: '0.24.0',
     date: '2026-09-23',

@@ -31,8 +31,25 @@ export interface DeviceCodeStart {
   device_code: string
   user_code: string
   verification_uri: string
+  /** https://github.com/login/device/<code>?user_code=XXXX-XXXX — opens with the code pre-filled. */
+  verification_uri_complete?: string
   expires_in: number
   interval: number
+}
+
+/**
+ * The tagent OAuth App id, baked in once the app exists on github.com/settings/developers.
+ * Empty until then — `tagent auth` falls back to paste-a-PAT when unset.
+ * Override for testing / self-hosted builds: TAGENT_GH_CLIENT_ID or config github.clientId.
+ */
+export const BUILTIN_OAUTH_CLIENT_ID = ''
+
+/** Resolution order: env override → the baked-in app → a client id saved in config. */
+export function getOAuthClientId(
+  envValue?: string,
+  configValue?: string,
+): string {
+  return (envValue && envValue.trim()) || BUILTIN_OAUTH_CLIENT_ID || (configValue && configValue.trim()) || ''
 }
 
 /** Start GitHub OAuth device flow (requires a client_id from a GitHub OAuth App). */
@@ -46,28 +63,49 @@ export async function startDeviceLogin(clientId: string): Promise<DeviceCodeStar
   return (await res.json()) as DeviceCodeStart
 }
 
+/** One round-trip of the device-flow token poll — so UIs can poll on their own clock. */
+export type DevicePollResult =
+  | { status: 'ok'; token: string }
+  | { status: 'pending' }
+  | { status: 'slow_down' }
+  | { status: 'error'; error: string }
+
+/** Poll github.com/login/oauth/access_token exactly once. */
+export async function pollDeviceTokenOnce(
+  clientId: string,
+  deviceCode: string,
+): Promise<DevicePollResult> {
+  const res = await fetch('https://github.com/login/oauth/access_token', {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({
+      client_id: clientId,
+      device_code: deviceCode,
+      grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+    }),
+  })
+  const json = (await res.json().catch(() => ({}))) as Record<string, string>
+  if (json.access_token) return { status: 'ok', token: json.access_token }
+  if (json.error === 'authorization_pending') return { status: 'pending' }
+  if (json.error === 'slow_down') return { status: 'slow_down' }
+  return { status: 'error', error: `device flow: ${json.error || `HTTP ${res.status}`}` }
+}
+
 export async function pollDeviceToken(
   clientId: string,
   start: DeviceCodeStart,
 ): Promise<string> {
   const deadline = Date.now() + (start.expires_in ?? 900) * 1000
-  const intervalMs = Math.max((start.interval ?? 5) * 1000, 3000)
+  let intervalMs = Math.max((start.interval ?? 5) * 1000, 3000)
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, intervalMs))
-    const res = await fetch('https://github.com/login/oauth/access_token', {
-      method: 'POST',
-      headers: { accept: 'application/json', 'content-type': 'application/json' },
-      body: JSON.stringify({
-        client_id: clientId,
-        device_code: start.device_code,
-        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-      }),
-    })
-    const json = (await res.json()) as Record<string, string>
-    if (json.access_token) return json.access_token
-    if (json.error && json.error !== 'authorization_pending') {
-      throw new Error(`device flow: ${json.error}`)
+    const r = await pollDeviceTokenOnce(clientId, start.device_code)
+    if (r.status === 'ok') return r.token
+    if (r.status === 'slow_down') {
+      intervalMs = Math.min(intervalMs + 5000, 30000) // GitHub asked to back off
+      continue
     }
+    if (r.status === 'error') throw new Error(r.error)
   }
   throw new Error('device flow timed out')
 }

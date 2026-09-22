@@ -55,6 +55,7 @@ import {
   validatePat,
   startDeviceLogin,
   pollDeviceToken,
+  getOAuthClientId,
   getCredential,
   setCredential,
   authStatus,
@@ -599,13 +600,18 @@ async function mainAuth() {
     return
   }
 
-  // device flow — explicit opt-in; needs an OAuth client id we don't ship
+  // device flow — explicit opt-in; the web page embeds the same flow as a
+  // one-click button when a client id is available
   if (has('--device')) {
-    const clientId = loadConfig(root).github?.clientId || process.env.TAGENT_GH_CLIENT_ID || ''
+    const clientId = getOAuthClientId(process.env.TAGENT_GH_CLIENT_ID, loadConfig(root).github?.clientId)
     if (!clientId) die('device flow needs TAGENT_GH_CLIENT_ID (a GitHub OAuth app client id) — or use a PAT: tagent auth')
     try {
       const start = await startDeviceLogin(clientId)
       console.log(bold('\n  GitHub login — device flow\n'))
+      // one-click link first: opens GitHub with the code pre-filled
+      if (start.verification_uri_complete) {
+        console.log(`  one click  ${start.verification_uri_complete}`)
+      }
       console.log(`  open  ${start.verification_uri}`)
       console.log(`  code  ${bold(start.user_code)}\n`)
       console.log('  waiting for authorization…')
@@ -620,10 +626,21 @@ async function mainAuth() {
   // interactive terminal → the picker (web connect is the happy path).
   // Piped/scripted sessions skip straight to the paste/pipe prompt below.
   if (process.stdin.isTTY) {
+    const oauthReady = !!getOAuthClientId(
+      process.env.TAGENT_GH_CLIENT_ID,
+      loadConfig(root).github?.clientId,
+    )
     const pick = await select<string>({
       title: 'GitHub login — pick a method',
       items: [
-        { label: 'Web connect', value: 'web', hint: 'recommended', detail: 'a browser page opens — paste the token there' },
+        {
+          label: 'Web connect',
+          value: 'web',
+          hint: 'recommended',
+          detail: oauthReady
+            ? 'a browser page opens — press Authorize on GitHub, done'
+            : 'a browser page opens — paste the token there',
+        },
         { label: 'Paste token', value: 'paste', hint: 'right here', detail: 'github.com/settings/tokens · scope repo' },
       ],
       footer: 'OAuth device flow: tagent auth --device',
@@ -663,15 +680,25 @@ async function mainAuth() {
   }
 }
 
-/** web connect — the browser flow: a one-time page on 127.0.0.1, the token
+/** web connect — the browser flow: a one-time page on 127.0.0.1 (one-click
+ *  OAuth button when a client id is configured, PAT paste always), the token
  *  never typed in the terminal at all. See web-auth.ts for the security shape. */
 async function runWebConnect(root: string): Promise<void> {
   console.log(bold('\n  GitHub login — web connect\n'))
+  const oauthClientId = getOAuthClientId(
+    process.env.TAGENT_GH_CLIENT_ID,
+    loadConfig(root).github?.clientId,
+  )
   try {
     const r = await runWebLogin({
+      oauth: oauthClientId ? { clientId: oauthClientId } : undefined,
       onReady: (url) => {
         if (openBrowser(url)) {
-          console.log(`  ✔ browser opened — ${dim('paste the token on that page')}`)
+          console.log(
+            `  ✔ browser opened — ${dim(
+              oauthClientId ? 'press Connect with GitHub, then Authorize' : 'paste the token on that page',
+            )}`,
+          )
         } else {
           // no opener here (UserLAnd, headless box, ssh without -X…) — the
           // URL is the whole UI. On UserLAnd the phone's own browser reaches

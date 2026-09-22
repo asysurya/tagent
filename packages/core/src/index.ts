@@ -69,9 +69,10 @@ export {
   relayUrl, relaysPath, renderRelayViewerHtml, type RelayEntry,
 } from './relay'
 export {
-  startDeviceLogin, pollDeviceToken, validatePat, ensureRepo, ensureRepoDetailed,
+  startDeviceLogin, pollDeviceToken, pollDeviceTokenOnce, validatePat, ensureRepo, ensureRepoDetailed,
   pushWorkspace, defaultRepoName, authUrl, DEFAULT_REMOTE_BASE, deleteRepo,
-  type DeviceCodeStart, type EnsureRepoResult, type PushResult, type PushOpts,
+  getOAuthClientId, BUILTIN_OAUTH_CLIENT_ID,
+  type DeviceCodeStart, type DevicePollResult, type EnsureRepoResult, type PushResult, type PushOpts,
 } from './github'
 export {
   listProjects, getLinkedProject, linkProject, unlinkProject, markSynced,
