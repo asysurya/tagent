@@ -38,29 +38,45 @@ export interface DeviceCodeStart {
 }
 
 /**
- * The tagent OAuth App id, baked in once the app exists on github.com/settings/developers.
- * Empty until then — `tagent auth` falls back to paste-a-PAT when unset.
- * Override for testing / self-hosted builds: TAGENT_GH_CLIENT_ID or config github.clientId.
+ * The tagent OAuth App id, baked in — every install gets the one-click
+ * "Connect with GitHub" device-flow button out of the box.
+ * Override for testing / self-hosted builds: TAGENT_GH_CLIENT_ID or config
+ * github.clientId (both win over this).
  */
-export const BUILTIN_OAUTH_CLIENT_ID = ''
+export const BUILTIN_OAUTH_CLIENT_ID = 'Ov23liIsKIosW40FwC4G'
 
-/** Resolution order: env override → the baked-in app → a client id saved in config. */
+/** Resolution order: env override → the user's config → the baked-in app. */
 export function getOAuthClientId(
   envValue?: string,
   configValue?: string,
 ): string {
-  return (envValue && envValue.trim()) || BUILTIN_OAUTH_CLIENT_ID || (configValue && configValue.trim()) || ''
+  return (
+    (envValue && envValue.trim()) ||
+    (configValue && configValue.trim()) ||
+    BUILTIN_OAUTH_CLIENT_ID ||
+    ''
+  )
 }
 
 /** Start GitHub OAuth device flow (requires a client_id from a GitHub OAuth App). */
 export async function startDeviceLogin(clientId: string): Promise<DeviceCodeStart> {
-  const res = await fetch(`${GH_API.replace('https://api', 'https://github')}/login/device/code`, {
+  const res = await fetch('https://github.com/login/device/code', {
     method: 'POST',
     headers: { accept: 'application/json', 'content-type': 'application/json' },
     body: JSON.stringify({ client_id: clientId, scope: 'repo workflow' }),
   })
   if (!res.ok) throw new Error(`device code failed: HTTP ${res.status}`)
   return (await res.json()) as DeviceCodeStart
+}
+
+/** The best URL to hand the user: GitHub (unlike the RFC suggests) never sends
+ *  verification_uri_complete, so we append ?user_code= ourselves — harmless
+ *  when GitHub ignores it, one less thing to type when it doesn't. */
+export function deviceUrl(start: DeviceCodeStart): string {
+  return (
+    start.verification_uri_complete ??
+    `${start.verification_uri}?user_code=${encodeURIComponent(start.user_code)}`
+  )
 }
 
 /** One round-trip of the device-flow token poll — so UIs can poll on their own clock. */

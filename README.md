@@ -76,7 +76,7 @@ process when you want a browser. Same engine, same sessions, same permissions.
 | 📝 **AI ask forms** | `ask_user` tool — the agent interviews you through interactive forms: option / multi-option / input fields, add your own options, optional notes box; answers flow back into the run (TUI overlay · GUI dialog · headless-safe) |
 | 🛠 **Z.ai models config** | The built-in provider's model list is data: edit `~/.tagent/zai-models.json` (or `<workspace>/.tagent/zai-models.json`) to add/relabel/flag models — no release wait |
 | 🗄️ **Storage adapters** | Local today, MEGA.nz (E2E-encrypted snapshots & memory) implemented as an experimental adapter |
-| 🐙 **GitHub** | PAT, web-connect or device-flow auth (`tagent auth`) → auto private repo + one-click workspace push · multi-device safe (fetch+rebase before push) |
+| 🐙 **GitHub** | One-click OAuth login (device flow, app id bundled — `tagent auth` → press Authorize), web-connect page or PAT → auto private repo + one-click workspace push · multi-device safe (fetch+rebase before push) |
 | 📋 **Worklog + todos** | Live todo list + timestamped WORKLOG.md journal the agent keeps as it works |
 | 🦴 **Caveman mode** | Token saver that SUMMARIZES instead of truncating: big tool outputs become head+tail digests with explicit elision markers, repeated lines collapse (`×N`), JSON gets minified, old write_file echoes are slimmed to path+preview, replies go terse — no information silently lost |
 | 🔗 **Share links** | Export any session as a standalone read-only HTML file |
@@ -544,6 +544,9 @@ export const hooks = {
 - [x] MCP reasons in plain language: node-crash banner junk dropped, ENOSPC named as a full disk, one actionable hint per known cause + doctor disk-space check (v0.22.3)
 - [x] TUI maximalization: 6 themes (/theme — dark · light · tokyo-night · dracula · nord · gruvbox, live switch), tool calls in per-category colored boxes (bash tomato · mcp red…), done-stats & sync banner boxes, live markdown while streaming, 1-9 digit picks + tap zones for touch terminals, no more input-box/reply collisions on narrow screens (v0.23.0)
 - [x] Chips: tool titles & report headers on a filled background — per-theme badge tables, status pills for every result line, MCP/sync/skills/memory/checkpoints reports open with themed chips, doctor matches on the CLI side (v0.23.1)
+- [x] Config sync: auth auto-creates a private tagent-config repo carrying the WHOLE global config encrypted; /config cockpit (push/pull/add/keys/use), multi-key keychain, /model key picker, boot warns when the repo is deleted (v0.24.0)
+- [x] OAuth login: the web-connect page grows a "Connect with GitHub" button — device flow, slow_down back-off honored, the login server lingers so the browser shows ✔ (v0.25.0)
+- [x] The tagent OAuth App is registered — the button ships ON for everyone, plus the fatal github.github.com endpoint fix and env → config → bundled client-id order (v0.25.1)
 
 Ideas for the next versions (unordered, unpromised):
 

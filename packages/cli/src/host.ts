@@ -55,6 +55,8 @@ import {
   diagnosticsCommand,
   runDiagnostics,
   compactSession as compactMessages,
+  getOAuthClientId,
+  deviceUrl,
   modelContextWindow,
   estimateMessageTokens,
   renderContextBar,
@@ -895,10 +897,10 @@ export class AgentHost {
   /* GitHub — PAT, device flow, push                                     */
   /* ------------------------------------------------------------------ */
 
-  /** clientId for the device flow: config → env. Tagent's own OAuth app is
-   *  bundled; users can override with TAGENT_GH_CLIENT_ID. */
+  /** clientId for the device flow — the canonical resolution: env → config
+   *  → the OAuth app bundled with the release (getOAuthClientId). */
   private deviceClientId(): string {
-    return this.cfg.github?.clientId || process.env.TAGENT_GH_CLIENT_ID || ''
+    return getOAuthClientId(process.env.TAGENT_GH_CLIENT_ID, this.cfg.github?.clientId)
   }
 
   async githubPat(token: string) {
@@ -923,7 +925,7 @@ export class AgentHost {
     this.deviceStart = await startDeviceLogin(clientId)
     return {
       user_code: this.deviceStart.user_code,
-      verification_uri: this.deviceStart.verification_uri,
+      verification_uri: deviceUrl(this.deviceStart),
       expires_in: this.deviceStart.expires_in,
       interval: this.deviceStart.interval,
     }

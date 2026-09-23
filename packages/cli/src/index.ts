@@ -55,6 +55,7 @@ import {
   validatePat,
   startDeviceLogin,
   pollDeviceToken,
+  deviceUrl,
   getOAuthClientId,
   getCredential,
   setCredential,
@@ -608,12 +609,9 @@ async function mainAuth() {
     try {
       const start = await startDeviceLogin(clientId)
       console.log(bold('\n  GitHub login — device flow\n'))
-      // one-click link first: opens GitHub with the code pre-filled
-      if (start.verification_uri_complete) {
-        console.log(`  one click  ${start.verification_uri_complete}`)
-      }
-      console.log(`  open  ${start.verification_uri}`)
-      console.log(`  code  ${bold(start.user_code)}\n`)
+      // best link first: GitHub opens with the code pre-filled when possible
+      console.log(`  open   ${deviceUrl(start)}`)
+      console.log(`  code   ${bold(start.user_code)}\n`)
       console.log('  waiting for authorization…')
       const token = await pollDeviceToken(clientId, start)
       await finishLogin(root, token)

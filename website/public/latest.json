@@ -1,6 +1,6 @@
 {
-  "version": "0.25.0",
+  "version": "0.25.1",
   "date": "2026-09-23",
-  "notes": "The web-connect page gets a \"Connect with GitHub\" button: click it, GitHub opens with the code pre-filled, press Authorize, done — no creating tokens, no copy-pasting scopes. It is the GitHub OAuth device flow (needs a registered OAuth App id via TAGENT_GH_CLIENT_ID or config github.clientId; without one the page stays the classic paste-a-PAT form). \"Paste a token instead\" stays one click away, tagent auth --device prints the one-click link too, slow_down no longer kills the poll loop, and the login server lingers 2s after success so the browser always shows the ✔ Connected card.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.25.0"
+  "notes": "The tagent OAuth App is registered, and its client id ships inside every binary: the \"Connect with GitHub\" button now appears out of the box — no TAGENT_GH_CLIENT_ID, no config, no token hunting. Along the way a fatal bug surfaced: the device-code request went to github.github.com (a bad string replace), so v0.25.0’s flow never actually reached GitHub. That is fixed, the device page now opens with ?user_code= prefill where possible, and client-id resolution is now env → config → bundled — your own github.clientId finally overrides the built-in one.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.25.1"
 }

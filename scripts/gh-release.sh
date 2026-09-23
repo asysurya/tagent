@@ -36,12 +36,13 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — OAuth login: one button, no token hunting
+## v__VER__ — the OAuth App is live: one-click login for everyone
 
-`tagent auth --web` gets a **Connect with GitHub** button. Click it,
-GitHub opens with the code pre-filled, press **Authorize**, done —
-no creating tokens, no copy-pasting, no scopes to remember. The token
-arrives in tagent's credential store without ever being typed.
+The tagent OAuth App is registered and its client id ships inside every
+binary — the **Connect with GitHub** button appears out of the box now:
+no `TAGENT_GH_CLIENT_ID`, no config, no token hunting. One click,
+**Authorize**, done — the token lands in tagent's credential store
+without ever being typed.
 
 ```
   GitHub login — web connect
@@ -53,46 +54,36 @@ arrives in tagent's credential store without ever being typed.
   ⚙ config sync — pushed → octocat/tagent-config
 ```
 
-### One-click OAuth (device flow, zero secrets shipped)
+### One-click login, on by default
 
-- the button appears when a GitHub OAuth App client id is configured:
-  `TAGENT_GH_CLIENT_ID`, config `github.clientId`, or the id baked
-  into the release — until then the page is the classic paste-a-PAT
-  form, unchanged
-- "Paste a token instead →" stays one click away even with OAuth on;
-  the old flow never blocks you
-- `tagent auth --device` now prints the one-click link too — GitHub
-  opens with the code pre-filled instead of typing ABCD-1234
-- `tagent auth` (picker) advertises "press Authorize on GitHub, done"
-  when OAuth is live
+- `BUILTIN_OAUTH_CLIENT_ID` is set — every install gets the button,
+  `tagent auth --device` works without env vars, the GUI/TUI options
+  light up
+- client-id resolution is now env (`TAGENT_GH_CLIENT_ID`) → your config
+  (`github.clientId`) → the bundled app — your config finally overrides
+  the built-in one
+- the device page opens with `?user_code=` appended — GitHub doesn't
+  send `verification_uri_complete`, so we try the prefill ourselves;
+  the page still shows the code big with a copy button as the fallback
 
-### The flow under the button
+### Fixes
 
-- click → 302 to github.com/login/device/<code>?user_code=… → the
-  CLI polls GitHub on its own clock until you authorize (or deny)
-- the code shows on the page (with a copy button) if GitHub didn't
-  open — UserLAnd/Termux friendly, same as before
-- ✔ Connected card + the terminal continues into the v0.24 config
-  bootstrap (private tagent-config repo, whole config sync)
+- **fatal**: the device-code request went to `github.github.com` (a
+  broken string replace) — GitHub answered 405 every time, so the
+  v0.25.0 button never worked against real GitHub. Now it hits
+  `https://github.com/login/device/code`
+- the GUI host had its own client-id resolution (config → env, no
+  builtin) — it could disagree with the CLI; both now share
+  `getOAuthClientId`
 
-### Fixes riding along
+### Still true from v0.25.0
 
-- device-flow `slow_down` no longer kills the poll loop — GitHub's
-  back-off is honored now (was: fatal error)
-- the login server lingers ~2s after success so the browser always
-  gets its final "status: ok" poll and shows the ✔ card (was: the
-  page could hit a dead port at the exact moment of success)
-- security shape unchanged: loopback-only bind, one-time secret URL
-  path, origin checks on POST, one-shot after login, `no-store`
-
-### Setup (one-time, ship the button to every user)
-
-GitHub requires a registered OAuth App for the flow. Create one at
-github.com/settings/developers (any name, homepage = the tagent site,
-callback = anything — device flow ignores it), then put the client id
-in `TAGENT_GH_CLIENT_ID` or `tagent config github.clientId` — or bake
-it into `BUILTIN_OAUTH_CLIENT_ID` in packages/core/src/github.ts and
-every install gets the button by default.
+- "Paste a token instead →" stays one click away — the PAT flow never
+  blocks you
+- device-flow `slow_down` backs off instead of dying; the login server
+  lingers ~2s so the browser always shows the ✔ Connected card
+- security shape: loopback-only bind, one-time secret URL path, origin
+  checks on POST, one-shot after login, `no-store`
 EOF
 )
 
@@ -102,7 +93,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — OAuth login: one button, no token hunting" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — one-click GitHub login, on by default" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")

@@ -38,6 +38,7 @@ import {
   validatePat,
   startDeviceLogin,
   pollDeviceTokenOnce,
+  deviceUrl,
   type DeviceCodeStart,
   type DevicePollResult,
 } from '@tagent/core'
@@ -481,7 +482,7 @@ export function runWebLogin(opts: WebLoginOptions = {}): Promise<WebLoginResult>
         if (done) return redirect(pagePath) // page shows the ✔ card (data-done)
         if (flow && !flow.error && !flow.token) {
           // already in flight (double-click, second tab) — same code page
-          return redirect(flow.start.verification_uri_complete ?? flow.start.verification_uri)
+          return redirect(deviceUrl(flow.start))
         }
         try {
           const start = oauth.start(oauth.clientId)
@@ -489,7 +490,7 @@ export function runWebLogin(opts: WebLoginOptions = {}): Promise<WebLoginResult>
           void start
             .then((s) => {
               runFlow(s)
-              redirect(s.verification_uri_complete ?? s.verification_uri)
+              redirect(deviceUrl(s))
             })
             .catch((e) => {
               const msg = encodeURIComponent(

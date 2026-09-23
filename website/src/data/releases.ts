@@ -28,9 +28,34 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.25.0'
+export const LATEST = '0.25.1'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.25.1',
+    date: '2026-09-23',
+    title: 'The OAuth App is live — one-click login for everyone',
+    summary:
+      'The tagent OAuth App is registered, and its client id ships inside every binary: the "Connect with GitHub" button now appears out of the box — no TAGENT_GH_CLIENT_ID, no config, no token hunting. Along the way a fatal bug surfaced: the device-code request went to github.github.com (a bad string replace), so v0.25.0\u2019s flow never actually reached GitHub. That is fixed, the device page now opens with ?user_code= prefill where possible, and client-id resolution is now env → config → bundled — your own github.clientId finally overrides the built-in one.',
+    stable: true,
+    sections: [
+      {
+        name: 'One-click login, on by default',
+        items: [
+          'BUILTIN_OAUTH_CLIENT_ID is set — every install gets the Connect with GitHub button, tagent auth --device works without env vars, and the GUI/TUI device-flow options light up',
+          'client-id resolution is now env (TAGENT_GH_CLIENT_ID) → your config (github.clientId) → the bundled app — previously the baked id would have shadowed your config',
+          'the device page opens with ?user_code=<code> appended — GitHub doesn\u2019t send verification_uri_complete, so we try the query-param prefill ourselves; the page still shows the code big with a copy button as the fallback',
+        ],
+      },
+      {
+        name: 'Fixes',
+        items: [
+          'device flow was hitting https://github.github.com/login/device/code (a broken template replace: \u2018https://api.github.com\u2019 \u2192 \u2018https://github\u2019) — GitHub answered 405 every time, so the v0.25.0 button never worked against real GitHub (tests used a mock, which is why it slipped through); the endpoint is now the correct https://github.com/login/device/code',
+          'host.ts had its own client-id resolution with the opposite precedence (config → env, no builtin) — the GUI could disagree with the CLI; both now share getOAuthClientId',
+        ],
+      },
+    ],
+  },
   {
     version: '0.25.0',
     date: '2026-09-23',

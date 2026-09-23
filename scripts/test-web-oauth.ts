@@ -34,10 +34,11 @@ async function main() {
   const realFetch = globalThis.fetch
   const savedEnv = process.env.TAGENT_GH_CLIENT_ID
   delete process.env.TAGENT_GH_CLIENT_ID
-  check('no client id anywhere → empty', getOAuthClientId(undefined, undefined) === '')
+  check('builtin id is shipped and looks like a GitHub OAuth id (Ov23…)', BUILTIN_OAUTH_CLIENT_ID.startsWith('Ov23') && BUILTIN_OAUTH_CLIENT_ID.length >= 20)
+  check('no client id anywhere → falls back to builtin', getOAuthClientId(undefined, undefined) === BUILTIN_OAUTH_CLIENT_ID)
   check('env wins when present', getOAuthClientId('env-id', 'cfg-id') === 'env-id')
-  check('config used without env', getOAuthClientId(undefined, 'cfg-id') === 'cfg-id')
-  check('builtin is the shipped default (empty until the OAuth app exists)', BUILTIN_OAUTH_CLIENT_ID === '')
+  check('config beats builtin (user override)', getOAuthClientId(undefined, 'cfg-id') === 'cfg-id')
+  check('whitespace-only env loses to config', getOAuthClientId('  ', 'cfg-id') === 'cfg-id')
 
   // pollDeviceTokenOnce — against a mocked github.com
   const polls: Array<Record<string, string>> = [

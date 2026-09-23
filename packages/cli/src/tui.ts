@@ -1723,7 +1723,7 @@ export class Tui {
     this.println(bold('  GitHub login'))
     const choice = await this.pick(
       [
-        { label: 'device flow', hint: 'no secrets pasted', detail: 'needs TAGENT_GH_CLIENT_ID', value: 'device' },
+        { label: 'device flow', hint: 'no secrets pasted', detail: 'one button on GitHub', value: 'device' },
         { label: 'personal access token', hint: 'works everywhere', value: 'pat' },
       ],
       'login method',

@@ -69,7 +69,7 @@ export {
   relayUrl, relaysPath, renderRelayViewerHtml, type RelayEntry,
 } from './relay'
 export {
-  startDeviceLogin, pollDeviceToken, pollDeviceTokenOnce, validatePat, ensureRepo, ensureRepoDetailed,
+  startDeviceLogin, pollDeviceToken, pollDeviceTokenOnce, deviceUrl, validatePat, ensureRepo, ensureRepoDetailed,
   pushWorkspace, defaultRepoName, authUrl, DEFAULT_REMOTE_BASE, deleteRepo,
   getOAuthClientId, BUILTIN_OAUTH_CLIENT_ID,
   type DeviceCodeStart, type DevicePollResult, type EnsureRepoResult, type PushResult, type PushOpts,
