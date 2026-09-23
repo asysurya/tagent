@@ -5,6 +5,41 @@ packages/core/src/tools/worklog.ts). Append-only; every agent adds a
 section per task. Fresh agents: read top-down before working.
 
 ---
+Task ID: 9
+Agent: Super Z (main)
+Task: Release v0.27.0 — ship the async-subagent stack (Task 8).
+
+Work Log:
+- Bumped packages/core/src/version.ts CURRENT_VERSION 0.26.0 → 0.27.0.
+- website/src/data/releases.ts: v0.27.0 entry at the top (5 sections:
+  background subagents / monitoring / 3-lane fallback / /config add·apply /
+  fixes+internals) + LATEST bumped to 0.27.0.
+- scripts/gh-release.sh: BODY heredoc replaced with the v0.27.0 notes
+  (incl. the delivery-flow diagram); release name "async subagents, 3-lane
+  fallback, /config add/apply"; bash -n passed.
+- bun scripts/sync-latest.ts → website/public/latest.json serves 0.27.0.
+- Website production build OK (all routes prerendered).
+- bash scripts/gh-release.sh <token-from-remote> 0.27.0: 6 binaries
+  (~564MB) + SHA256SUMS.txt all uploaded; committed 1576abd + pushed
+  (babe6dd..1576abd).
+- Verified live: by-ID API shows 7 assets all "uploaded" (id 394472720,
+  published 2026-09-23T09:00:16Z); raw latest.json serves 0.27.0; asset
+  URL 302→200 with correct content-length. NOTE: /releases/tags/<tag> and
+  the releases LIST kept showing assets:0 for a while right after upload —
+  propagation lag, the by-ID endpoint is the authoritative check.
+
+Stage Summary:
+- v0.27.0 is LIVE: https://github.com/asysurya/tagent/releases/tag/v0.27.0
+- Ships: background subagents (task {background:true} → a1/a2… instantly;
+  mid-run [SUBAGENT REPORT] injection or auto-resume after run end, never
+  asking the user; notify "subagent a1 finished"), subs tool + /subs +
+  daemon subs:view monitoring, subagents.maxParallel limit (/config subs),
+  3-lane fallback (main·subagent·vision, /fallback reworked), /config
+  add·apply template, chatSend race fix. 40 new hermetic checks, all
+  suites green.
+- Update-check: old installs see "0.27.0 available" within a day.
+
+---
 Task ID: 8
 Agent: Super Z (main)
 Task: Async background subagents + /config add/apply rework + 3-lane
