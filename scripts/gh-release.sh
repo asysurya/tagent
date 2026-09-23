@@ -36,54 +36,66 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — the OAuth App is live: one-click login for everyone
+## v__VER__ — the delegation stack: subagents, model roles, deep vision QA
 
-The tagent OAuth App is registered and its client id ships inside every
-binary — the **Connect with GitHub** button appears out of the box now:
-no `TAGENT_GH_CLIENT_ID`, no config, no token hunting. One click,
-**Authorize**, done — the token lands in tagent's credential store
-without ever being typed.
+Subagents are real now. The main agent can hand whole subtasks — or an
+entire QA pass — to a focused sub-agent that runs in the same workspace,
+reads files itself, and reports back. No recursion, no pasted file
+contents: the prompt is a work order, not a data dump.
 
 ```
-  GitHub login — web connect
-
-  ✔ browser opened — press Connect with GitHub, then Authorize
-  waiting for the browser… Ctrl+C to cancel
-
-  ✔ logged in octocat
-  ⚙ config sync — pushed → octocat/tagent-config
+  task: verify pages
+  ├─ kind "test" → read-only QA sub (serve + browser + vision)
+  ├─ reads PRD.md / the workspace itself
+  ├─ shots desktop+tablet+mobile → .tagent/test/shots
+  └─ vision model → typography / responsive / contrast / a11y report
 ```
 
-### One-click login, on by default
+### Subagents — the task tool
 
-- `BUILTIN_OAUTH_CLIENT_ID` is set — every install gets the button,
-  `tagent auth --device` works without env vars, the GUI/TUI options
-  light up
-- client-id resolution is now env (`TAGENT_GH_CLIENT_ID`) → your config
-  (`github.clientId`) → the bundled app — your config finally overrides
-  the built-in one
-- the device page opens with `?user_code=` appended — GitHub doesn't
-  send `verification_uri_complete`, so we try the prefill ourselves;
-  the page still shows the code big with a copy button as the fallback
+- built-in kinds: **general** (full toolset like yours, minus spawning),
+  **explore** (read-only recon), **test** (the QA kit — serve + browser +
+  vision, read-only)
+- subs run in YOUR workspace with the same file tools — they read whatever
+  they need themselves, so prompts carry instructions + paths, never file
+  contents
+- no recursion: subs cannot spawn further subs, never face the user
+- custom specialists: drop a markdown file in `.tagent/agents/` (or
+  `~/.tagent/agents/`) — front-matter for model, tools whitelist, mode
+  (build | plan | test), maxTurns; the body is its persona
+- economy fast-path: plain "read file X" prompts never spawn a sub at all
+
+### Three model roles, set independently
+
+- `models.subagent` — what task-tool subagents run on
+- `models.media.vision / .audio / .video / .pdf` — the analysis models;
+  the vision tool routes screenshots to `media.vision`
+- TUI: `/model subagent|vision|audio|video|pdf <provider/model>` ·
+  `off` → follow main · interactive `/model` role picker
+- GUI: a Model-roles dialog in the model dropdown
+
+### Vision QA — image → model → report
+
+- browser `shots` captures desktop + tablet + mobile in one call into
+  `.tagent/test/shots`; pass the directory, a file, or a comma list to the
+  vision tool (a directory takes its newest 4)
+- the dedicated vision model returns a structured review: functionality,
+  layout & alignment, typography scale, responsive comparison across
+  viewports, color & contrast, accessibility — then a PASS/WARN/FAIL
+  verdict with severity-tagged issues and suggested fixes
+- no dedicated model? the main model is used when it accepts images —
+  otherwise a setup error points at `/model media vision`
 
 ### Fixes
 
-- **fatal**: the device-code request went to `github.github.com` (a
-  broken string replace) — GitHub answered 405 every time, so the
-  v0.25.0 button never worked against real GitHub. Now it hits
-  `https://github.com/login/device/code`
-- the GUI host had its own client-id resolution (config → env, no
-  builtin) — it could disagree with the CLI; both now share
-  `getOAuthClientId`
-
-### Still true from v0.25.0
-
-- "Paste a token instead →" stays one click away — the PAT flow never
-  blocks you
-- device-flow `slow_down` backs off instead of dying; the login server
-  lingers ~2s so the browser always shows the ✔ Connected card
-- security shape: loopback-only bind, one-time secret URL path, origin
-  checks on POST, one-shot after login, `no-store`
+- **task {agent:"test"} ran the sub in the parent's mode** — a build-mode
+  parent got a QA sub with a "your job is WORKING CODE" persona and
+  write_file/edit_file available; only the session metadata said "test".
+  The built-in test kind now genuinely runs read-only with the
+  VERIFICATION persona and the full QA toolset (test_report, browser,
+  vision, serve, bash, bg). The test suite's persona check was a tautology
+  (`|| true`) and never caught it — the assertions now read the sub's
+  actual system prompt (71 checks)
 EOF
 )
 
@@ -93,7 +105,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — one-click GitHub login, on by default" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — subagents, model roles, deep vision QA" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")

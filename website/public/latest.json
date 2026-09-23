@@ -1,6 +1,6 @@
 {
-  "version": "0.25.1",
+  "version": "0.26.0",
   "date": "2026-09-23",
-  "notes": "The tagent OAuth App is registered, and its client id ships inside every binary: the \"Connect with GitHub\" button now appears out of the box — no TAGENT_GH_CLIENT_ID, no config, no token hunting. Along the way a fatal bug surfaced: the device-code request went to github.github.com (a bad string replace), so v0.25.0’s flow never actually reached GitHub. That is fixed, the device page now opens with ?user_code= prefill where possible, and client-id resolution is now env → config → bundled — your own github.clientId finally overrides the built-in one.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.25.1"
+  "notes": "Subagents are real: the main agent can hand whole subtasks — or an entire QA pass — to a focused sub-agent that runs in the same workspace, reads files itself, and reports back. Models split into three categories (main · subagent · media) so your coding model, your sub-agent model, and your vision model are chosen independently. And test mode goes deep: screenshots flow to the dedicated vision model, which returns a real UI review — typography, responsiveness, contrast, accessibility — not just \"does it load\".",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.26.0"
 }

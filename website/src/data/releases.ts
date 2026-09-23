@@ -28,9 +28,54 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.25.1'
+export const LATEST = '0.26.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.26.0',
+    date: '2026-09-23',
+    title: 'The delegation stack — subagents, model roles, deep vision QA',
+    summary:
+      'Subagents are real: the main agent can hand whole subtasks — or an entire QA pass — to a focused sub-agent that runs in the same workspace, reads files itself, and reports back. Models split into three categories (main · subagent · media) so your coding model, your sub-agent model, and your vision model are chosen independently. And test mode goes deep: screenshots flow to the dedicated vision model, which returns a real UI review — typography, responsiveness, contrast, accessibility — not just "does it load".',
+    stable: true,
+    sections: [
+      {
+        name: 'Subagents — the task tool',
+        items: [
+          'built-in kinds: "general" (full toolset like yours, minus spawning) · "explore" (read-only recon) · "test" (the QA kit — serve + browser + vision, read-only)',
+          'subs run in YOUR workspace with the same file tools — they read whatever they need themselves, so prompts carry instructions + paths, never pasted file contents',
+          'no recursion: a subagent cannot spawn further subagents and never faces the user (ask_user stays the primary agent\u2019s job)',
+          'custom specialists: drop a markdown file in .tagent/agents/ (or ~/.tagent/agents/) — front-matter for model, tools whitelist, mode (build | plan | test), maxTurns; the body is its persona',
+          'a fast-path economy layer: plain "read file X" prompts never spawn a subagent at all — the files are served directly',
+        ],
+      },
+      {
+        name: 'Three model roles, set independently',
+        items: [
+          'models.subagent — what task-tool subagents run on (unset = the main model, as before)',
+          'models.media.vision / .audio / .video / .pdf — the analysis models; the vision tool routes screenshots to media.vision',
+          'set them from the TUI: /model subagent|vision|audio|video|pdf <provider/model> · off → follow main · or pick interactively with /model',
+          'the GUI gets a Model-roles dialog in the model dropdown — subagent + all four media slots, with per-role model pickers',
+        ],
+      },
+      {
+        name: 'Vision QA — image → model → report',
+        items: [
+          'browser shots (action "shots" captures desktop + tablet + mobile in one call) land in .tagent/test/shots — pass the directory, a single file, or a comma list to the vision tool (a directory takes its newest 4)',
+          'the dedicated vision model returns a structured review: functionality, layout & alignment, typography scale, responsive comparison across viewports, color & contrast, accessibility quick-pass, then a PASS/WARN/FAIL verdict with severity-tagged issues and suggested fixes',
+          'no dedicated model? the main model is used when it accepts images — otherwise a setup error points at /model media vision',
+        ],
+      },
+      {
+        name: 'Test-mode delegation (fixed on the way out)',
+        items: [
+          'the main agent delegates verification mid-build: task {"agent":"test"} spawns a QA sub that genuinely runs read-only with the VERIFICATION persona and the full QA toolset (test_report, browser, vision, serve, bash, bg)',
+          'fix: that same spawn used to run the sub in the parent\u2019s mode — a build-mode parent got a sub with a "your job is WORKING CODE" persona and write_file/edit_file available, while only the session metadata said test; the test suite\u2019s persona check was a tautology (|| true) and never caught it. Both fixed — the assertions now read the sub\u2019s actual system prompt',
+          'test-mode QA leads can fan out sub-testers too: several pages/flows, each with a self-contained scope, merged into one report',
+        ],
+      },
+    ],
+  },
   {
     version: '0.25.1',
     date: '2026-09-23',
