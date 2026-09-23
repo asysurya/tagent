@@ -5,6 +5,7 @@ import { ddgSearchTool, webFetchTool } from './web'
 import { todoWriteTool } from './todo'
 import { worklogTool } from './worklog'
 import { taskTool } from './task'
+import { subsTool } from './subs'
 import { browserTool } from './browser'
 import { visionTool } from './vision'
 import { serveTool } from './serve'
@@ -27,6 +28,7 @@ const ALL_TOOLS: ToolDefinition[] = [
   todoWriteTool,
   worklogTool,
   taskTool,
+  subsTool,
   memoryTool,
   loadSkillTool,
   browserTool,
@@ -54,13 +56,13 @@ export interface BuildToolsetOptions {
 export const TEST_MODE_TOOLS = new Set([
   'read_file', 'read_files', 'list_files', 'grep', 'web_fetch', 'ddg_search',
   'bash', 'browser', 'vision', 'serve', 'test_report', 'task', 'todowrite', 'memory', 'load_skill',
-  'ask_user', 'bg_run', 'bg_logs', 'bg_stop',
+  'ask_user', 'bg_run', 'bg_logs', 'bg_stop', 'subs',
 ])
 
 /** read/observe set — plan mode & explore subagents */
 const RO_NAMES = new Set([
   'read_file', 'read_files', 'list_files', 'grep', 'web_fetch', 'ddg_search',
-  'vision', 'todowrite', 'memory', 'load_skill', 'ask_user',
+  'vision', 'todowrite', 'memory', 'load_skill', 'ask_user', 'subs',
 ])
 
 /**
@@ -90,6 +92,7 @@ export function buildToolset(opts: BuildToolsetOptions = {}): ToolDefinition[] {
     return ALL_TOOLS.filter((t) => {
       if (!TEST_MODE_TOOLS.has(t.name)) return false
       if (isSubagent && (t.name === 'task' || t.name === 'ask_user')) return false
+      if (isSubagent && t.name === 'subs') return false // subs track the PARENT's background spawns
       if (cfg && t.name === 'bash' && !cfg.tools.bash) return false
       if (cfg && t.name === 'browser' && !cfg.tools.browser) return false
       if (cfg && t.name === 'serve' && cfg.tools.serve === false) return false
@@ -110,6 +113,7 @@ export function buildToolset(opts: BuildToolsetOptions = {}): ToolDefinition[] {
     // build mode's job is WORKING CODE — the QA report is test mode's deliverable
     if (t.name === 'test_report') return false
     if (isSubagent && t.name === 'task') return false
+    if (isSubagent && t.name === 'subs') return false // subs track the PARENT's background spawns
     // subagents never face the human — asking is the primary agent's job
     if (isSubagent && t.name === 'ask_user') return false
     if (cfg && t.name === 'bash' && !cfg.tools.bash) return false

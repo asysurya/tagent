@@ -52,6 +52,10 @@ import {
   SUBAGENT_TEMPLATE,
   sanitizeFallback,
   describeChain,
+  describeChains,
+  fallbackListFor,
+  BackgroundSubagents,
+  trunc,
   diagnosticsCommand,
   runDiagnostics,
   compactSession as compactMessages,
@@ -68,6 +72,7 @@ import {
   type AgentEvents,
   type AskFormRequest,
   type AskFormResponse,
+  type BgSubInfo,
   type ChatMessage,
   type ContextInfo,
   type LoopSummary,
@@ -133,6 +138,12 @@ export class AgentHost {
   private lastContext: ContextInfo | undefined
   /** one compact-prompt per crossing — don't nag every turn */
   private ctxWarned = false
+  /** background subagents (task background:true) — host-owned so a sub
+   *  started in one run can deliver its report in a later one */
+  private bgSubs = new BackgroundSubagents(() => this.cfg.subagents?.maxParallel ?? 4)
+  /** a background report arrived while NO run was live — pending wake-up
+   *  (fired by a short timer; coalesces multiple reports into one run) */
+  private pendingWake = false
 
   constructor(opts: HostOptions) {
     this.root = path.resolve(opts.workspaceRoot)
@@ -364,7 +375,7 @@ export class AgentHost {
       this.sessions.save(s)
       this.bus.emit('session:list', this.sessions.list())
     }
-    if (this.loop) {
+    if (this.loop?.alive) {
       this.bus.emit('notify', { level: 'warn', message: 'A run is already in progress — stopped it first.' })
       this.loop.stop()
       await new Promise((r) => setTimeout(r, 100))
@@ -381,7 +392,7 @@ export class AgentHost {
     }
     const extraTools = [...this.mcp.toolDefinitions(), ...pluginToolDefinitions(plugins)]
     const permissions = new PermissionManager(this.cfg, () => this.persist())
-    this.loop = new AgentLoop({
+    const loop = new AgentLoop({
       session: s,
       provider: getAdapter(this.cfg.defaultProvider, this.cfg, this.root),
       model: this.cfg.defaultModel,
@@ -393,9 +404,13 @@ export class AgentHost {
       onSessionUpdate: (sess) => this.sessions.save(sess),
       // subagent runs persist → timeline survives restarts
       onSubagentSession: (sub) => this.sessions.save(sub),
+      // background subagents — registry shared across runs + the delivery hook
+      backgroundSubs: this.bgSubs,
+      onBackgroundSub: (info) => this.onBackgroundSub(info),
     })
+    this.loop = loop
     try {
-      const summary = await this.loop.run(body)
+      const summary = await loop.run(body)
       await emitPluginEvent(plugins, 'onAgentDone', { summary, session: s })
       this.sessions.save(s)
       this.bus.emit('session:list', this.sessions.list())
@@ -411,7 +426,8 @@ export class AgentHost {
       }
       return summary
     } finally {
-      this.loop = undefined
+      // only clear OUR loop — a newer chatSend may have replaced it already
+      if (this.loop === loop) this.loop = undefined
     }
   }
 
@@ -446,6 +462,50 @@ export class AgentHost {
 
   get running(): boolean {
     return !!this.loop
+  }
+
+  /** live background-subagent state for /subs and the GUI */
+  backgroundSubs(): BgSubInfo[] {
+    return this.bgSubs.list()
+  }
+
+  /** config for the /config subs view */
+  subagentLimits(): { maxParallel: number; running: number } {
+    return { maxParallel: this.bgSubs.limit, running: this.bgSubs.runningCount }
+  }
+
+  /**
+   * A background subagent finished. ALWAYS: text notification carrying the
+   * id ("subagent a1 finished"). Delivery: into the LIVE loop when one can
+   * still receive it; otherwise the agent is AUTO-RESUMED in a fresh run —
+   * the user is never asked to confirm anything.
+   */
+  private onBackgroundSub(info: BgSubInfo) {
+    const ok = info.status === 'done'
+    this.bus.emit('notify', {
+      level: ok ? 'info' : 'warn',
+      message: ok
+        ? `subagent ${info.id} finished — report delivered to the agent`
+        : `subagent ${info.id} failed — ${String(info.report ?? '').split('\n')[0].slice(0, 120)}`,
+    })
+    const text =
+      `[SUBAGENT REPORT — ${info.id} · "${info.description}" · ${info.status}]\n\n` +
+      `${trunc(info.report ?? '(no report)', 12_000)}\n\n` +
+      (ok
+        ? `Background subagent ${info.id} finished. This message is machine-delivered — the user has NOT said anything new. Continue your work using this evidence; no user confirmation is needed.`
+        : `Background subagent ${info.id} FAILED. This message is machine-delivered — the user has NOT said anything new. Decide yourself whether to retry the subtask (a fresh background spawn is fine) or work around it; no user confirmation is needed.`)
+    if (this.loop?.alive && this.loop.deliverBackgroundReport(text)) {
+      return // mid-run: fed into the loop's next turn
+    }
+    if (!this.session) return // nowhere to deliver (no session yet) — the report stays in the registry
+    // idle: resume the agent automatically, coalescing bursts of reports
+    if (this.pendingWake) return
+    this.pendingWake = true
+    setTimeout(() => {
+      this.pendingWake = false
+      if (this.running) return // a user run started meanwhile — its loop will drain via onBackgroundSub
+      void this.chatSend(text).catch(() => undefined)
+    }, 250)
   }
 
   /* ------------------------------------------------------------------ */
@@ -786,8 +846,12 @@ export class AgentHost {
     /** smart cache toggles — unchanged-file stubs + web TTL cache */
     cacheFileState?: boolean
     cacheWeb?: boolean
-    /** ordered provider failover chain (replaces the whole list) */
+    /** ordered provider failover chain (replaces the whole list) — the MAIN lane */
     fallback?: import('@tagent/core').FallbackEntry[]
+    /** per-role failover chain: subagent | vision (main → legacy `fallback`) */
+    fallbackRole?: { role: 'subagent' | 'vision'; list: import('@tagent/core').FallbackEntry[] }
+    /** background subagents — max concurrently running (task background:true) */
+    subagentMaxParallel?: number
     /** auto-diagnostics command — "" clears the gate */
     diagnosticsCommand?: string
     /** upsert a custom provider by id (empty baseUrl + remove → delete) */
@@ -849,7 +913,27 @@ export class AgentHost {
       this.cfg.cache = cur
     }
     // provider fallback chain (full replace — the GUI/TUI sends the ordered list)
-    if (patch.fallback !== undefined) this.cfg.fallback = sanitizeFallback(patch.fallback)
+    if (patch.fallback !== undefined) {
+      this.cfg.fallback = sanitizeFallback(patch.fallback)
+      // the main lane's single source of truth stays the legacy field —
+      // drop a mirrored entry so they can never drift
+      if (this.cfg.fallbacks?.main) {
+        delete this.cfg.fallbacks.main
+        if (!this.cfg.fallbacks.subagent && !this.cfg.fallbacks.vision) delete this.cfg.fallbacks
+      }
+    }
+    if (patch.fallbackRole) {
+      const { role, list } = patch.fallbackRole
+      const clean = sanitizeFallback(list)
+      this.cfg.fallbacks = {
+        ...(this.cfg.fallbacks ?? {}),
+        ...(role === 'subagent' ? { subagent: clean } : { vision: clean }),
+      }
+    }
+    if (typeof patch.subagentMaxParallel === 'number') {
+      const n = Math.min(Math.max(Math.floor(patch.subagentMaxParallel), 1), 16)
+      this.cfg.subagents = { ...(this.cfg.subagents ?? {}), maxParallel: n }
+    }
     // auto-diagnostics gate
     if (typeof patch.diagnosticsCommand === 'string') {
       this.cfg.diagnostics = { ...(this.cfg.diagnostics ?? {}), command: patch.diagnosticsCommand.trim().slice(0, 300) }
@@ -1034,6 +1118,18 @@ export class AgentHost {
   /** ordered failover chain as shown by /fallback */
   fallbackChainView() {
     return { chain: describeChain(this.cfg), entries: this.cfg.fallback ?? [] }
+  }
+
+  /** all three failover lanes + their raw entries — /fallback and /config */
+  fallbackChainsView() {
+    return {
+      chains: describeChains(this.cfg),
+      entries: {
+        main: this.cfg.fallback ?? [],
+        subagent: fallbackListFor(this.cfg, 'subagent'),
+        vision: fallbackListFor(this.cfg, 'vision'),
+      },
+    }
   }
 
   /** run the configured diagnostics command once (for /diag test) */

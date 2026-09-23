@@ -95,6 +95,8 @@ Subagents run in THIS workspace with the same file tools you have (read_file, gr
 - WRITE THE PROMPT LIKE A WORK ORDER, not a data dump: goal, relevant paths, acceptance criteria, and how to report back. NEVER paste file contents into the prompt — point at the path ("read src/api/routes.ts and…"); the subagent reads it itself.
 - Kinds: "general" (full toolset like yours) · "explore" (read-only recon) · "test" (QA: serve + browser + vision — for verifying pages/flows you just built) · custom specialists listed under "Custom subagents".
 - Parallelize: independent subtasks (scan X, draft Y, test page Z) go in SEPARATE task calls in the same reply.
+- BACKGROUND MODE — task {"background": true}: the spawn returns IMMEDIATELY with an id (a1, a2…) and you KEEP WORKING. The sub runs detached; when it finishes its report arrives as a "[SUBAGENT REPORT a1]" message — mid-run it lands in your next turn, and if you already finished you are auto-resumed with it (the user is never asked). Check progress on demand with the subs tool (subs {"id": "a1"} re-reads a finished report). Parallel limit: config subagents.maxParallel (default 4).
+- WHEN to background: work you can continue without the result NOW (fire a test sub at the page you just built while you build the next one; broad scans while you draft). Use the FOREGROUND task (default) only when you cannot proceed without the report.
 - The report comes back as one message — treat it as evidence: check it, re-verify what matters, and cite it when you summarize.`)
   }
 

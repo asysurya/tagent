@@ -32,9 +32,11 @@ export {
   SUBAGENT_TEMPLATE, type SubagentDef,
 } from './subagents'
 export {
-  fallbackTail, describeChain, completeWithFallback, sanitizeFallback,
-  type ResolvedChainEntry,
+  fallbackTail, fallbackTailFor, fallbackListFor, describeChain, describeChains,
+  completeWithFallback, sanitizeFallback,
+  type ResolvedChainEntry, type FallbackRole,
 } from './fallback'
+export { BackgroundSubagents } from './bgsubs'
 export {
   diagnosticsCommand, runDiagnostics, renderDiagnosticsBlock,
   DIAGNOSTICS_DEFAULT_TIMEOUT_MS, type DiagnosticsResult,
@@ -71,6 +73,7 @@ export {
 } from './providers/registry'
 export { buildToolset, ALL_TOOLS, worklogTool, worklogPath, resolveShell } from './tools'
 export { askUserTool, parseAskInput, formatAskResponse } from './tools/ask'
+export { renderSubsTable } from './tools/subs'
 export { exportShare, readShareFile, shareDir, renderShareHtml, type ShareResult } from './share'
 export {
   loadRelays, saveRelays, createRelay, findRelayByCode, revokeRelay,

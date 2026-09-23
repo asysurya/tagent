@@ -4,6 +4,7 @@ import type { ToolContext, ToolDefinition } from '../types'
 import { jailPath, trunc } from '../util'
 import { getAdapter, acceptsImages } from '../providers'
 import { resolveMediaModel } from '../modelroles'
+import { completeWithFallback, fallbackTailFor, type ResolvedChainEntry } from '../fallback'
 
 /**
  * The `vision` tool — send images to the DEDICATED vision model and get a
@@ -17,11 +18,15 @@ import { resolveMediaModel } from '../modelroles'
  *
  * Resolution: models.media.vision → (fallback) the main model when it
  * accepts images → a setup error pointing at /model media vision.
+ * Failover: the vision chain — fallbacks.vision — is walked on adapter
+ * errors, exactly like the main agent walks its own chain.
  */
 
 /** test seam — the adapter factory is swappable so tests never hit the network */
 export const visionInternals = {
   resolveAdapter: getAdapter,
+  /** the vision failover tail — swappable in tests */
+  resolveTailFor: fallbackTailFor,
 }
 
 const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'])
@@ -197,7 +202,12 @@ export const visionTool: ToolDefinition = {
         ? ' When they are the same screen at different viewports, run the RESPONSIVE comparison across them.'
         : '')
     try {
-      const res = await adapter.completeStream({
+      // the vision failover lane: primary first, then fallbacks.vision
+      const chain: ResolvedChainEntry[] = [
+        { adapter, model, label: 'primary' },
+        ...visionInternals.resolveTailFor(ctx.config, 'vision'),
+      ]
+      const res = await completeWithFallback(chain, {
         model,
         messages: [
           { role: 'system', content: VISION_SYSTEM },

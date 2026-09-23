@@ -87,6 +87,7 @@ export const taskTool: ToolDefinition = {
     prompt: 'string (required) — complete, self-contained INSTRUCTIONS: goal, relevant paths, acceptance criteria. Point at files — do not paste their contents; the subagent reads them itself.',
     agent: 'string — "general" (full toolset), "explore" (read-only), "test" (QA toolset), or a custom subagent name',
     max_turns: 'number — turn budget (default 10)',
+    background: 'boolean — run DETACHED: returns immediately with an id (a1, a2…) and you KEEP WORKING. The report arrives later as a [SUBAGENT REPORT] message — even after you finished, you auto-resume with it (the user is never asked). Track with the subs tool. Max concurrent: config subagents.maxParallel (default 4).',
   },
   inputSchema: {
     type: 'object',
@@ -95,6 +96,7 @@ export const taskTool: ToolDefinition = {
       prompt: { type: 'string', description: 'Complete instructions: goal, relevant paths, acceptance criteria — the subagent reads the workspace itself' },
       agent: { type: 'string', description: 'general | explore | test | custom subagent name from the system prompt' },
       max_turns: { type: 'number', description: 'Turn budget (default 10)' },
+      background: { type: 'boolean', description: 'Spawn detached — returns an id immediately; the report arrives later as a [SUBAGENT REPORT] message' },
     },
     required: ['description', 'prompt'],
   },
@@ -113,6 +115,21 @@ export const taskTool: ToolDefinition = {
 
     const agent = String(input.agent ?? 'general') || 'general'
     const maxTurns = Math.min(Number(input.max_turns ?? 10), 25)
+
+    // detached spawn — the tool returns the id NOW; the report is delivered
+    // later (mid-run injection or an automatic fresh run). The agent keeps
+    // working in the meantime — that is the whole point.
+    if (input.background === true) {
+      if (!ctx.spawnBackgroundSubagent) return 'Error: background subagents are unavailable in this context.'
+      const r = ctx.spawnBackgroundSubagent(description, prompt, agent, maxTurns)
+      if ('error' in r) return `Error: ${r.error}`
+      return (
+        `BACKGROUND SUBAGENT STARTED — ${r.id} · "${description}" (kind: ${agent})\n` +
+        `It runs in the background while you keep working. Its report will arrive as a [SUBAGENT REPORT ${r.id}] message — treat it as evidence when it lands and continue; you are resumed automatically if you already finished. ` +
+        `Check live status with the subs tool — subs {"id": "${r.id}"} shows the full report once it finishes.`
+      )
+    }
+
     ctx.events.onSubagent?.({
       id: uid(),
       parentId: ctx.sessionId,

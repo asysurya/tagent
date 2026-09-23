@@ -317,6 +317,18 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
       cb?.(host.fallbackChainView())
     })
 
+    socket.on('fallback:chains', (_p: unknown, cb?: (r: unknown) => void) => {
+      try { cb?.(host.fallbackChainsView()) } catch (e) { cb?.({ error: (e as Error).message }) }
+    })
+
+    socket.on('subs:view', (_p: unknown, cb?: (r: unknown) => void) => {
+      try {
+        cb?.({ subs: host.backgroundSubs(), limits: host.subagentLimits() })
+      } catch (e) {
+        cb?.({ subs: [], limits: { maxParallel: 4, running: 0 }, error: (e as Error).message })
+      }
+    })
+
     socket.on('diagnostics:run', async (_p: unknown, cb?: (r: unknown) => void) => {
       cb?.(await host.diagnosticsRun())
     })

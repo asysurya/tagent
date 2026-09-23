@@ -29,10 +29,20 @@ export interface ResolvedChainEntry {
   label: string
 }
 
-/** Enabled fallback entries only — the primary is prepended by the caller. */
-export function fallbackTail(cfg: TagentConfig): ResolvedChainEntry[] {
+/** the three failover lanes — main agent · subagents · the vision model */
+export type FallbackRole = 'main' | 'subagent' | 'vision'
+
+/** The raw list for a role: `fallbacks.<role>` when set; the MAIN role
+ *  mirrors the legacy top-level `fallback` so old configs keep working. */
+export function fallbackListFor(cfg: TagentConfig, role: FallbackRole): FallbackEntry[] {
+  if (role === 'main') return cfg.fallbacks?.main ?? cfg.fallback ?? []
+  return cfg.fallbacks?.[role] ?? []
+}
+
+/** Enabled fallback entries for a role only — the primary is prepended by the caller. */
+function buildTail(list: FallbackEntry[], cfg: TagentConfig): ResolvedChainEntry[] {
   const tail: ResolvedChainEntry[] = []
-  for (const f of cfg.fallback ?? []) {
+  for (const f of list) {
     if (!f || f.enabled === false) continue
     if (!f.provider || !f.model) continue
     try {
@@ -56,6 +66,18 @@ export function fallbackTail(cfg: TagentConfig): ResolvedChainEntry[] {
   return tail
 }
 
+/** Role-aware tail — subagent loops and the vision tool fail over on their OWN
+ *  chains; the main agent keeps the legacy `fallback` list. */
+export function fallbackTailFor(cfg: TagentConfig, role: FallbackRole = 'main'): ResolvedChainEntry[] {
+  return buildTail(fallbackListFor(cfg, role), cfg)
+}
+
+/** Enabled fallback entries only — the primary is prepended by the caller.
+ *  (Legacy spelling — the MAIN chain.) */
+export function fallbackTail(cfg: TagentConfig): ResolvedChainEntry[] {
+  return fallbackTailFor(cfg, 'main')
+}
+
 /** Full chain as shown by `/fallback` and `tagent fallback`. */
 export function describeChain(cfg: TagentConfig): { label: string; model: string; primary: boolean }[] {
   const out: { label: string; model: string; primary: boolean }[] = [
@@ -63,6 +85,25 @@ export function describeChain(cfg: TagentConfig): { label: string; model: string
   ]
   for (const e of fallbackTail(cfg)) out.push({ label: e.label, model: e.model, primary: false })
   return out
+}
+
+/** All three chains as shown by /fallback — main · subagent · vision. The
+ *  primary of each lane is what that role ACTUALLY runs on (role override
+ *  when set, else the main model); the tail is the role's own list. */
+export function describeChains(cfg: TagentConfig): Record<FallbackRole, { label: string; model: string; primary: boolean }[]> {
+  const lane = (primaryLabel: string, primaryModel: string, tail: ResolvedChainEntry[]) => [
+    { label: `${primaryLabel} (primary)`, model: primaryModel, primary: true },
+    ...tail.map((e) => ({ label: e.label, model: e.model, primary: false })),
+  ]
+  const subRef = cfg.models?.subagent
+  const visRef = cfg.models?.media?.vision
+  const [subP, ...subM] = subRef ? subRef.split('/') : [cfg.defaultProvider]
+  const [visP, ...visM] = visRef ? visRef.split('/') : [cfg.defaultProvider]
+  return {
+    main: lane(cfg.defaultProvider, cfg.defaultModel, fallbackTailFor(cfg, 'main')),
+    subagent: lane(subP, subM.join('/') || cfg.defaultModel, fallbackTailFor(cfg, 'subagent')),
+    vision: lane(visP, visM.join('/') || cfg.defaultModel, fallbackTailFor(cfg, 'vision')),
+  }
 }
 
 /**

@@ -6,6 +6,7 @@ import {
   listProviderInfos,
   parseModelRef,
   describeModelRoles,
+  renderSubsTable,
   listCheckpoints,
   listFacts,
   listSkills,
@@ -1262,34 +1263,85 @@ export class Tui {
         return
       }
 
+      case 'subs': {
+        const list = host.backgroundSubs()
+        const { maxParallel, running } = host.subagentLimits()
+        if (!list.length) {
+          this.println(green('  background subagents: none yet'))
+          this.println(dim('    the agent spawns them: task {"background": true, …} — it keeps working while they run'))
+          this.println(dim(`    limit: /config subs <n> (now ${maxParallel})`))
+          return
+        }
+        this.println(green(`  background subagents — ${running} running · ${list.length} total`) + dim(` (limit ${maxParallel})`))
+        for (const line of renderSubsTable(list)) this.println(`    ${line}`)
+        this.println(dim('    reports flow to the agent automatically ([SUBAGENT REPORT]) — /subs is just the live view'))
+        return
+      }
+
       case 'fallback': {
-        const [verb, ...rest] = arg.split(/\s+/)
-        const list = [...(host.cfg.fallback ?? [])]
+        // /fallback [main|subagent|vision] [add <provider> <model> [key] | rm <n> | clear]
+        const parts = arg.split(/\s+/).filter(Boolean)
+        const ALIAS: Record<string, 'main' | 'subagent' | 'vision'> = {
+          main: 'main', agent: 'main', utama: 'main',
+          subagent: 'subagent', sub: 'subagent',
+          vision: 'vision', media: 'vision',
+        }
+        let role: 'main' | 'subagent' | 'vision' | undefined
+        if (parts[0] && ALIAS[parts[0].toLowerCase()]) role = ALIAS[parts[0].toLowerCase()]
+        const rest = role ? parts.slice(1) : parts
+        const [verb, ...rp] = rest
+        const view = host.fallbackChainsView()
+        const lane = role ?? 'main'
+
         if (verb === 'add') {
-          const [provider, model, ...keyParts] = rest
-          if (!provider || !model) return this.println(dim('  usage: /fallback add <provider> <model> [apiKey]'))
+          const [provider, model, ...keyParts] = rp
+          if (!provider || !model) {
+            return this.println(dim('  usage: /fallback [main|subagent|vision] add <provider> <model> [apiKey]'))
+          }
           const key = keyParts.join(' ')
-          list.push({ provider, model, ...(key ? { apiKey: key } : {}), enabled: true })
-          host.settingsSave({ fallback: list })
-          return this.println(green(`  ✔ fallback #${list.length}: ${provider}/${model}${key ? ' (own key)' : ''}`))
+          const entry = { provider, model, ...(key ? { apiKey: key } : {}), enabled: true }
+          if (lane === 'main') {
+            host.settingsSave({ fallback: [...view.entries.main, entry] })
+          } else {
+            host.settingsSave({ fallbackRole: { role: lane, list: [...view.entries[lane], entry] } })
+          }
+          return this.println(green(`  ✔ ${lane} fallback #${view.entries[lane].length + 1}: ${provider}/${model}${key ? ' (own key)' : ''}`))
         }
         if (verb === 'rm') {
-          const i = Number(rest[0]) - 1
-          if (!(i >= 0 && i < list.length)) return this.println(dim(`  usage: /fallback rm <1-${list.length}>`))
-          const [gone] = list.splice(i, 1)
-          host.settingsSave({ fallback: list })
-          return this.println(green(`  ✔ removed ${gone.provider}/${gone.model}`))
+          const i = Number(rp[0]) - 1
+          const cur = view.entries[lane]
+          if (!(i >= 0 && i < cur.length)) {
+            return this.println(dim(`  usage: /fallback [main|subagent|vision] rm <1-${cur.length}>`))
+          }
+          const [gone] = cur.filter(Boolean).slice(i, i + 1)
+          const next = cur.filter((_, idx) => idx !== i)
+          if (lane === 'main') host.settingsSave({ fallback: next })
+          else host.settingsSave({ fallbackRole: { role: lane, list: next } })
+          return this.println(green(`  ✔ ${lane}: removed ${gone?.provider ?? '?'}/${gone?.model ?? '?'}`))
         }
         if (verb === 'clear') {
-          host.settingsSave({ fallback: [] })
-          return this.println(green('  ✔ fallback chain cleared'))
+          if (lane === 'main') host.settingsSave({ fallback: [] })
+          else host.settingsSave({ fallbackRole: { role: lane, list: [] } })
+          return this.println(green(`  ✔ ${lane} fallback chain cleared`))
         }
-        const { chain } = host.fallbackChainView()
-        this.println(bold('  provider fallback chain (try top → bottom)'))
-        for (const [i, c] of chain.entries()) {
-          this.println(`   ${c.primary ? green('①') : dim(String(i + 1))} ${bold(c.label)} ${dim(`· ${c.model}`)}`)
+
+        const laneView = (name: string, chain: { label: string; model: string; primary: boolean }[]) => {
+          this.println(bold(`  ${name} — try top → bottom`))
+          for (const [i, ch] of chain.entries()) {
+            this.println(`   ${ch.primary ? green('①') : dim(String(i + 1))} ${bold(ch.label)} ${dim(`· ${ch.model}`)}`)
+          }
         }
-        this.println(dim('    add: /fallback add <provider> <model> [apiKey] · rm: /fallback rm <n> · full editor: web gui settings'))
+        if (role) {
+          laneView(lane, view.chains[lane])
+          this.println(dim(`    add: /fallback ${lane} add <provider> <model> [apiKey] · rm <n> · clear`))
+          return
+        }
+        laneView('main', view.chains.main)
+        this.println('')
+        laneView('subagent', view.chains.subagent)
+        this.println('')
+        laneView('vision', view.chains.vision)
+        this.println(dim('    usage: /fallback <main|subagent|vision> add <provider> <model> [apiKey] · rm <n> · clear'))
         this.println(dim('    same provider + different apiKey = key-level failover (stack freely)'))
         return
       }

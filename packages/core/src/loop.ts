@@ -24,7 +24,8 @@ import { buildToolset, TEST_MODE_TOOLS, ALL_TOOLS } from './tools'
 import { findSubagent, listSubagents } from './subagents'
 import { resolveSubagentModel } from './modelroles'
 import { diagnosticsCommand, renderDiagnosticsBlock, runDiagnostics } from './diagnostics'
-import { completeWithFallback, fallbackTail, type ResolvedChainEntry } from './fallback'
+import { completeWithFallback, fallbackTailFor, type ResolvedChainEntry } from './fallback'
+import { BackgroundSubagents } from './bgsubs'
 import { compressOutput, slimActionInput } from './compact'
 import { modelContextWindow, estimateTokens } from './context'
 
@@ -120,6 +121,13 @@ export interface AgentLoopOptions {
   agentPrompt?: string
   /** custom subagent tool whitelist (tool names) */
   toolsFilter?: string[]
+  /** host-owned registry of background subagents (task background:true) —
+   *  shared across runs so a late report can wake a FRESH run */
+  backgroundSubs?: BackgroundSubagents
+  /** fired exactly once when a background subagent finishes (done|error) —
+   *  the host notifies the user and decides delivery: inject into the
+   *  running loop, or auto-continue with a new run. Never asks the user. */
+  onBackgroundSub?: (info: import('./types').BgSubInfo) => void
 }
 
 interface ParsedAction {
@@ -136,6 +144,12 @@ interface ParsedAction {
 export class AgentLoop {
   private abort = new AbortController()
   private snapshots = new Map<string, boolean>()
+  /** reports from finished background subagents, waiting to be fed into the
+   *  next turn — flushed at the top of each iteration (mid-run delivery) */
+  private pendingReports: string[] = []
+  /** run() has returned — a dead loop must not be stopped (its detached
+   *  background subs inherit its abort signal) nor receive injections */
+  private finished = false
   readonly tools: ToolDefinition[]
   readonly ctx: ToolContext
   /** primary first, then the ordered fallback chain */
@@ -153,9 +167,11 @@ export class AgentLoop {
       }),
       ...(opts.readOnly ? [] : (opts.extraTools ?? [])),
     ].filter((t) => !opts.toolsFilter || opts.toolsFilter.includes(t.name))
+    // failover lane: subagent loops walk their OWN chain; the main agent the
+    // legacy one (role overrides keep working through the loop's provider)
     this.chain = [
       { adapter: opts.provider, model: opts.model, label: 'primary' },
-      ...fallbackTail(opts.config),
+      ...fallbackTailFor(opts.config, (opts.depth ?? 0) > 0 ? 'subagent' : 'main'),
     ]
     this.ctxLimit = modelContextWindow(opts.provider.id, opts.model)
     this.ctx = {
@@ -168,6 +184,9 @@ export class AgentLoop {
       todos: opts.session.todos,
       spawnSubagent: (description, prompt, agent, maxTurns) =>
         this.spawnSubagent(description, prompt, agent, maxTurns),
+      spawnBackgroundSubagent: (description, prompt, agent, maxTurns) =>
+        this.spawnSubagentBackground(description, prompt, agent, maxTurns),
+      ...(opts.backgroundSubs ? { backgroundSubs: opts.backgroundSubs } : {}),
     }
     if (opts.signal) {
       opts.signal.addEventListener('abort', () => this.abort.abort(), { once: true })
@@ -178,9 +197,34 @@ export class AgentLoop {
     this.abort.abort()
   }
 
+  /** false once run() has returned — stopping a dead loop would abort its
+   *  detached background subs, and injecting into it would be lost work. */
+  get alive(): boolean {
+    return !this.finished
+  }
+
+  /** Host → running loop: queue a background subagent's report; it is fed
+   *  into the next turn as a user message ("[SUBAGENT REPORT …]"). Returns
+   *  false when the loop can no longer receive it (already finished). */
+  deliverBackgroundReport(text: string): boolean {
+    if (!this.alive || this.abort.signal.aborted) return false
+    this.pendingReports.push(text)
+    return true
+  }
+
   /* ---------------------------------------------------------------- */
 
   async run(userText: string): Promise<LoopSummary> {
+    try {
+      return await this.runInner(userText)
+    } finally {
+      // the loop is dead from here on — hosts route late background reports
+      // into a FRESH run instead of injecting into this one
+      this.finished = true
+    }
+  }
+
+  private async runInner(userText: string): Promise<LoopSummary> {
     const { session } = this.opts
     // the last provider-failure message — lets the catch avoid echoing the
     // same provider JSON a second time as "Agent error"
@@ -224,6 +268,19 @@ export class AgentLoop {
       while (turns < maxTurns) {
         if (this.abort.signal.aborted) return { turns, toolCalls, finished: 'aborted', usage: usageTotal }
         turns++
+
+        // ---- background subagent reports that arrived mid-run: feed them
+        // as user messages BEFORE the model call, so the agent works with
+        // fresh evidence instead of stale assumptions. ----
+        if (this.pendingReports.length > 0) {
+          const batch = this.pendingReports.splice(0)
+          for (const text of batch) {
+            const msg: ChatMessage = { id: uid(), role: 'user', content: text, createdAt: Date.now() }
+            session.messages.push(msg)
+            this.opts.events.onUserMessage?.(msg)
+          }
+          this.opts.events.onNotify?.('info', `${batch.length} background subagent report(s) delivered`)
+        }
 
         this.opts.events.onStatus?.(
           'thinking',
@@ -304,6 +361,10 @@ export class AgentLoop {
           emitStream(assistantMsg.content, true)
           this.opts.events.onAssistantMessage?.(assistantMsg)
           this.opts.onSessionUpdate?.(session)
+          // a background report may have landed during the final model call —
+          // finishing now would strand it for a full host wake-up when the
+          // loop could simply take one more turn with the fresh evidence
+          if (this.pendingReports.length > 0) continue
           this.opts.events.onStatus?.('done', usageDetail(turns, usageTotal))
           // plan mode: a clean finish that presents a plan enables the
           // approve-and-build flow in the host
@@ -562,6 +623,49 @@ export class AgentLoop {
       sub.messages.filter((m) => m.role === 'assistant' && !m.meta?.toolResults).map((m) => m.content).join('\n\n') ||
       `(subagent produced no text report; finished=${summary.finished})`
     return report
+  }
+
+  /**
+   * Spawn a DETACHED subagent — returns its registry id immediately ("a1",
+   * "a2"…) and never blocks the caller. The agent keeps working; when the
+   * sub finishes, its report is delivered by the host (mid-run injection or
+   * an automatic fresh run) — no user confirmation anywhere in the loop.
+   *
+   * The registry (host-owned, shared across runs) tracks status for the
+   * subs tool and enforces the parallel limit (config subagents.maxParallel).
+   */
+  private spawnSubagentBackground(
+    description: string,
+    prompt: string,
+    agentKind: string,
+    maxTurns: number,
+  ): { id: string } | { error: string } {
+    const registry = this.opts.backgroundSubs
+    if (!registry) return { error: 'background subagents are unavailable in this context' }
+    const r = registry.register(description, agentKind)
+    if ('error' in r) return r
+    const id = r.id
+    this.opts.events.onSubagent?.({
+      id,
+      parentId: this.opts.session.id,
+      description: `${description} (background ${id})`,
+      status: 'running',
+      turns: 0,
+    })
+    void (async () => {
+      try {
+        const report = await this.spawnSubagent(description, prompt, agentKind, maxTurns)
+        registry.finish(id, 'done', report)
+        this.opts.events.onSubagent?.({ id, parentId: this.opts.session.id, description, status: 'done', turns: 0, report: trunc(report, 500) })
+        this.opts.onBackgroundSub?.(registry.get(id) ?? { id, description, kind: agentKind, status: 'done', startedAt: 0, turns: 0, report })
+      } catch (e) {
+        const msg = `Error: ${(e as Error).message}`
+        registry.finish(id, 'error', msg)
+        this.opts.events.onSubagent?.({ id, parentId: this.opts.session.id, description, status: 'error', turns: 0, report: trunc(msg, 500) })
+        this.opts.onBackgroundSub?.(registry.get(id) ?? { id, description, kind: agentKind, status: 'error', startedAt: 0, turns: 0, report: msg })
+      }
+    })()
+    return { id }
   }
 
   /**

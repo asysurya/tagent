@@ -47,6 +47,7 @@ import {
   listProviderInfos,
   parseModelRef,
   describeModelRoles,
+  renderSubsTable,
   listCheckpoints,
   listFacts,
   listSkills,
@@ -680,8 +681,9 @@ const SLASH_COMMANDS: { name: string; desc: string }[] = [
   { name: 'log', desc: 'WORKLOG.md tail [n]' },
   { name: 'maxturns', desc: 'turn budget <1-80>' },
   { name: 'agents', desc: 'subagents · new <name>' },
+  { name: 'subs', desc: 'background subagents — live status' },
   { name: 'diag', desc: 'diagnostics gate [cmd|off|test]' },
-  { name: 'fallback', desc: 'failover chain add/rm/clear' },
+  { name: 'fallback', desc: 'failover chains: main · sub · vision' },
   { name: 'apikey', desc: 'set a provider key' },
   { name: 'mcp', desc: 'MCP servers' },
   { name: 'plugins', desc: 'plugin manager · new' },
@@ -695,7 +697,7 @@ const SLASH_COMMANDS: { name: string; desc: string }[] = [
   { name: 'grep', desc: 'search the workspace' },
   { name: 'sh', desc: 'run a shell command' },
   { name: 'auth', desc: 'GitHub login' },
-  { name: 'config', desc: 'global config · keys · pull/push' },
+  { name: 'config', desc: 'add · apply · fallback · keys · sync' },
   { name: 'repo', desc: 'auto-sync · status · interval · vault' },
   { name: 'push', desc: 'push to GitHub [msg]' },
   { name: 'checkpoints', desc: 'snapshot list' },
@@ -3544,34 +3546,86 @@ export class TuiApp {
         return
       }
 
+      case 'subs': {
+        const list = host.backgroundSubs()
+        const { maxParallel, running } = host.subagentLimits()
+        if (!list.length) {
+          this.println(`  ${chip('🤖 background subagents', 'blue')} ${dim('none yet')}`)
+          this.println(dim('    the agent spawns them: task {"background": true, …} — it keeps working while they run'))
+          this.println(dim(`    limit: /config subs <n> (now ${maxParallel})`))
+          return
+        }
+        this.println(`  ${chip('🤖 background subagents', 'blue')} ${bold(`${running} running · ${list.length} total`)} ${dim(`(limit ${maxParallel})`)}`)
+        for (const line of renderSubsTable(list)) this.println(`    ${line}`)
+        this.println(dim('    reports flow to the agent automatically ([SUBAGENT REPORT]) — /subs is just the live view'))
+        return
+      }
+
       case 'fallback': {
-        const [verb, ...rest] = arg.split(/\s+/)
-        const list = [...(host.cfg.fallback ?? [])]
+        // /fallback [main|subagent|vision] [add <provider> <model> [key] | rm <n> | clear]
+        const parts = arg.split(/\s+/).filter(Boolean)
+        const ALIAS: Record<string, 'main' | 'subagent' | 'vision'> = {
+          main: 'main', agent: 'main', utama: 'main',
+          subagent: 'subagent', sub: 'subagent',
+          vision: 'vision', media: 'vision',
+        }
+        let role: 'main' | 'subagent' | 'vision' | undefined
+        if (parts[0] && ALIAS[parts[0].toLowerCase()]) role = ALIAS[parts[0].toLowerCase()]
+        const rest = role ? parts.slice(1) : parts
+        const [verb, ...rp] = rest
+        const view = host.fallbackChainsView()
+        const lane = role ?? 'main'
+
         if (verb === 'add') {
-          const [provider, model, ...keyParts] = rest
-          if (!provider || !model) return this.println(dim('  usage: /fallback add <provider> <model> [apiKey]'))
+          const [provider, model, ...keyParts] = rp
+          if (!provider || !model) {
+            return this.println(dim('  usage: /fallback [main|subagent|vision] add <provider> <model> [apiKey]'))
+          }
           const key = keyParts.join(' ')
-          list.push({ provider, model, ...(key ? { apiKey: key } : {}), enabled: true })
-          host.settingsSave({ fallback: list })
-          return this.println(`  ${okPill()} fallback #${list.length}: ${provider}/${model}${key ? ' (own key)' : ''}`)
+          const entry = { provider, model, ...(key ? { apiKey: key } : {}), enabled: true }
+          if (lane === 'main') {
+            host.settingsSave({ fallback: [...view.entries.main, entry] })
+          } else {
+            host.settingsSave({ fallbackRole: { role: lane, list: [...view.entries[lane], entry] } })
+          }
+          return this.println(`  ${okPill()} ${lane} fallback #${view.entries[lane].length + 1}: ${provider}/${model}${key ? ' (own key)' : ''}`)
         }
         if (verb === 'rm') {
-          const i = Number(rest[0]) - 1
-          if (!(i >= 0 && i < list.length)) return this.println(dim(`  usage: /fallback rm <1-${list.length}>`))
-          const [gone] = list.splice(i, 1)
-          host.settingsSave({ fallback: list })
-          return this.println(`  ${okPill()} removed ${gone.provider}/${gone.model}`)
+          const i = Number(rp[0]) - 1
+          const cur = view.entries[lane]
+          if (!(i >= 0 && i < cur.length)) {
+            return this.println(dim(`  usage: /fallback [main|subagent|vision] rm <1-${cur.length}>`))
+          }
+          const [gone] = cur.filter(Boolean).slice(i, i + 1)
+          const next = cur.filter((_, idx) => idx !== i)
+          if (lane === 'main') host.settingsSave({ fallback: next })
+          else host.settingsSave({ fallbackRole: { role: lane, list: next } })
+          return this.println(`  ${okPill()} ${lane}: removed ${gone?.provider ?? '?'}/${gone?.model ?? '?'}`)
         }
         if (verb === 'clear') {
-          host.settingsSave({ fallback: [] })
-          return this.println(`  ${okPill()} fallback chain cleared`)
+          if (lane === 'main') host.settingsSave({ fallback: [] })
+          else host.settingsSave({ fallbackRole: { role: lane, list: [] } })
+          return this.println(`  ${okPill()} ${lane} fallback chain cleared`)
         }
-        const { chain } = host.fallbackChainView()
-        this.println(bold('  provider fallback chain (try top → bottom)'))
-        for (const [i, ch] of chain.entries()) {
-          this.println(`   ${ch.primary ? green('①') : dim(String(i + 1))} ${bold(ch.label)} ${dim(`· ${ch.model}`)}`)
+
+        // view — one lane or all three
+        const laneView = (name: string, chain: { label: string; model: string; primary: boolean }[]) => {
+          this.println(bold(`  ${name} — try top → bottom`))
+          for (const [i, ch] of chain.entries()) {
+            this.println(`   ${ch.primary ? green('①') : dim(String(i + 1))} ${bold(ch.label)} ${dim(`· ${ch.model}`)}`)
+          }
         }
-        this.println(dim('    add: /fallback add <provider> <model> [apiKey] · rm: /fallback rm <n> · full editor: web gui settings'))
+        if (role) {
+          laneView(lane, view.chains[lane])
+          this.println(dim(`    add: /fallback ${lane === 'subagent' ? 'subagent' : lane} add <provider> <model> [apiKey] · rm <n> · clear`))
+          return
+        }
+        laneView('main', view.chains.main)
+        this.println('')
+        laneView('subagent', view.chains.subagent)
+        this.println('')
+        laneView('vision', view.chains.vision)
+        this.println(dim('    usage: /fallback <main|subagent|vision> add <provider> <model> [apiKey] · rm <n> · clear'))
         this.println(dim('    same provider + different apiKey = key-level failover (stack freely)'))
         return
       }
@@ -4657,47 +4711,182 @@ export class TuiApp {
     if (sub === 'pull') return this.configPullFlow()
     if (sub === 'status') return this.configStatus()
     if (sub === 'add' || sub === 'new') return this.configAddFlow(rest)
+    if (sub === 'apply' || sub === 'use') return this.configApplyFlow(rest)
+    if (sub === 'fallback' || sub === 'failover') return this.configFallbackFlow(rest)
     if (sub === 'keys' || sub === 'key') return this.configKeysFlow(rest)
-    if (sub === 'use') return this.configUseFlow(rest)
+    if (sub === 'subs' || sub === 'subagents') return this.configSubsFlow(rest)
 
-    // interactive dashboard
+    // interactive dashboard — the add/apply template
     for (;;) {
       const g = readGlobalConfig()
       const st = readConfigSyncState()
       const logged = authStatus().logged || !!getCredential('github')
       const keyN = (g.keychain ?? []).length
       const mcpN = Object.keys(g.mcp?.servers ?? {}).length
+      const limits = this.host.subagentLimits()
+      const roles = describeModelRoles(this.host.cfg)
       const actions: PickItem<string>[] = [
         {
-          label: `${st.repo ? green('⎇ repo ok') : yellow('⎇ repo —')} ${st.repo ?? CONFIG_REPO_NAME}`,
-          hint: logged ? 'status · health' : 'login first (/auth)',
-          value: 'status',
-          detail: `push ${st.lastPushAt ? fmtWhen(st.lastPushAt) : '—'} · pull ${st.lastPullAt ? fmtWhen(st.lastPullAt) : '—'}`,
+          label: '+ add',
+          hint: 'mcp · provider+key+models · api key',
+          value: 'add',
+          detail: 'a template you add once, then apply anywhere',
         },
-        { label: '↑ push', hint: 'this device → every device', value: 'push', detail: 'seal the whole global config into the repo' },
-        { label: '↓ pull', hint: 'every device → this device', value: 'pull', detail: 'remote is the truth — per-key merge' },
+        {
+          label: '⚡ apply',
+          hint: 'a provider/model → main · subagent · vision',
+          value: 'apply',
+          detail: `main ${roles[0].ref} · sub ${roles[1].ref} · vision ${roles[2].ref}`,
+        },
+        {
+          label: '⛓ fallback',
+          hint: '3 failover chains: main · sub · vision',
+          value: 'fallback',
+          detail: 'what each lane fails over to, in order',
+        },
+        {
+          label: `🤖 subs ${yellow(`· ${limits.running}/${limits.maxParallel}`)}`,
+          hint: 'background subagents — parallel limit',
+          value: 'subs',
+          detail: `max running at once (now ${limits.maxParallel})`,
+        },
         {
           label: `🔑 api keys ${keyN ? yellow(`· ${keyN} named`) : ''}`,
           hint: 'multi-key per provider — pick / fallback',
           value: 'keys',
           detail: 'add, select the active key, stack as fallback',
         },
-        { label: '+ add mcp', hint: 'global — every project', value: 'add mcp' },
-        { label: '+ add provider', hint: 'custom endpoint', value: 'add provider' },
-        { label: 'Ⓜ default model', hint: `now ${g.defaultProvider}/${g.defaultModel}`, value: 'use' },
+        {
+          label: `${st.repo ? green('⎇ sync ok') : yellow('⎇ sync —')} ${st.repo ?? CONFIG_REPO_NAME}`,
+          hint: logged ? 'push · pull · health' : 'login first (/auth)',
+          value: 'sync',
+          detail: `push ${st.lastPushAt ? fmtWhen(st.lastPushAt) : '—'} · pull ${st.lastPullAt ? fmtWhen(st.lastPullAt) : '—'}`,
+        },
         { label: 'done', hint: 'esc', value: 'done' },
       ]
-      const pick = await this.pick(actions, 'global config', {
+      const pick = await this.pick(actions, 'global config — add · apply', {
         footer: `~/.tagent/config.json${mcpN ? ` · ${mcpN} global mcp` : ''}${keyN ? ` · ${keyN} keys` : ''}`,
       })
       if (!pick || pick === 'done') return
-      if (pick === 'status') { await this.configStatus(); continue }
-      if (pick === 'push') { await this.configPushFlow(); continue }
-      if (pick === 'pull') { await this.configPullFlow(); continue }
+      if (pick === 'add') { await this.configAddFlow(''); continue }
+      if (pick === 'apply') { await this.configApplyFlow(''); continue }
+      if (pick === 'fallback') { await this.configFallbackFlow(''); continue }
+      if (pick === 'subs') { await this.configSubsFlow(''); continue }
       if (pick === 'keys') { await this.configKeysFlow(''); continue }
-      if (pick === 'add mcp') { await this.configAddFlow('mcp'); continue }
-      if (pick === 'add provider') { await this.configAddFlow('provider'); continue }
-      if (pick === 'use') { await this.configUseFlow(''); continue }
+      if (pick === 'sync') {
+        const act = await this.pick(
+          [
+            { label: 'status', hint: 'repo health', value: 'status' },
+            { label: '↑ push', hint: 'this device → every device', value: 'push' },
+            { label: '↓ pull', hint: 'every device → this device', value: 'pull' },
+          ],
+          'config sync',
+        )
+        if (act === 'status') await this.configStatus()
+        else if (act === 'push') await this.configPushFlow()
+        else if (act === 'pull') await this.configPullFlow()
+        continue
+      }
+    }
+  }
+
+  /** /config apply [provider[/model]] — put a provider+model to WORK:
+   *  as the main model, the subagent model, or the vision model. */
+  private async configApplyFlow(rest: string): Promise<void> {
+    const host = this.host
+    const infos = listProviderInfos(host.cfg).filter((p) => !p.needsKey || p.hasKey)
+    if (!infos.length) {
+      return this.println(yellow('  no providers ready — /config add provider, or /apikey <provider>'))
+    }
+    // pick the provider (arg or interactive)
+    let provId = rest.split(/\s+/)[0] ?? ''
+    let modelId = rest.split(/\s+/)[1] ?? ''
+    const parsed = provId.includes('/') ? parseModelRef(rest, host.cfg) : undefined
+    if (parsed) {
+      provId = parsed.provider
+      modelId = modelId || parsed.model
+    }
+    if (!provId || !infos.some((p) => p.id === provId)) {
+      provId = (await this.pick(
+        infos.map((p) => ({
+          label: p.label,
+          hint: p.hasKey ? 'key ✓' : p.needsKey ? 'no key' : 'keyless',
+          detail: p.models.slice(0, 3).map((m) => m.id).join(', ') || 'no models',
+          value: p.id,
+        })),
+        'apply — pick a provider',
+        { filterable: true },
+      )) ?? ''
+      if (!provId) return this.println(dim('  cancelled'))
+      modelId = ''
+    }
+    const info = infos.find((p) => p.id === provId)!
+    if (!modelId || !info.models.some((m) => m.id === modelId)) {
+      if (info.models.length === 0) {
+        return this.println(red(`  ${provId} has no models — /model ${provId} <model-id> sets one by hand`))
+      }
+      modelId = (await this.pick(
+        info.models.map((m) => ({ label: m.id, hint: m.vision ? 'vision ✓' : '', value: m.id })),
+        `apply — ${provId} model`,
+        { filterable: true },
+      )) ?? ''
+      if (!modelId) return this.println(dim('  cancelled'))
+    }
+    // pick the role this provider/model takes over
+    const roles = describeModelRoles(host.cfg)
+    const role = await this.pick<{ role: 'main' | 'subagent' | 'vision' }>(
+      [
+        { label: 'main agent', hint: 'the coding model', value: { role: 'main' as const }, detail: roles[0].ref },
+        { label: 'subagent', hint: 'task-tool subagents', value: { role: 'subagent' as const }, detail: roles[1].ref },
+        { label: 'vision', hint: 'screenshot & image QA', value: { role: 'vision' as const }, detail: roles[2].ref },
+      ],
+      `apply ${provId}/${modelId} as…`,
+      { maxVisible: 3 },
+    )
+    if (!role) return this.println(dim('  cancelled'))
+    if (role.role === 'main') {
+      host.settingsSave({ defaultProvider: provId, defaultModel: modelId })
+    } else {
+      host.settingsSave({ modelRole: { role: role.role, ref: `${provId}/${modelId}` } })
+    }
+    this.println(`  ${okPill()} ${role.role} → ${bold(`${provId} · ${modelId}`)}`)
+    this.println(dim('    see all roles: /model list · failover per role: /fallback'))
+  }
+
+  /** /config fallback — the 3-lane manager (thin wrapper over /fallback's view). */
+  private async configFallbackFlow(rest: string): Promise<void> {
+    if (rest) return this.command(`/fallback ${rest}`)
+    const view = this.host.fallbackChainsView()
+    for (const lane of ['main', 'subagent', 'vision'] as const) {
+      this.println(bold(`  ${lane} — try top → bottom`))
+      for (const [i, ch] of view.chains[lane].entries()) {
+        this.println(`   ${ch.primary ? green('①') : dim(String(i + 1))} ${bold(ch.label)} ${dim(`· ${ch.model}`)}`)
+      }
+      this.println('')
+    }
+    this.println(dim('    edit: /fallback <main|subagent|vision> add <provider> <model> [apiKey] · rm <n> · clear'))
+  }
+
+  /** /config subs [n] — background subagents: the parallel limit + live view. */
+  private async configSubsFlow(rest: string): Promise<void> {
+    const n = Number(rest.split(/\s+/)[0] ?? '')
+    if (Number.isFinite(n) && n > 0) {
+      this.host.settingsSave({ subagentMaxParallel: Math.floor(n) })
+      return this.println(`  ${okPill()} background subagents limit → ${bold(String(Math.floor(n)))}`)
+    }
+    const { maxParallel, running } = this.host.subagentLimits()
+    this.println(`  ${chip('🤖 background subagents', 'blue')} ${bold(`${running} running`)} ${dim(`· limit ${maxParallel} (config subagents.maxParallel)`)}`)
+    const list = this.host.backgroundSubs()
+    if (list.length) {
+      for (const line of renderSubsTable(list)) this.println(`    ${line}`)
+    } else {
+      this.println(dim('    none yet — the agent spawns them: task {"background": true, …}'))
+    }
+    const next = (await this.ask('new parallel limit (enter = keep)')) ?? ''
+    const v = Number(next.trim())
+    if (Number.isFinite(v) && v > 0) {
+      this.host.settingsSave({ subagentMaxParallel: Math.floor(v) })
+      this.println(`  ${okPill()} limit → ${bold(String(Math.floor(v)))}`)
     }
   }
 

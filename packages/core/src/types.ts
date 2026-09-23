@@ -198,6 +198,21 @@ export interface SubagentInfo {
   report?: string
 }
 
+/** One background subagent (task background:true) as tracked by the host's
+ *  registry — the id is short ("a1", "a2"…), shown in notifications
+ *  ("subagent a1 finished") and addressable from the subs tool. */
+export interface BgSubInfo {
+  id: string
+  description: string
+  /** agent kind: general | explore | test | custom name */
+  kind: string
+  status: 'running' | 'done' | 'error'
+  startedAt: number
+  finishedAt?: number
+  turns: number
+  report?: string
+}
+
 /** token accounting reported by providers that expose usage in the stream */
 export interface TokenUsage {
   input: number
@@ -256,6 +271,18 @@ export interface ToolContext {
     agent: string,
     maxTurns: number,
   ) => Promise<string>
+  /** injected by AgentLoop — spawn a DETACHED subagent; resolves immediately
+   *  with its id ("a1"…) or an error (e.g. parallel limit). The report is
+   *  delivered later through onBackgroundSub → deliverBackgroundReport /
+   *  a fresh host run — never as this tool's return value. */
+  spawnBackgroundSubagent?: (
+    description: string,
+    prompt: string,
+    agent: string,
+    maxTurns: number,
+  ) => { id: string } | { error: string }
+  /** host-owned registry of background subagents — read by the subs tool */
+  backgroundSubs?: { list(): BgSubInfo[] }
 }
 
 export interface ToolDefinition {
@@ -384,8 +411,24 @@ export interface TagentConfig {
     /** web cache window in minutes (default 10) */
     webTtlMin?: number
   }
-  /** ordered provider failover — primary first, then these entries */
+  /** ordered provider failover — primary first, then these entries.
+   *  LEGACY: applies to the MAIN agent only. */
   fallback?: FallbackEntry[]
+  /** v0.27: per-role failover chains. `main` mirrors the legacy `fallback`
+   *  field when unset (single source of truth stays `fallback` for main);
+   *  `subagent` gates task-tool subagent loops; `vision` gates the vision
+   *  tool's media model calls. */
+  fallbacks?: {
+    main?: FallbackEntry[]
+    subagent?: FallbackEntry[]
+    vision?: FallbackEntry[]
+  }
+  /** background subagents (task background:true) */
+  subagents?: {
+    /** max CONCURRENTLY RUNNING background subagents (default 4) — the
+     *  task tool refuses spawns beyond this until one finishes */
+    maxParallel?: number
+  }
   /** auto-diagnostics — a command (tsc --noEmit, npm run lint, …) run after
    *  edit turns; failures are fed back so the model self-corrects */
   diagnostics?: {
