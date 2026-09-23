@@ -276,9 +276,11 @@ You are code-reviewer. Be strict.`)
     const subs2: { start: SessionData[]; end: SessionData[] } = { start: [], end: [] }
     let p2 = 0
     let s2 = 0
+    let sub2System = ''
     const provider2 = fakeProvider((req) => {
       const system = (req.messages[0] as any)?.content ?? ''
       if (system.includes('Tagent subagent')) {
+        sub2System = system
         s2++
         return s2 === 1
           ? '```tagent:action\n{"tool":"bash","input":{"command":"echo qa-check"}}\n```'
@@ -301,7 +303,14 @@ You are code-reviewer. Be strict.`)
     const sum2 = await loop2.run('verify it')
     ok('test-kind spawn completed', sum2.finished === 'complete')
     ok('test kind → sub runs in TEST mode', subs2.start[0]?.mode === 'test', subs2.start[0]?.mode)
-    ok('test kind → sub got the QA persona', subs2.start[0]?.messages?.some((m) => m.content?.includes && m.content.includes('VERIFICATION')) === false || true)
+    ok('test kind → sub got the QA persona (VERIFICATION, not code changes)',
+      sub2System.includes('Mode: TEST') && !sub2System.includes('Mode: BUILD'))
+    ok('test-kind toolset is QA: test_report/browser/vision/serve present',
+      /### test_report/.test(sub2System) && /### browser/.test(sub2System) &&
+      /### vision/.test(sub2System) && /### serve/.test(sub2System))
+    ok('test-kind toolset is read-only: no write_file/edit_file/task/ask_user',
+      !/### write_file/.test(sub2System) && !/### edit_file/.test(sub2System) &&
+      !/### task/.test(sub2System) && !/### ask_user/.test(sub2System))
     ok('test-kind sub ran bash (QA toolset)', subs2.start[0]?.messages?.some((m) => m.toolCalls?.some((c) => c.tool === 'bash')) === true)
 
     /* --- models.subagent role: sub sessions carry the resolved model --- */

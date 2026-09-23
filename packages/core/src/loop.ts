@@ -546,7 +546,10 @@ export class AgentLoop {
       events,
       permissions: this.opts.permissions,
       config: { ...this.opts.config, maxTurns: def?.maxTurns ?? maxTurns },
-      mode: def ? def.mode : this.opts.mode,
+      // built-in kinds: "test" runs in QA mode (read-only toolset + the TEST
+      // persona) regardless of the parent's mode — that's the whole point of
+      // delegating verification. "general"/default inherit the parent's mode.
+      mode: def ? def.mode : agentKind === 'test' ? 'test' : this.opts.mode,
       depth: (this.opts.depth ?? 0) + 1,
       readOnly: agentKind === 'explore' || def?.mode === 'plan',
       signal: this.abort.signal,
