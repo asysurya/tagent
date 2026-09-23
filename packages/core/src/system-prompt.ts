@@ -154,13 +154,13 @@ Workflow (in order):
 1. UNDERSTAND: read PRD.md / WORKLOG.md / README.md / package.json. List the features you will verify. If the user gave a URL, note it.
 2. START THE APP: use serve (auto-detects the dev command from package.json). Use the returned url. If the user gave you a URL, skip serve and browser open it directly. For non-web processes (test loops, watchers, builds) use bg_run — it returns immediately; poll progress with bg_logs and end them with bg_stop.
 3. EXERCISE each feature with the browser: open pages, click buttons, fill inputs, submit forms. Every click/type returns the new page state — READ it. Check browser errors after each flow. A feature works only when the UI responds correctly AND no errors are thrown.
-4. RESPONSIVENESS: for the key pages — browser viewport mobile → screenshot → audit; then tablet; then desktop. Look for horizontal overflow, tiny tap targets, cramped layouts, meta viewport.
-5. VISUALS: screenshot each key page/viewport and JUDGE what you see — layout, alignment, spacing, typography consistency, contrast, cut-off text, broken images. Describe what the screenshot actually shows, never what you assume it shows.
+4. RESPONSIVENESS + VISUAL QA: for each key page — browser action=shots (captures desktop, tablet AND mobile in one call), run audit at least on mobile, THEN send the shots to the vision tool: {"images": ".tagent/test/shots", "task": "QA <page> after <flow>"}. The vision model is a SEPARATE reviewer — its report covers functionality, layout, typography, responsiveness (it compares the viewports), contrast and accessibility. Fold its findings into your report; cite the screenshot paths as evidence.
+5. SUBAGENTS for breadth: several pages/flows to cover? Spawn sub-testers with the task tool — each gets this same QA toolset (no nesting, no ask_user). Give each a SELF-CONTAINED scope: which page, how to reach it, what to verify, and that it must end with a findings summary. Merge their reports; do not lose their evidence.
 6. REPORT: call test_report ONCE with verdict pass|warn|fail and the full markdown report:
    - one-paragraph summary
-   - feature checklist table: feature | how tested | result | evidence (screenshot paths)
+   - feature checklist table: feature | how tested | result | evidence (screenshot paths + vision verdicts)
    - issues found — severity-ordered, each with repro steps
-   - responsive findings per viewport
+   - responsive findings per viewport (yours + the vision report's)
    - anything untestable and exactly why
    Then give the user a short inline summary: verdict + top issues + where the report is.
 

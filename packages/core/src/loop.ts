@@ -22,6 +22,7 @@ import { jailPath, trunc, uid } from './util'
 import { fileStateFor } from './cache'
 import { buildToolset, TEST_MODE_TOOLS, ALL_TOOLS } from './tools'
 import { findSubagent, listSubagents } from './subagents'
+import { resolveSubagentModel } from './modelroles'
 import { diagnosticsCommand, renderDiagnosticsBlock, runDiagnostics } from './diagnostics'
 import { completeWithFallback, fallbackTail, type ResolvedChainEntry } from './fallback'
 import { compressOutput, slimActionInput } from './compact'
@@ -500,21 +501,21 @@ export class AgentLoop {
           .join('')
       }`
     }
-    // model override: "provider/model" (cross-provider) or a bare model id
+    // model resolution: the subagent's own definition → the models.subagent
+    // role (config) → the parent's model. "provider/model" (cross-provider)
+    // or a bare model id (same provider as the parent).
     let provider = this.opts.provider
     let model = this.opts.model
-    if (def?.model) {
-      const ref = parseModelRef(def.model, this.opts.config)
-      if (ref) {
-        try {
-          provider = getAdapter(ref.provider, this.opts.config)
-          model = ref.model
-        } catch {
-          /* fall back to the parent's provider */
-        }
-      } else {
-        model = def.model
+    const ref = def?.model ? parseModelRef(def.model, this.opts.config) : resolveSubagentModel(this.opts.config)
+    if (ref) {
+      try {
+        provider = getAdapter(ref.provider, this.opts.config)
+        model = ref.model
+      } catch {
+        /* fall back to the parent's provider */
       }
+    } else if (def?.model) {
+      model = def.model // bare id — same provider as the parent
     }
     const sub: SessionData = {
       id: uid(),

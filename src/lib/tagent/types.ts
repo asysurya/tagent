@@ -119,6 +119,8 @@ export interface AskFormResponse {
 export interface SanitizedConfig {
   defaultProvider: string
   defaultModel: string
+  /** per-role model overrides (subagent + media) — mirrors config models */
+  models?: { subagent?: string; media?: { vision?: string; audio?: string; video?: string; pdf?: string } }
   providers: ProviderInfo[]
   permissions: { defaultMode: 'ask' | 'allow'; tools: Record<string, 'ask' | 'allow' | 'deny'> }
   tools: { bash: boolean; browser: boolean; serve?: boolean }

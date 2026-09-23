@@ -15,7 +15,7 @@ import { parseFrontMatter } from './util'
  *   description: when the primary agent should delegate to it
  *   model:       model override — "provider/model" or a bare model id
  *   tools:       comma-separated tool whitelist (omit = inherit all)
- *   mode:        build (default) | plan (read-only)
+ *   mode:        build (default) | plan (read-only) | test (QA toolset)
  *   maxTurns:    turn budget for one spawn (default 10)
  *
  * The file body is the subagent's system prompt (persona + instructions).
@@ -65,7 +65,7 @@ function scanDir(dir: string, source: 'workspace' | 'global', out: Map<string, S
         description: data.description || '(no description)',
         ...(data.model ? { model: data.model } : {}),
         ...(tools && tools.length ? { tools } : {}),
-        mode: data.mode === 'plan' ? 'plan' : 'build',
+        mode: data.mode === 'plan' ? 'plan' : data.mode === 'test' ? 'test' : 'build',
         maxTurns: Math.max(1, Math.min(Number(data.maxTurns) || 10, 40)),
         systemPrompt: body.trim() || 'You are a focused Tagent subagent.',
         source,
@@ -104,7 +104,7 @@ name: my-specialist
 description: One line — when should the primary agent delegate to this specialist?
 model: provider/model-id   # optional, e.g. zai/glm-4.7
 tools: read_file, grep, list_files   # optional whitelist; omit to inherit all
-mode: build                # build | plan (read-only)
+mode: build                # build | plan (read-only) | test (QA)
 maxTurns: 10               # turn budget per spawn
 ---
 

@@ -57,6 +57,29 @@ export interface SessionData extends SessionMeta {
 export type AgentMode = 'build' | 'plan' | 'test'
 
 /* ------------------------------------------------------------------ */
+/* model roles — main agent · subagents · media analysis                */
+/* ------------------------------------------------------------------ */
+
+/** The media modalities tagent can route to dedicated models. */
+export type MediaModality = 'vision' | 'audio' | 'video' | 'pdf'
+
+/**
+ * Per-role model overrides — "provider/model" (or legacy "provider:model")
+ * refs, or a bare model id (same provider as the main agent).
+ *
+ *   models.subagent        — what task-tool subagents run on
+ *   models.media.vision   — screenshots & image QA reports (the vision tool)
+ *   models.media.audio|video|pdf — reserved slots for the other modalities
+ *
+ * Unset → the main agent's defaultProvider/defaultModel (for media, only
+ * when that model actually accepts images).
+ */
+export interface ModelRoles {
+  subagent?: string
+  media?: Partial<Record<MediaModality, string>>
+}
+
+/* ------------------------------------------------------------------ */
 /* ask_user — interactive question forms                                */
 /* ------------------------------------------------------------------ */
 
@@ -286,6 +309,9 @@ export interface TagentConfig {
   version: 1
   defaultProvider: string
   defaultModel: string
+  /** per-role model overrides: subagents + per-modality media models.
+   *  Unset roles run on defaultProvider/defaultModel. */
+  models?: ModelRoles
   /** providerId → API key (BYOK). Stored locally, never committed. */
   apiKeys: Record<string, string>
   /** custom OpenAI-compatible endpoints */

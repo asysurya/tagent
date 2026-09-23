@@ -58,6 +58,8 @@ import {
   getOAuthClientId,
   deviceUrl,
   modelContextWindow,
+  parseRoleRef,
+  setRoleRef,
   estimateMessageTokens,
   renderContextBar,
   contextPct,
@@ -180,6 +182,7 @@ export class AgentHost {
     return {
       defaultProvider: this.cfg.defaultProvider,
       defaultModel: this.cfg.defaultModel,
+      models: this.cfg.models ?? {},
       providers: listProviderInfos(this.cfg, this.root),
       permissions: this.cfg.permissions,
       tools: this.cfg.tools,
@@ -790,6 +793,8 @@ export class AgentHost {
     /** upsert a custom provider by id (empty baseUrl + remove → delete) */
     customProvider?: CustomProviderConfig
     customProviderRemove?: string
+    /** model-role override — "subagent" or a media modality; empty ref clears */
+    modelRole?: { role: 'subagent' | 'vision' | 'audio' | 'video' | 'pdf'; ref: string }
   }>) {
     if (patch.defaultProvider) this.cfg.defaultProvider = patch.defaultProvider
     if (patch.defaultModel) this.cfg.defaultModel = patch.defaultModel
@@ -848,6 +853,19 @@ export class AgentHost {
     // auto-diagnostics gate
     if (typeof patch.diagnosticsCommand === 'string') {
       this.cfg.diagnostics = { ...(this.cfg.diagnostics ?? {}), command: patch.diagnosticsCommand.trim().slice(0, 300) }
+    }
+    // model-role override (subagent / media.vision / …) — empty ref clears
+    if (patch.modelRole?.role) {
+      const { role, ref } = patch.modelRole
+      const clean = String(ref ?? '').trim()
+      if (clean) {
+        // validate the ref up front: known provider or bare id
+        const parsed = parseRoleRef(clean, this.cfg)
+        if (!parsed) {
+          return { error: `could not parse model ref "${clean}" — use provider/model` }
+        }
+      }
+      setRoleRef(this.cfg, role, clean)
     }
     this.persist()
     return { ok: true, config: this.sanitizeConfig() }

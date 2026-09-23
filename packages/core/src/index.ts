@@ -7,6 +7,14 @@
  */
 
 export * from './types'
+export {
+  parseRoleRef,
+  resolveSubagentModel,
+  resolveMediaModel,
+  setRoleRef,
+  describeModelRoles,
+  type ResolvedRef,
+} from './modelroles'
 export { loadConfig, saveConfig, defaultConfig, workspaceDir, GLOBAL_DIR, listRecentWorkspaces, rememberWorkspace, updateGlobalConfig, readGlobalConfig, type RecentWorkspace } from './config'
 export { PermissionManager } from './permissions'
 export { AgentLoop, isReadOnlyTool, extractPlan } from './loop'

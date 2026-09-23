@@ -32,7 +32,7 @@ export const browserTool: ToolDefinition = {
   risk: 'high',
   params: {
     action:
-      'string (required) — "open" (url) | "click" (selector) | "type" (selector,value) | "screenshot" | "snapshot" | "viewport" (name|width,height) | "audit" | "console" | "network" | "errors" | "evaluate" (code) | "close"',
+      'string (required) — "open" (url) | "click" (selector) | "type" (selector,value) | "screenshot" | "shots" (responsive set) | "snapshot" | "viewport" (name|width,height) | "audit" | "console" | "network" | "errors" | "evaluate" (code) | "close"',
     url: 'string — for open (http://host:port/path)',
     selector: 'string — CSS selector for click/type',
     value: 'string — text to type',
@@ -45,7 +45,7 @@ export const browserTool: ToolDefinition = {
     properties: {
       action: {
         type: 'string',
-        enum: ['open', 'click', 'type', 'screenshot', 'snapshot', 'viewport', 'audit', 'console', 'network', 'errors', 'evaluate', 'close'],
+        enum: ['open', 'click', 'type', 'screenshot', 'shots', 'snapshot', 'viewport', 'audit', 'console', 'network', 'errors', 'evaluate', 'close'],
         description: 'Browser action',
       },
       url: { type: 'string', description: 'URL (for open)' },
@@ -117,6 +117,29 @@ export const browserTool: ToolDefinition = {
           const kb = (fs.statSync(file).size / 1024).toFixed(0)
           const rel = path.relative(ctx.workspaceRoot, file)
           return `Screenshot saved: ${rel} (${vp.width}×${vp.height}${input.fullPage === true ? ' full page' : ''}, ${kb}KB)\n[IMAGE:${file}]`
+        }
+        case 'shots': {
+          // the responsive set: desktop → tablet → mobile screenshots in ONE
+          // call — the input for a vision-model UI QA pass
+          ensureDir(shots)
+          const fullPage = input.fullPage === true
+          const lines: string[] = []
+          for (const name of ['desktop', 'tablet', 'mobile'] as const) {
+            await st.page.setViewportSize(VIEWPORTS[name])
+            st.viewportName = name
+            await settle(st)
+            const file = path.join(shots, `shot-${name}-${Date.now()}.png`)
+            await st.page.screenshot({ path: file, fullPage })
+            const kb = (fs.statSync(file).size / 1024).toFixed(0)
+            const rel = path.relative(ctx.workspaceRoot, file)
+            lines.push(`${name} (${VIEWPORTS[name].width}×${VIEWPORTS[name].height}): ${rel} (${kb}KB)\n[IMAGE:${file}]`)
+          }
+          return [
+            'Responsive screenshot set saved (desktop → tablet → mobile):',
+            ...lines,
+            await errorDigest(st),
+            'Next: run `audit` per viewport for the deterministic checks, and/or send the shots directory to the vision tool for the visual QA report.',
+          ].filter(Boolean).join('\n')
         }
         case 'snapshot': {
           return (await ariaSnapshot(st, 8_000)) || '(empty page)'

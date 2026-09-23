@@ -135,6 +135,7 @@ interface TagentState {
   respondPlan: (execute: boolean) => void
   saveFallback: (entries: FallbackEntry[]) => Promise<void>
   setModel: (provider: string, model: string) => Promise<void>
+  setModelRole: (role: 'subagent' | 'vision' | 'audio' | 'video' | 'pdf', ref: string) => Promise<void>
   setApiKey: (provider: string, key: string) => Promise<void>
   providersRefresh: () => Promise<{ ok?: boolean; updated?: string[]; failed?: string[]; error?: string }>
   saveCustomProvider: (cp: { id: string; label: string; baseUrl: string; apiKey?: string; models: string[]; kind?: 'openai' | 'anthropic' | 'google' }) => Promise<{ ok?: boolean; error?: string }>
@@ -670,6 +671,16 @@ export const useTagent = create<TagentState>((set, get) => ({
     })
     if (r.config) set({ config: r.config })
     set((st) => (st.session ? { session: { ...st.session, model } } : st))
+  },
+
+  async setModelRole(role, ref) {
+    const { socket } = get()
+    if (!socket || get().connection !== 'ready') return
+    const r = await call<{ ok: boolean; config: SanitizedConfig }>(socket, 'settings:save', {
+      modelRole: { role, ref },
+    })
+    if (r.config) set({ config: r.config })
+    if (!r.ok) toast.error(`could not set ${role} model`)
   },
 
   async setApiKey(provider, key) {

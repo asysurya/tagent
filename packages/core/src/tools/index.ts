@@ -6,6 +6,7 @@ import { todoWriteTool } from './todo'
 import { worklogTool } from './worklog'
 import { taskTool } from './task'
 import { browserTool } from './browser'
+import { visionTool } from './vision'
 import { serveTool } from './serve'
 import { testReportTool } from './report'
 import { askUserTool } from './ask'
@@ -29,6 +30,7 @@ const ALL_TOOLS: ToolDefinition[] = [
   memoryTool,
   loadSkillTool,
   browserTool,
+  visionTool,
   serveTool,
   testReportTool,
   askUserTool,
@@ -46,24 +48,27 @@ export interface BuildToolsetOptions {
   mode?: 'build' | 'plan' | 'test'
 }
 
-/** The QA toolset — test mode's write-free allowlist (loop-level gate). */
+/** The QA toolset — test mode's write-free allowlist (loop-level gate).
+ *  `task` is in: the QA lead may spawn subagents (they get this same toolset,
+ *  minus nesting); `vision` routes screenshots to the media model. */
 export const TEST_MODE_TOOLS = new Set([
   'read_file', 'read_files', 'list_files', 'grep', 'web_fetch', 'ddg_search',
-  'bash', 'browser', 'serve', 'test_report', 'todowrite', 'memory', 'load_skill',
+  'bash', 'browser', 'vision', 'serve', 'test_report', 'task', 'todowrite', 'memory', 'load_skill',
   'ask_user', 'bg_run', 'bg_logs', 'bg_stop',
 ])
 
 /** read/observe set — plan mode & explore subagents */
 const RO_NAMES = new Set([
   'read_file', 'read_files', 'list_files', 'grep', 'web_fetch', 'ddg_search',
-  'todowrite', 'memory', 'load_skill', 'ask_user',
+  'vision', 'todowrite', 'memory', 'load_skill', 'ask_user',
 ])
 
 /**
  * Assemble the toolset for a run.
  * - mode 'plan' / readOnly: investigate & interview (read, search, web, todos,
  *   ask_user); plan mode may also send explore subagents (task)
- * - mode 'test': read/observe + bash + browser + serve + bg + test_report (no writes)
+ * - mode 'test': read/observe + bash + browser + vision + serve + bg +
+ *   test_report + task (sub-testers) — no source writes
  * - mode 'build': everything that AFFECTS the project — files, shell, browser,
  *   serve, background processes. The QA deliverable (test_report) is not build's
  *   job; MCP/plugin tools arrive separately as extraTools.
@@ -79,9 +84,12 @@ export function buildToolset(opts: BuildToolsetOptions = {}): ToolDefinition[] {
 
   if (test) {
     // QA toolset — the agent RUNS the project and verifies it, but cannot
-    // modify source files; the only write is its own report.
+    // modify source files; the only write is its own report. The QA lead may
+    // delegate: `task` spawns sub-testers (nested spawning is depth-gated in
+    // the task tool itself); sub-testers never face the human.
     return ALL_TOOLS.filter((t) => {
       if (!TEST_MODE_TOOLS.has(t.name)) return false
+      if (isSubagent && (t.name === 'task' || t.name === 'ask_user')) return false
       if (cfg && t.name === 'bash' && !cfg.tools.bash) return false
       if (cfg && t.name === 'browser' && !cfg.tools.browser) return false
       if (cfg && t.name === 'serve' && cfg.tools.serve === false) return false

@@ -46,6 +46,7 @@ import path from 'node:path'
 import {
   listProviderInfos,
   parseModelRef,
+  describeModelRoles,
   listCheckpoints,
   listFacts,
   listSkills,
@@ -2847,7 +2848,7 @@ export class TuiApp {
       case 'sessions':
         return this.openSessionPicker()
       case 'model':
-        return this.modelPickerFlow()
+        return this.modelRoleFlow()
       case 'undo': {
         const r = this.host.undoCheckpoint() as { ok: boolean; checkpoint: { reason?: string } | null }
         if (r.ok) this.println(`  ${okPill()} rolled back · ${r.checkpoint?.reason ?? ''}`)
@@ -3331,12 +3332,16 @@ export class TuiApp {
           if (r.updated.length) this.println(dim(`    ${r.updated.join(', ')}`))
           return
         }
-        // /model list — the flat catalog view
+        // /model list — the flat catalog view + the model roles
         if (arg === 'list' || arg === 'catalog') {
           const infos = listProviderInfos(host.cfg)
           const ready = infos.filter((p) => !p.needsKey || p.hasKey)
           const locked = infos.filter((p) => p.needsKey && !p.hasKey)
-          this.println(`  current: ${bold(cfg.defaultModel)} ${dim(`(${cfg.defaultProvider})`)}`)
+          this.println(bold('  model roles'))
+          for (const r of describeModelRoles(host.cfg)) {
+            this.println(`   ${r.role === 'main' ? green('▸') : ' '} ${bold(padCol(r.role, 14))} ${r.set ? r.ref : dim(r.ref)}`)
+          }
+          this.println(`  ${bold('providers')} — current main: ${bold(cfg.defaultModel)} ${dim(`(${cfg.defaultProvider})`)}`)
           this.println(bold('  ready'))
           for (const p of ready) {
             const mark = p.id === host.cfg.defaultProvider ? green('▸') : ' '
@@ -3344,13 +3349,48 @@ export class TuiApp {
             this.println(`  ${mark} ${bold(padCol(p.id, 16))} ${key} ${dim(p.models.map((m) => m.id).slice(0, 4).join(', '))}${p.models.length > 4 ? dim(` +${p.models.length - 4}`) : ''}`)
           }
           if (locked.length) this.println(dim(`  ${locked.length} more in the catalog (add a key): ${locked.slice(0, 8).map((p) => p.id).join(', ')}${locked.length > 8 ? '…' : ''}`))
-          this.println(dim('  interactive: /model · set: /model <provider>/<model> · search: /model <text>'))
+          this.println(dim('  roles: /model subagent|vision <provider>/<model> · off → follow main · interactive: /model'))
           return
         }
-        // no arg → the interactive picker (providers, then models)
-        if (!arg) return this.modelPickerFlow()
+        // no arg → the role picker, then providers, then models
+        if (!arg) return this.modelRoleFlow()
         // /model custom → straight into the custom-provider wizard
         if (arg === 'custom' || arg === 'add') return this.customProviderWizard()
+        // role-scoped: /model subagent <ref|off> · /model vision <ref|off> · /model media vision <ref>
+        {
+          const ALIAS: Record<string, 'subagent' | 'vision' | 'audio' | 'video' | 'pdf'> = {
+            subagent: 'subagent', sub: 'subagent', vision: 'vision', audio: 'audio', video: 'video', pdf: 'pdf',
+          }
+          const parts = arg.split(/\s+/)
+          let role: (typeof ALIAS)[string] | undefined
+          let rest = ''
+          if (parts[0] === 'media' && parts.length >= 2 && ALIAS[parts[1]]) {
+            role = ALIAS[parts[1]]
+            rest = parts.slice(2).join(' ')
+          } else if (ALIAS[parts[0]]) {
+            role = ALIAS[parts[0]]
+            rest = parts.slice(1).join(' ')
+          }
+          if (role) {
+            if (!rest) return this.modelPickerFlow(role as never)
+            if (rest === 'off' || rest === 'none' || rest === 'clear') {
+              host.settingsSave({ modelRole: { role, ref: '' } })
+              return this.println(`  ${okPill()} ${role} → follows the main model again`)
+            }
+            const r = parseModelRef(rest, host.cfg)
+            const provider = r?.provider ?? host.cfg.defaultProvider
+            const modelId = r?.model ?? rest
+            const info = listProviderInfos(host.cfg).find((p) => p.id === provider)
+            if (!info) return this.println(red(`  unknown provider "${provider}" — /model to list`))
+            if (info.needsKey && !info.hasKey) return this.println(red(`  ${provider} has no key yet — /apikey ${provider}`))
+            host.settingsSave({ modelRole: { role, ref: `${provider}/${modelId}` } })
+            this.println(`  ${okPill()} ${role} → ${bold(`${provider} · ${modelId}`)}`)
+            if (role === 'vision' && !info.models.find((m) => m.id === modelId)?.vision) {
+              this.println(yellow(`    ⚠ ${modelId} is not flagged vision-capable — image input may fail`))
+            }
+            return
+          }
+        }
         // "provider/model" (opencode style) or legacy "provider:model"
         const ref = parseModelRef(arg, host.cfg)
         if (ref) {
@@ -3880,8 +3920,38 @@ export class TuiApp {
     this.println(`  ${okPill()} key saved for ${providerId}`)
   }
 
-  /** /model with no arg — provider picker → model picker (mirrors tui.ts) */
-  private async modelPickerFlow(): Promise<void> {
+  /** /model with no arg — FIRST pick the role (main agent · subagent · media),
+   *  then provider → model. Three model jobs, three pickable models. */
+  private async modelRoleFlow(): Promise<void> {
+    const host = this.host
+    const roles = describeModelRoles(host.cfg)
+    const pick = await this.pick<string>(
+      [
+        {
+          label: 'main agent', hint: 'the coding model', value: 'main',
+          detail: `${roles[0].ref} — every run unless overridden below`,
+        },
+        {
+          label: 'subagent', hint: 'task-tool subagents', value: 'subagent',
+          detail: roles[1].set ? `${roles[1].ref} — override active` : 'same as main — pick to set a cheaper/faster model',
+        },
+        {
+          label: 'media · vision', hint: 'screenshot & image QA', value: 'vision',
+          detail: roles[2].set ? `${roles[2].ref} — override active` : 'main model when vision-capable — pick to dedicate one',
+        },
+        { label: 'media · audio', hint: 'reserved slot', value: 'audio', detail: 'for audio analysis when a provider supports it' },
+        { label: 'media · video', hint: 'reserved slot', value: 'video', detail: 'for video analysis when a provider supports it' },
+        { label: 'media · pdf', hint: 'reserved slot', value: 'pdf', detail: 'for document analysis when a provider supports it' },
+      ],
+      'model role — which job gets which model?',
+      { footer: 'main · subagent · media (vision/audio/video/pdf) — esc cancel' },
+    )
+    if (!pick) return this.println(dim('  cancelled'))
+    return this.modelPickerFlow(pick as 'main')
+  }
+
+  /** provider → model, saved onto the given role (default: the main agent). */
+  private async modelPickerFlow(role: 'main' | 'subagent' | 'vision' | 'audio' | 'video' | 'pdf' = 'main'): Promise<void> {
     const host = this.host
     const infos = listProviderInfos(host.cfg)
     if (infos.length === 0) return this.println(red('  no providers configured'))
@@ -3961,18 +4031,43 @@ export class TuiApp {
       info.models = again.models
     }
     const mcur = info.models.findIndex((m) => m.id === host.cfg.defaultModel && provId === host.cfg.defaultProvider)
+    // role context for titles + the save
+    const curRef =
+      role === 'main'
+        ? undefined
+        : role === 'subagent'
+          ? host.cfg.models?.subagent
+          : host.cfg.models?.media?.[role]
+    const overridden = role !== 'main'
+    const saveRole = (provider: string, model: string) => {
+      if (role === 'main') {
+        host.settingsSave({ defaultProvider: provider, defaultModel: model })
+        this.println(`  ${okPill()} main agent → ${bold(`${provider} · ${model}`)}`)
+      } else {
+        host.settingsSave({ modelRole: { role, ref: `${provider}/${model}` } })
+        this.println(`  ${okPill()} ${role} → ${bold(`${provider} · ${model}`)}`)
+      }
+    }
     const modelId = await this.pick(
       [
+        ...(overridden && curRef
+          ? [{ label: '× clear override — follow the main model', hint: 'reset', value: '__clear_role__', keep: true,
+              detail: `${role} currently: ${curRef}` } as { label: string; hint: string; value: string; keep?: boolean; detail?: string }]
+          : []),
         ...info.models.map((m) => ({ label: m.id, hint: m.label, value: m.id })),
         {
           label: '+ custom model id…', hint: 'type any id', value: '__custom_model__', keep: true,
           detail: `for endpoints whose list is missing or wrong — saved as ${provId}/<id>`,
         },
       ],
-      `${provId} — model`,
+      `${provId} — model${role === 'main' ? '' : ` (${role})`}`,
       { filterable: true, selected: Math.max(0, mcur), footer: 'type to search · esc cancel' },
     )
     if (!modelId) return this.println(dim('  cancelled'))
+    if (modelId === '__clear_role__') {
+      host.settingsSave({ modelRole: { role: role as never, ref: '' } })
+      return this.println(`  ${okPill()} ${role} → follows the main model again`)
+    }
     if (modelId === '__custom_model__') {
       const custom = (await this.ask(`model id for ${provId} (e.g. llama3.1, gemini-2.0-flash)`))?.trim()
       if (!custom) return this.println(dim('  cancelled'))
@@ -3981,12 +4076,10 @@ export class TuiApp {
       if (cp && !(cp.models ?? []).includes(custom)) {
         host.settingsSave({ customProvider: { ...cp, models: [...(cp.models ?? []), custom] } })
       }
-      host.settingsSave({ defaultProvider: provId, defaultModel: custom })
-      this.println(`  ${okPill()} ${provId} · ${custom}`)
+      saveRole(provId, custom)
       return
     }
-    host.settingsSave({ defaultProvider: provId, defaultModel: modelId })
-    this.println(`  ${okPill()} ${provId} · ${modelId}`)
+    saveRole(provId, modelId)
   }
 
   /**
