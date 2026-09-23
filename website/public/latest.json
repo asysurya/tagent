@@ -1,6 +1,6 @@
 {
-  "version": "0.26.0",
+  "version": "0.27.0",
   "date": "2026-09-23",
-  "notes": "Subagents are real: the main agent can hand whole subtasks — or an entire QA pass — to a focused sub-agent that runs in the same workspace, reads files itself, and reports back. Models split into three categories (main · subagent · media) so your coding model, your sub-agent model, and your vision model are chosen independently. And test mode goes deep: screenshots flow to the dedicated vision model, which returns a real UI review — typography, responsiveness, contrast, accessibility — not just \"does it load\".",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.26.0"
+  "notes": "Subagents no longer block. task {background:true} returns an id (a1, a2…) instantly and the main agent keeps working while the sub runs detached — reports flow back on their own: mid-run they arrive as injected [SUBAGENT REPORT] messages, and if the agent already finished, it auto-resumes in a fresh run and continues without ever asking the user. Monitoring is first-class: the subs tool for the agent, /subs for the user. Fallback becomes three independent lanes (main · subagent · vision), and /config turns into the add/apply template: register a provider+model once, then apply it as the model for main/subagent/vision — or as the fallback for any of those three.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.27.0"
 }

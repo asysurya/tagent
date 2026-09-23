@@ -28,9 +28,60 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.26.0'
+export const LATEST = '0.27.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.27.0',
+    date: '2026-09-23',
+    title: 'Async subagents — background work, 3-lane fallback, /config add/apply',
+    summary:
+      'Subagents no longer block. task {background:true} returns an id (a1, a2…) instantly and the main agent keeps working while the sub runs detached — reports flow back on their own: mid-run they arrive as injected [SUBAGENT REPORT] messages, and if the agent already finished, it auto-resumes in a fresh run and continues without ever asking the user. Monitoring is first-class: the subs tool for the agent, /subs for the user. Fallback becomes three independent lanes (main · subagent · vision), and /config turns into the add/apply template: register a provider+model once, then apply it as the model for main/subagent/vision — or as the fallback for any of those three.',
+    stable: true,
+    sections: [
+      {
+        name: 'Background subagents — fire and forget',
+        items: [
+          'task {background:true} returns "BACKGROUND SUBAGENT STARTED — a1 …" immediately — the parent loop never waits, so the agent keeps solving while subs chew on side quests in parallel',
+          'report delivery in both orders: sub finishes while the agent is mid-run → the report is injected as a [SUBAGENT REPORT] user message at the top of the next turn; agent finished first → the host auto-resumes it in a fresh run that starts from the report — no user confirmation, ever',
+          'a text notify lands for the user every time a sub delivers: "subagent a1 finished — report delivered"',
+          'multi-sub by design — fire a1, a2, a3…; the parallel limit is yours: subagents.maxParallel (default 4, hard cap 16) via /config subs <n>',
+          'reports never strand: a no-action turn with a pending report takes one more turn instead of dying quietly, and stopping the agent never aborts its orphan subs (a dead loop refuses injections but its detached subs finish and are delivered on resume)',
+        ],
+      },
+      {
+        name: 'Monitoring — subs everywhere',
+        items: [
+          'agent-side: the new subs tool — subs lists every background sub (id, kind, state, elapsed), subs {id} re-reads a finished report in full',
+          'user-side: /subs live view in the TUI · subs:view RPC for the daemon/GUI — the registry is host-owned, so TUI and GUI always see the same truth (ids a1/a2…, states, finished reports trimmed at 20)',
+          'the Delegation section of the system prompt now teaches the agent when to go background, the auto-resume semantics, and how to poll with subs',
+        ],
+      },
+      {
+        name: 'Fallback, per-role — three lanes',
+        items: [
+          'three independent chains: main (the legacy fallback field, unchanged) · subagent (what task-tool subs walk) · vision (the vision tool walks its own chain — failover covered by tests end-to-end)',
+          '/fallback reworked: /fallback <main|subagent|vision> add|rm|clear plus the full 3-chain view in one command — Indonesian aliases utama/sub/media kept working',
+          'role overrides become lane primaries: set a dedicated subagent or vision model and it sits at the head of its own chain, with your fallback list behind it',
+        ],
+      },
+      {
+        name: '/config — the add · apply template',
+        items: [
+          'add: register things once — MCP servers, a provider (with its apikey and default model), keys',
+          'apply: a provider+model you already added, put to work — as the model for a role (main · subagent · vision) or as a fallback for any of the three lanes',
+          'the dashboard: + add · ⚡ apply · ⛓ fallback · 🤖 subs (limit + live view) · keys · sync (status/push/pull) — /config apply, /config fallback, /config subs <n> subcommands included',
+        ],
+      },
+      {
+        name: 'Fixes & internals',
+        items: [
+          'race fix: chatSend\'s finally only clears ITS loop — a background deliver landing in the window between runs no longer clears a fresh run\'s state (a pre-existing window, now closed)',
+          '40 new hermetic checks in scripts/test-async-subs.ts: registry ids/limit/finish, immediate-return spawn, mid-run injection (the turn-4 model call SAW the report), late delivery after run end, the subs tool, 3-lane fallback, vision failover — every suite re-run green',
+        ],
+      },
+    ],
+  },
   {
     version: '0.26.0',
     date: '2026-09-23',

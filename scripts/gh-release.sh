@@ -36,66 +36,70 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — the delegation stack: subagents, model roles, deep vision QA
+## v__VER__ — async subagents: background work, 3-lane fallback, /config add/apply
 
-Subagents are real now. The main agent can hand whole subtasks — or an
-entire QA pass — to a focused sub-agent that runs in the same workspace,
-reads files itself, and reports back. No recursion, no pasted file
-contents: the prompt is a work order, not a data dump.
+Subagents no longer block. `task {background:true}` returns an id (a1, a2…)
+INSTANTLY and the main agent keeps working while the sub runs detached in
+the background. Reports flow back on their own — mid-run as injected
+messages, or as an auto-resume when the agent already finished. The user
+is never asked to babysit.
 
 ```
-  task: verify pages
-  ├─ kind "test" → read-only QA sub (serve + browser + vision)
-  ├─ reads PRD.md / the workspace itself
-  ├─ shots desktop+tablet+mobile → .tagent/test/shots
-  └─ vision model → typography / responsive / contrast / a11y report
+  task {background:true, agent:"test"}
+     └─► "BACKGROUND SUBAGENT STARTED — a1 …"   (parent keeps working)
+
+  sub finishes, agent mid-run   ──►  [SUBAGENT REPORT] injected next turn
+  sub finishes, agent already done  ──►  agent auto-resumes, continues alone
+  both cases: notify "subagent a1 finished — report delivered"
 ```
 
-### Subagents — the task tool
+### Background subagents
 
-- built-in kinds: **general** (full toolset like yours, minus spawning),
-  **explore** (read-only recon), **test** (the QA kit — serve + browser +
-  vision, read-only)
-- subs run in YOUR workspace with the same file tools — they read whatever
-  they need themselves, so prompts carry instructions + paths, never file
-  contents
-- no recursion: subs cannot spawn further subs, never face the user
-- custom specialists: drop a markdown file in `.tagent/agents/` (or
-  `~/.tagent/agents/`) — front-matter for model, tools whitelist, mode
-  (build | plan | test), maxTurns; the body is its persona
-- economy fast-path: plain "read file X" prompts never spawn a sub at all
+- `task {background:true}` returns immediately with the sub's id — the
+  parent loop never waits; fire several, they run in parallel
+- report delivery in both directions: live loop → the report is injected
+  as a `[SUBAGENT REPORT]` message mid-run; agent already finished → the
+  host auto-resumes it in a fresh run — no user confirmation, ever
+- multi-sub by design; the parallel limit is yours:
+  `subagents.maxParallel` (default 4, cap 16) via `/config subs <n>`
+- reports never strand: a no-action turn with a pending report takes one
+  more turn; a dead loop's orphan subs are never aborted (stop-block
+  checks loop.alive)
 
-### Three model roles, set independently
+### Monitoring — subs everywhere
 
-- `models.subagent` — what task-tool subagents run on
-- `models.media.vision / .audio / .video / .pdf` — the analysis models;
-  the vision tool routes screenshots to `media.vision`
-- TUI: `/model subagent|vision|audio|video|pdf <provider/model>` ·
-  `off` → follow main · interactive `/model` role picker
-- GUI: a Model-roles dialog in the model dropdown
+- agent-side: the `subs` tool — `subs` lists every background sub
+  (id, kind, state, elapsed); `subs {id}` re-reads a finished report
+- user-side: `/subs` live view in the TUI · `subs:view` RPC in the daemon
+  (GUI) — the registry lives on the host, so both see the same truth
 
-### Vision QA — image → model → report
+### Fallback is per-role now — 3 lanes
 
-- browser `shots` captures desktop + tablet + mobile in one call into
-  `.tagent/test/shots`; pass the directory, a file, or a comma list to the
-  vision tool (a directory takes its newest 4)
-- the dedicated vision model returns a structured review: functionality,
-  layout & alignment, typography scale, responsive comparison across
-  viewports, color & contrast, accessibility — then a PASS/WARN/FAIL
-  verdict with severity-tagged issues and suggested fixes
-- no dedicated model? the main model is used when it accepts images —
-  otherwise a setup error points at `/model media vision`
+- three independent chains: **main** (the legacy `fallback` field) ·
+  **subagent** (what task subs walk) · **vision** (the vision tool walks
+  its own chain — failover tested end-to-end)
+- `/fallback` reworked: `/fallback <main|subagent|vision> add|rm|clear`
+  plus the full 3-chain view in one command (aliases: utama/sub/media)
+- role overrides surface as lane primaries: a dedicated subagent or vision
+  model sits at the head of its own chain
 
-### Fixes
+### /config is a template now — add · apply
 
-- **task {agent:"test"} ran the sub in the parent's mode** — a build-mode
-  parent got a QA sub with a "your job is WORKING CODE" persona and
-  write_file/edit_file available; only the session metadata said "test".
-  The built-in test kind now genuinely runs read-only with the
-  VERIFICATION persona and the full QA toolset (test_report, browser,
-  vision, serve, bash, bg). The test suite's persona check was a tautology
-  (`|| true`) and never caught it — the assertions now read the sub's
-  actual system prompt (71 checks)
+- **add**: register things — MCP servers, provider+apikey+model, keys
+- **apply**: a provider+model you already added → put it to work as the
+  model for a role (**main · subagent · vision**) or as a **fallback**
+  for any of the three lanes
+- the dashboard: `+ add` · `⚡ apply` · `⛓ fallback` · `🤖 subs` (limit +
+  view) · keys · sync (status/push/pull)
+
+### Fixes & internals
+
+- race fix: `chatSend`'s finally only clears ITS loop — a background
+  deliver landing between runs no longer clears a fresh run's state
+- 40 new hermetic checks (`scripts/test-async-subs.ts`): registry ids /
+  limit / finish, immediate-return spawn, mid-run injection (the turn-4
+  model call SAW the report), late delivery after run end, the subs tool,
+  3-lane fallback, vision failover — every suite green
 EOF
 )
 
@@ -105,7 +109,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — subagents, model roles, deep vision QA" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — async subagents, 3-lane fallback, /config add/apply" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")
