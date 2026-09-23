@@ -4,6 +4,72 @@ Multi-agent shared journal (the project's own convention — see
 packages/core/src/tools/worklog.ts). Append-only; every agent adds a
 section per task. Fresh agents: read top-down before working.
 
+---
+Task ID: 8
+Agent: Super Z (main)
+Task: Async background subagents + /config add/apply rework + 3-lane
+fallback. Commit babe6dd (pushed).
+
+Work Log:
+- CORE bgsubs.ts (NEW): host-owned BackgroundSubagents registry — ids
+  a1/a2…, parallel limit (config subagents.maxParallel, default 4, cap
+  16), finish() stores reports, finished entries trimmed at 20.
+- loop.ts: spawnSubagentBackground (detached promise; registers, fires
+  onBackgroundSub once with the report) · pendingReports queue flushed
+  at the top of each turn as user messages · "no actions + pending
+  report" takes one more turn instead of stranding it · alive getter +
+  finished flag (a dead loop is never stopped — that would abort its
+  detached subs — and refuses injections) · chain per role: depth>0
+  walks fallbacks.subagent, depth 0 the legacy fallback.
+- task.ts: background:true → returns "BACKGROUND SUBAGENT STARTED —
+  a1 …" immediately (no report); parallel-limit errors surfaced.
+- tools/subs.ts (NEW): agent-side monitor — listing + subs {id} re-reads
+  a finished report; renderSubsTable helper for hosts.
+- tools/index.ts: subs registered in ALL modes, excluded at depth>0
+  (subs track the PARENT's background spawns).
+- system-prompt.ts: Delegation section teaches background mode (when to
+  use, auto-resume semantics, subs tool, limit).
+- vision.ts: the call now walks a chain — primary + fallbacks.vision —
+  via completeWithFallback (seam: visionInternals.resolveTailFor).
+- fallback.ts: FallbackRole type, fallbackListFor/fallbackTailFor
+  (main mirrors legacy `fallback`), describeChains (3 lanes with role
+  overrides as lane primaries).
+- host.ts: bgSubs registry + onBackgroundSub — notify ("subagent a1
+  finished — report delivered") then deliver (live loop →
+  deliverBackgroundReport; idle → coalesced 250ms wake → chatSend
+  auto-continue, user never asked) · backgroundSubs()/subagentLimits()
+  for TUI+GUI · settingsSave: fallbackRole {subagent|vision} +
+  subagentMaxParallel · fallbackChainsView() · chatSend finally only
+  clears ITS loop (race fix, pre-existing window) · stop-block checks
+  loop.alive so a dead loop's orphan subs are never aborted.
+- daemon.ts: RPC subs:view + fallback:chains.
+- TUI (tui-app.ts + tui.ts): /subs live view · /fallback reworked
+  (<main|subagent|vision> add/rm/clear + 3-chain display, alias
+  utama/sub/media) · /config dashboard reworked: + add · ⚡ apply
+  (provider → model → role main/subagent/vision) · ⛓ fallback · 🤖 subs
+  (limit + view) · keys · sync (status/push/pull) — /config apply,
+  /config fallback, /config subs <n> subcommands.
+- README: subagents + fallback rows updated.
+- Tests: scripts/test-async-subs.ts (NEW, 40 checks) — registry ids/
+  limit/finish, immediate-return spawn, mid-run injection (turn-4 model
+  call SAW the report), late delivery after run end (onBackgroundSub
+  fires; dead loop refuses), subs tool listing/full report, 3-lane
+  fallback list/tail/describe + role overrides, vision failover (primary
+  down → backup lane answers). All suites re-run green: 71+59+40+41+19+
+  30+32+25+71+host+menu+tui-app; tsc identical to baseline; daemon smoke
+  (tagent web :4020) ran a full agent turn live.
+
+Stage Summary:
+- The delegation stack is now fully async-capable: fire-and-forget subs
+  with automatic report delivery in either direction of completion
+  order; monitoring for agent (subs tool) and user (/subs, GUI RPC);
+  parallelism user-configurable. Fallback is per-role (main · subagent ·
+  vision). /config is the add/apply template the user asked for.
+- Not released yet — candidate v0.26.1 (or 0.27.0) after smoke test.
+
+---
+Task ID: 7
+
 > History note: an earlier lowercase `worklog.md` (Tasks 1–5) existed in a
 > previous sandbox state and was lost — Tasks 4–5 are reconstructed here
 > from git commit messages (75a7785, dad350a). Task 6 onward are current.

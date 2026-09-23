@@ -1,0 +1,29 @@
+{
+  "v": 1,
+  "files": {
+    "/home/z/my-project/README.md": {
+      "mtimeMs": 1790143651000,
+      "size": 36566,
+      "at": 1790151628435,
+      "reads": 1
+    },
+    "/home/z/my-project/demo-workspace/README.md": {
+      "mtimeMs": 1789547435000,
+      "size": 500,
+      "at": 1790151639465,
+      "reads": 1
+    },
+    "/home/z/my-project/demo-workspace/app.js": {
+      "mtimeMs": 1789549587000,
+      "size": 2554,
+      "at": 1790151639466,
+      "reads": 1
+    },
+    "/home/z/my-project/demo-workspace/index.html": {
+      "mtimeMs": 1789547435000,
+      "size": 772,
+      "at": 1790151644070,
+      "reads": 1
+    }
+  }
+}
