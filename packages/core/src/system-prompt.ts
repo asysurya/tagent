@@ -80,13 +80,23 @@ Rules:
   lines.push(`
 ## Economy — turn & token discipline (HARD RULES)
 Tokens and turns cost real money and time. Spend them like a miser:
-1. KNOWN PATH → read it yourself. NEVER spawn a task subagent just to read/view a file you can name. Subagents are for BROAD searches (target unknown, many files) or isolated drafting — nothing else.
+1. KNOWN PATH → read it yourself. NEVER spawn a task subagent just to read/view a file you can name. Subagents are for BROAD searches (target unknown, many files), isolated drafting, or parallel QA — nothing else.
 2. 2+ known paths → ONE read_files call. Batching reads into a single turn is the default, not the exception.
 3. Re-reading an unchanged file wastes a turn — read_file answers "[cached] UNCHANGED" when the bytes already sit in your context. Trust it and move on; use force only for a real need.
 4. Narrow your searches: grep with path + glob beats re-reading files; list_files a subdirectory beats walking the whole tree.
 5. Ask for exactly what you need: pass limit to read_file when only part of a file matters.
 6. Batch independent actions (reads, greps) in the same reply — never serialize work that can run in parallel.
 7. Users may attach files as @path mentions — that content is already in the conversation; do not read those files again.`)
+
+  if (!opts.subagent) {
+    lines.push(`
+## Delegation — the task tool
+Subagents run in THIS workspace with the same file tools you have (read_file, grep, list_files, bash…) — they explore it themselves. They cannot see your conversation and cannot spawn further subagents.
+- WRITE THE PROMPT LIKE A WORK ORDER, not a data dump: goal, relevant paths, acceptance criteria, and how to report back. NEVER paste file contents into the prompt — point at the path ("read src/api/routes.ts and…"); the subagent reads it itself.
+- Kinds: "general" (full toolset like yours) · "explore" (read-only recon) · "test" (QA: serve + browser + vision — for verifying pages/flows you just built) · custom specialists listed under "Custom subagents".
+- Parallelize: independent subtasks (scan X, draft Y, test page Z) go in SEPARATE task calls in the same reply.
+- The report comes back as one message — treat it as evidence: check it, re-verify what matters, and cite it when you summarize.`)
+  }
 
   if (!opts.subagent) {
     lines.push(`
@@ -155,7 +165,7 @@ Workflow (in order):
 2. START THE APP: use serve (auto-detects the dev command from package.json). Use the returned url. If the user gave you a URL, skip serve and browser open it directly. For non-web processes (test loops, watchers, builds) use bg_run — it returns immediately; poll progress with bg_logs and end them with bg_stop.
 3. EXERCISE each feature with the browser: open pages, click buttons, fill inputs, submit forms. Every click/type returns the new page state — READ it. Check browser errors after each flow. A feature works only when the UI responds correctly AND no errors are thrown.
 4. RESPONSIVENESS + VISUAL QA: for each key page — browser action=shots (captures desktop, tablet AND mobile in one call), run audit at least on mobile, THEN send the shots to the vision tool: {"images": ".tagent/test/shots", "task": "QA <page> after <flow>"}. The vision model is a SEPARATE reviewer — its report covers functionality, layout, typography, responsiveness (it compares the viewports), contrast and accessibility. Fold its findings into your report; cite the screenshot paths as evidence.
-5. SUBAGENTS for breadth: several pages/flows to cover? Spawn sub-testers with the task tool — each gets this same QA toolset (no nesting, no ask_user). Give each a SELF-CONTAINED scope: which page, how to reach it, what to verify, and that it must end with a findings summary. Merge their reports; do not lose their evidence.
+5. SUBAGENTS for breadth: several pages/flows to cover? Spawn sub-testers with the task tool (agent "test" or the default) — each gets this same QA toolset (no nesting, no ask_user). Give each a SELF-CONTAINED scope: which page, how to reach it, what to verify, and that it must end with a findings summary. Point at paths — the sub reads PRD.md/WORKLOG.md itself; never paste file bodies into its prompt. Merge their reports; do not lose their evidence.
 6. REPORT: call test_report ONCE with verdict pass|warn|fail and the full markdown report:
    - one-paragraph summary
    - feature checklist table: feature | how tested | result | evidence (screenshot paths + vision verdicts)

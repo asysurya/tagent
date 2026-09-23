@@ -23,12 +23,13 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
-  Bone, Check, ChevronDown, Cpu, FlaskConical, FolderInput, FolderOpen, Github, History, ListTodo,
+  Bone, Check, ChevronDown, Cpu, FlaskConical, FolderInput, FolderOpen, Github, History, Layers, ListTodo,
   PanelRightClose, PanelRightOpen, Search, Settings, Zap,
 } from 'lucide-react'
 import { useTagent } from '@/lib/tagent/store'
 import { cn } from '@/lib/utils'
 import { SettingsDialog } from './settings-dialog'
+import { ModelRolesDialog } from './model-roles-dialog'
 import { CommandPalette } from './command-palette'
 
 export function TopBar() {
@@ -45,6 +46,7 @@ export function TopBar() {
   const setCaveman = useTagent((s) => s.setCaveman)
   const running = useTagent((s) => s.running)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [rolesOpen, setRolesOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [openDialog, setOpenDialog] = useState(false)
   const [modelQuery, setModelQuery] = useState('')
@@ -124,7 +126,10 @@ export function TopBar() {
             <ModelMenuGroups query={modelQuery} onSelect={() => setModelQuery('')} />
           </ScrollArea>
           <DropdownMenuSeparator className="bg-zinc-800" />
-          <DropdownMenuItem className="text-xs text-zinc-400" onClick={() => setSettingsOpen(true)}>
+          <DropdownMenuItem className="text-xs text-zinc-300" onClick={() => { setRolesOpen(true); setModelQuery('') }}>
+            <Layers className="size-3.5 mr-2 text-orange-400" /> Model roles — subagent · media (vision, audio, video, pdf)
+          </DropdownMenuItem>
+          <DropdownMenuItem className="text-xs text-zinc-400" onClick={() => { setSettingsOpen(true); setModelQuery('') }}>
             <Settings className="size-3.5 mr-2" /> Provider settings — keys & custom endpoints
           </DropdownMenuItem>
         </DropdownMenuContent>
@@ -156,6 +161,7 @@ export function TopBar() {
       </Button>
 
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <ModelRolesDialog open={rolesOpen} onOpenChange={setRolesOpen} />
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
       <OpenFolderDialog open={openDialog} onOpenChange={setOpenDialog} />
       {running && (

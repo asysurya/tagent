@@ -101,9 +101,14 @@ async function main() {
     for (const want of ['read_file', 'grep', 'bash', 'browser', 'serve', 'test_report', 'ask_user', 'bg_run', 'bg_logs', 'bg_stop']) {
       ok(`test has ${want}`, test.includes(want))
     }
-    for (const banned of ['write_file', 'edit_file', 'task', 'worklog']) {
+    for (const banned of ['write_file', 'edit_file', 'worklog']) {
       ok(`test excludes ${banned}`, !test.includes(banned))
     }
+    // v0.26: the QA lead MAY spawn sub-testers — task is present for the
+    // primary test agent, but depth > 0 (sub-testers) never gets it
+    ok('test keeps task for the QA lead', test.includes('task'))
+    const testSub = buildToolset({ config: cfg, mode: 'test', depth: 1 }).map((t) => t.name)
+    ok('test subagent (depth 1) has no nested task', !testSub.includes('task'))
 
     const roSub = buildToolset({ config: cfg, readOnly: true, depth: 1 }).map((t) => t.name)
     ok('explore subagent (readOnly) has no task', !roSub.includes('task'))

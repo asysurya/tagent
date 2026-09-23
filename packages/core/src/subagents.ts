@@ -56,7 +56,7 @@ function scanDir(dir: string, source: 'workspace' | 'global', out: Map<string, S
       const raw = fs.readFileSync(file, 'utf8')
       const { data, body } = parseFrontMatter(raw)
       const name = (data.name || e.name.replace(/\.md$/, '')).toLowerCase().replace(/\s+/g, '-')
-      if (!name || name === 'general' || name === 'explore') continue // reserved
+      if (!name || name === 'general' || name === 'explore' || name === 'test') continue // reserved (built-in kinds)
       const tools = data.tools
         ? data.tools.split(',').map((t) => t.trim()).filter(Boolean)
         : undefined
@@ -92,10 +92,17 @@ export function findSubagent(root: string, name: string): SubagentDef | undefine
 /** System-prompt block: teaches the primary agent which specialists exist. */
 export function renderSubagentsBlock(root: string): string {
   const subs = listSubagents(root)
-  if (!subs.length) return '(none defined — add .tagent/agents/<name>.md to create one)'
-  return subs
-    .map((a) => `- ${a.name}${a.model ? ` [model: ${a.model}]` : ''}: ${a.description}`)
-    .join('\n') + '\nSpawn with the task tool: {"agent": "<name>"}. The subagent cannot see your conversation — pass a self-contained prompt.'
+  const builtins =
+    '- general [built-in]: full toolset like yours (minus task/ask_user) — broad searches, isolated drafting, parallel work\n' +
+    '- explore [built-in, read-only]: safe reconnaissance — map an unknown codebase, find where things live\n' +
+    '- test [built-in, QA]: serve + browser + vision testing of the current project — read-only, ends with findings'
+  if (!subs.length) return `${builtins}\nSpawn with the task tool: {"agent": "<name>"}.`
+  return (
+    builtins +
+    '\n' +
+    subs.map((a) => `- ${a.name}${a.model ? ` [model: ${a.model}]` : ''}${a.mode !== 'build' ? ` [mode: ${a.mode}]` : ''}: ${a.description}`).join('\n') +
+    '\nSpawn with the task tool: {"agent": "<name>"}. The subagent cannot see your conversation and runs in this same workspace — pass instructions + paths, not file contents.'
+  )
 }
 
 /** A ready-to-edit starter file for `tagent agents new` / the /agents TUI view. */

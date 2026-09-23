@@ -39,7 +39,7 @@ process when you want a browser. Same engine, same sessions, same permissions.
 | | |
 |---|---|
 | 🔁 **Agentic loop** | Prompt → model → tool actions → results → repeat, with max-turns, interrupt & steer |
-| 🤖 **Subagents** | `task` tool spawns isolated agents (read-only `explore` or `general`) with their own budget |
+| 🤖 **Subagents** | `task` tool spawns isolated agents with their own budget — `general` (full toolset like yours), read-only `explore`, `test` (QA: serve + browser + vision), or custom specialists; subs run in your workspace (they read files themselves) and can never spawn further subs |
 | 🧭 **Plan → PRD → build** | Plan mode INTERVIEWS you until requirements are detailed, then approval writes `PRD.md` and auto-switches to build; build mode checks for a PRD first and offers plan mode when missing |
 | 🛟 **Provider fallback** | Ordered multi-key failover chain — stack the same provider under different keys (1. openrouter/keyA/modelX · 2. openrouter/keyB/modelX · 3. groq…) with automatic mid-run failover (`/fallback`, Settings in the GUI) |
 | 👥 **Custom subagents** | `.tagent/agents/*.md` — persona, tool whitelist, model override, turn budget; spawn via `{"agent": "code-reviewer"}` (`/agents`) |
@@ -58,6 +58,8 @@ process when you want a browser. Same engine, same sessions, same permissions.
 | 📚 **Skills** | `SKILL.md` playbooks with progressive disclosure (name+description in prompt, full body on demand) |
 | 🌐 **Web tools** | `web_fetch`, `ddg_search` (no API key), `browser` (Playwright — full e2e signal: click/type/screenshot/audit) |
 | 🧪 **Test mode** | `tagent test` — QA agent: serves the project, clicks through it with a real browser, screenshots + audits responsive/typography/contrast, writes `TEST-REPORT.md` (vision models see the screenshots) |
+| 🎯 **Model roles** | Three model categories, set independently: the **main agent**, **subagents** (`models.subagent`), and **media** per modality — `models.media.vision/audio/video/pdf` (`/model subagent zai/glm-4.5-air`, `/model media vision zai/glm-4.6`, or the Model-roles dialog in the GUI). Unset roles follow the main model |
+| 👁 **Vision QA** | The `vision` tool sends screenshots (e.g. `.tagent/test/shots` — a directory takes its newest) to the dedicated vision model and gets a real UI review back: functionality, layout, typography, responsiveness (it compares viewports), contrast, accessibility + PASS/WARN/FAIL verdict — not just "does it load" |
 | 📊 **Context window** | Live usage bar under the chat input (`12.3k/131.1k [██████░░░░] 9%`, color-coded, opencode-style) tracks the model's window every turn; at 80% you get a one-key prompt to compact |
 | ✨ **Real TUI libraries** | The interface is built on string-width · figures · cli-boxes · picocolors · wrap-ansi: rounded cards (`╭─ ❯ you ─╮`), emoji tool icons with aligned columns, full box markdown tables (`╭┬╮ ├┼┤ ╰┴╯`), and width that counts CJK/emoji/combining marks correctly — the lines finally RATA (v0.18.0) |
 | 🔼 **Multi-line input** | Enter sends; shift/alt/ctrl+enter inserts a newline; pastes land as text in every terminal — bracketed or raw, multi-line pastes never submit (v0.22.1) |

@@ -49,9 +49,17 @@ async function main() {
     for (const want of ['read_file', 'grep', 'bash', 'browser', 'serve', 'test_report', 'todowrite']) {
       ok(`${want} present`, names.includes(want))
     }
-    for (const banned of ['write_file', 'edit_file', 'task', 'worklog']) {
+    for (const banned of ['write_file', 'edit_file', 'worklog']) {
       ok(`${banned} excluded`, !names.includes(banned))
     }
+    // the QA lead MAY spawn sub-testers — task is intentionally present in
+    // test mode for the primary agent, but excluded at depth > 0
+    ok('task present for the QA lead (spawn sub-testers)', names.includes('task'))
+    const subTools = buildToolset({ config: cfg, mode: 'test', depth: 1 })
+    const subNames = subTools.map((t) => t.name)
+    ok('task excluded for sub-testers (no nesting)', !subNames.includes('task'))
+    ok('ask_user excluded for sub-testers', !subNames.includes('ask_user'))
+    ok('sub-tester keeps the QA core (bash/browser/vision)', ['bash', 'browser', 'vision'].every((n) => subNames.includes(n)))
     const disabled = buildToolset({
       config: { ...cfg, tools: { bash: true, browser: false, serve: false } },
       mode: 'test',

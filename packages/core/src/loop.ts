@@ -478,10 +478,17 @@ export class AgentLoop {
     return `${expanded}\n\n${attachments.join('\n\n')}`
   }
 
+  /** built-in agent kinds — custom .tagent/agents/<name>.md definitions can't take these names */
+  private static BUILTIN_KINDS = new Set(['general', 'explore', 'test'])
+
   /**
-   * Spawn a subagent. `agentKind` is "general", "explore", or the name of a
-   * custom subagent (.tagent/agents/<name>.md) — persona, tool whitelist,
-   * model override, and turn budget come from the definition.
+   * Spawn a subagent. `agentKind` is "general" (full toolset, no nesting),
+   * "explore" (read-only), "test" (the QA toolset — browser + vision +
+   * serve, read-only), or the name of a custom subagent
+   * (.tagent/agents/<name>.md) — persona, tool whitelist, model override, and
+   * turn budget come from the definition. Subagents run in the SAME workspace
+   * with the parent's file tools, so their prompts carry instructions and
+   * paths, never pasted file contents.
    */
   private async spawnSubagent(
     description: string,
@@ -490,12 +497,10 @@ export class AgentLoop {
     maxTurns: number,
   ): Promise<string> {
     const { session } = this.opts
-    const def =
-      agentKind !== 'general' && agentKind !== 'explore'
-        ? findSubagent(session.workspaceId, agentKind)
-        : undefined
-    if (agentKind !== 'general' && agentKind !== 'explore' && !def) {
-      return `Error: unknown agent "${agentKind}" — available: general, explore${
+    const builtin = AgentLoop.BUILTIN_KINDS.has(agentKind)
+    const def = builtin ? undefined : findSubagent(session.workspaceId, agentKind)
+    if (!builtin && !def) {
+      return `Error: unknown agent "${agentKind}" — available: general, explore, test${
         listSubagentNames(session.workspaceId)
           .map((n) => `, ${n}`)
           .join('')
@@ -520,9 +525,9 @@ export class AgentLoop {
     const sub: SessionData = {
       id: uid(),
       workspaceId: session.workspaceId,
-      title: `${def ? `${def.name}: ` : ''}${description}`,
+      title: `${def ? `${def.name}: ` : agentKind === 'test' ? 'test: ' : ''}${description}`,
       model,
-      mode: def ? def.mode : this.opts.mode,
+      mode: def ? def.mode : agentKind === 'test' ? 'test' : this.opts.mode,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       messageCount: 0,
