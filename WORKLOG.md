@@ -6,6 +6,63 @@ section per task. Fresh agents: read top-down before working.
 
 ---
 
+Task ID: 13
+Agent: Super Z (main)
+Task: /source — a source-code browser page on the website + a static
+API so agents can fetch the codebase. Website-only (no CLI change).
+
+Work Log:
+- scripts/gen-source-snapshot.ts (NEW): walks the repo (packages/*/src,
+  GUI src/, website/src, scripts/, native/, docs/, demo-workspace/,
+  mini-services/, builtin-skills/, root files), filters node_modules ·
+  lockfiles · .env* · binaries (NUL byte) · >512 KB · generated/ ·
+  .tagent/, and writes: public/source/raw/<path> (verbatim),
+  public/source/json/<path>.json ({path,content,language,lines,bytes,
+  rawUrl}), index.json (manifest: files + tree + counts + excluded-notes),
+  symbols.json (6.9k symbols — TS/Go/Py decls, sh funcs, md headings),
+  and src/data/source-snapshot.ts (the page module: tree + stats, no
+  content). Env hooks TAGENT_SNAPSHOT_ROOT/OUT/VERSION make it hermetic.
+  323 files · 67k lines · 2.7 MB source.
+- The page: app/source/page.tsx (server, prerendered stats header) +
+  components/source/source-browser.tsx (orchestrator: ?file= deep
+  links, fetch state machine loading/ok/error/notfound, search with
+  lazily-loaded symbol index + grouped results, mobile drawer,
+  keyboard '/' focus · Esc) · file-tree.tsx (collapsible tree,
+  auto-expand to selection) · code-view.tsx (line numbers, #L<n>
+  anchors, copy, raw/json links, 1500-line render cap). Welcome panel
+  documents the agent API with copy chips + curl examples.
+- highlight.ts (NEW, dependency-free): one alternation regex per
+  family (ts/js, json, md, sh, css, html, go, py) walked once → tokens
+  → lines; classes map to the site palette (zinc/orange/emerald).
+  Website stays a 4-dependency project.
+- Wiring: nav "Source" (desktop layout + MobileNav + footer Product),
+  landing hero "Source" + CTA "Browse the source" (new IconCode).
+  next.config.ts: Content-Type overrides — /source/raw/* is forced
+  text/plain (the MIME table maps .ts → video/mp2t!), /source/json/*
+  application/json. website/tsconfig.json now excludes public/ (the
+  raw .ts copies must never be type-checked).
+- scripts/test-source-site.ts (NEW, 54 checks): hermetic fixture
+  (binary/lockfile/.env/oversize/generated/node_modules filters,
+  byte-identical raw + json wrapper, symbols, idempotent re-run) ·
+  real-output checks (index==module, raw==repo file, nav links, ts
+  exclude, agent-API docs on the page) · tokenizer sanity.
+- Verified: tsc clean · 54/54 · next build (9 routes, /source
+  prerendered) · served + curl (content-types, 404s, index/raw/json/
+  symbols bodies) · agent-browser end-to-end: tree navigation, code
+  loads with highlighting, symbol search "switchmode" →
+  switch-mode.ts#L14 anchor lands on the exact line, mobile drawer,
+  zero console errors. Desktop + mobile screenshots captured.
+- website/package.json 0.10.0 → 0.11.0; README documents the page,
+  the endpoints, the regen command, and the two gotchas.
+
+Stage Summary:
+- /source is live on push (Vercel auto-deploy): humans browse the
+  codebase (tree · search · highlighting · anchors); agents fetch it
+  (index.json · raw/<path> · json/<path>.json · symbols.json).
+- The snapshot is committed like latest.json — regenerate with
+  `bun scripts/gen-source-snapshot.ts` after source changes.
+
+---
 Task ID: 12
 Agent: Super Z (main)
 Task: Operating loop v2 — the user's exact PLAN→BUILD→TEST contract

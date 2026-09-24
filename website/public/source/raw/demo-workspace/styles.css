@@ -1,0 +1,80 @@
+:root {
+  --bg: #0f0f12;
+  --panel: #17171c;
+  --border: #2a2a33;
+  --text: #e8e8ee;
+  --muted: #9a9aa8;
+  --accent: #ff7a2f;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+}
+
+.app {
+  width: min(520px, 92vw);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px;
+}
+
+header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
+h1 { font-size: 22px; letter-spacing: 0.02em; }
+#task-count { color: var(--muted); font-size: 13px; }
+
+form { display: flex; gap: 8px; margin-bottom: 16px; }
+
+input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+button {
+  background: var(--accent);
+  color: #1a0f06;
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  transition: filter 150ms ease;
+}
+button:hover { filter: brightness(1.1); }
+
+ul { list-style: none; display: grid; gap: 6px; }
+
+li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  animation: slide-in 160ms ease;
+}
+@keyframes slide-in { from { opacity: 0; transform: translateY(4px); } }
+
+li.done label { text-decoration: line-through; color: var(--muted); }
+li label { flex: 1; cursor: pointer; font-size: 14px; }
+li .delete { background: transparent; color: var(--muted); font-size: 16px; padding: 2px 8px; }
+li .delete:hover { color: #ff5f5f; }
+
+footer { display: flex; justify-content: flex-end; margin-top: 14px; }
+#clear-completed { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+#clear-completed:hover { color: var(--text); }

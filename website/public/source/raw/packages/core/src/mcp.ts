@@ -1,0 +1,622 @@
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import fs from 'node:fs'
+import path from 'node:path'
+import type { McpConfig, McpServerConfig, ToolDefinition } from './types'
+import { CURRENT_VERSION } from './version'
+
+export type { McpConfig, McpServerConfig } from './types'
+
+/**
+ * MCP (Model Context Protocol) client — stdio transport.
+ *
+ * Tagent speaks the official JSON-RPC handshake and exposes every remote tool
+ * as a native tool named `mcp_<server>_<tool>` — same permission gates, same
+ * system-prompt docs as built-ins. Servers are configured in
+ * `.tagent/config.json`:
+ *
+ *   "mcp": { "servers": { "context7": {
+ *     "command": "npx", "args": ["-y", "@upstash/context7-mcp"],
+ *     "env": { "API_KEY": "…" }, "enabled": true
+ *   }}}
+ *
+ * stdio is the transport 99% of local servers speak (npx / uvx / binaries);
+ * it keeps everything on-machine — keys never leave the box.
+ */
+
+export interface McpServerStatus {
+  name: string
+  command: string
+  enabled: boolean
+  state: 'connecting' | 'ready' | 'error' | 'disabled'
+  tools: number
+  error?: string
+  /** non-fatal note — e.g. "npx not on PATH — using bunx" */
+  note?: string
+  /** one actionable move for a known failure mode ("disk is full — …") */
+  hint?: string
+}
+
+interface RemoteTool {
+  name: string
+  description?: string
+  inputSchema?: Record<string, unknown>
+}
+
+/** how long to wait for the MCP initialize handshake. npx/uvx download the
+ *  server package on first run — cold caches (Codespaces, CI boxes, Termux)
+ *  easily spend 30–50s there, so the default is generous. Override with
+ *  TAGENT_MCP_INIT_TIMEOUT_MS=<millis> (values under 1s are ignored). */
+function initTimeoutMs(): number {
+  const v = Math.floor(Number(process.env.TAGENT_MCP_INIT_TIMEOUT_MS ?? ''))
+  return Number.isFinite(v) && v >= 1000 ? v : 60_000
+}
+/** per-CALL budget — some MCP tools are slow by nature (scrapers, agents,
+ *  build pipelines). Override with TAGENT_MCP_CALL_TIMEOUT_MS=<millis>
+ *  (values under 1s are ignored). The agent may also pass `__timeout_ms`
+ *  on any mcp_* call for a per-invocation budget (1s..1h, clamped). */
+function callTimeoutMs(): number {
+  const v = Math.floor(Number(process.env.TAGENT_MCP_CALL_TIMEOUT_MS ?? ''))
+  return Number.isFinite(v) && v >= 1000 ? v : 120_000
+}
+const CALL_TIMEOUT_MS = callTimeoutMs()
+const CALL_TIMEOUT_MAX = 3_600_000
+/** clamp an agent-requested per-call budget into a sane range */
+function clampCallTimeout(requested: unknown): number | undefined {
+  const v = Math.floor(Number(requested))
+  if (!Number.isFinite(v)) return undefined
+  return Math.min(Math.max(v, 1_000), CALL_TIMEOUT_MAX)
+}
+const LIST_TIMEOUT_MS = 10_000
+const MAX_OUTPUT = 24_000
+
+/** `mcp__server__tool` → safe identifier: [a-z0-9_] */
+function slug(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+}
+
+/** keep names under 60 chars but unique-ish (hash suffix when truncated) */
+function toolName(server: string, tool: string): string {
+  const base = `mcp_${slug(server)}_${slug(tool)}`
+  if (base.length <= 60) return base
+  let h = 0
+  for (const ch of base) h = (h * 31 + ch.charCodeAt(0)) | 0
+  return base.slice(0, 50) + '_' + Math.abs(h).toString(36)
+}
+
+/** find an executable on PATH — Bun.which when available (always, on the
+ *  bun runtime), a manual scan as the portable fallback. Windows gets its
+ *  PATHEXT extensions so `npx` resolves to npx.cmd. */
+function findOnPath(cmd: string, env: NodeJS.ProcessEnv): string | null {
+  try {
+    const bun = (globalThis as { Bun?: { which?: (c: string, o?: { PATH?: string }) => string | null } }).Bun
+    if (bun?.which) return bun.which(cmd, { PATH: env.PATH ?? '' }) ?? null
+  } catch { /* not the bun runtime */ }
+  const exts = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : ['']
+  for (const dir of (env.PATH ?? '').split(path.delimiter).filter(Boolean)) {
+    for (const ext of exts) {
+      try {
+        const f = path.join(dir, cmd + ext)
+        if (fs.statSync(f).isFile()) return f
+      } catch { /* keep scanning */ }
+    }
+  }
+  return null
+}
+
+/** launcher resolution — binary installs ship no Node.js, so a configured
+ *  `npx` may simply not exist on the machine. When bun IS there, bunx runs
+ *  the very same npm packages, so we transparently fall back to it instead
+ *  of failing three servers with a bare "exited (code 1)". */
+export function resolveMcpLauncher(
+  command: string,
+  env: NodeJS.ProcessEnv = process.env,
+): { command: string; via?: string } {
+  if (command !== 'npx') return { command }
+  if (findOnPath('npx', env)) return { command }
+  if (findOnPath('bunx', env)) return { command: 'bunx', via: 'npx not on PATH — using bunx' }
+  return { command } // let the spawn error explain (install Node.js, or bun)
+}
+
+/* ------------------------------------------------------------------ */
+/* failure diagnosis                                                    */
+/* ------------------------------------------------------------------ */
+
+/** lines around a node crash that never carry the diagnosis — banner
+ *  shrapnel like `}`, `^`, `Node.js v24.20.0`, stack frames, require stacks */
+const STDERR_JUNK = /^(?:Node\.js v|at |throw |node:internal\/|Require stack:|- |-----+|\^|\}$)/
+/** exception headlines — a node-style crash puts the disease on THIS line */
+const STDERR_HEADLINE = /^(?:Error|TypeError|ReferenceError|SyntaxError|RangeError|EvalError|URIError|AssertionError|FATAL ERROR|UnhandledPromiseRejection)\b/
+/** package-manager complaint prefixes (npm, uv, cargo, pip, …) */
+const STDERR_INFORMATIVE = /^(?:npm (?:error|ERR!)|error:|fatal:|hint:|caused by:|warning:)/i
+/** error codes worth surfacing wherever they appear in the tail */
+const STDERR_CODES = /ENOENT|ENOSPC|ENOTFOUND|EACCES|EPERM|EADDRINUSE|ECONNREFUSED|ERR_MODULE_NOT_FOUND|ERR_REQUIRE_ESM|Cannot find (?:module|package)|no space left on device|\(os error \d+\)/i
+
+/** Compact a server's stderr tail into the one-line diagnosis.
+ *
+ *  v0.22.2 took the LAST two non-empty lines — for a node crash that is
+ *  always the banner (`}` and `Node.js v24.20.0`), while the actual reason
+ *  ("Error: Cannot find module 'zod'", `code: 'MODULE_NOT_FOUND'`) sits a
+ *  few lines above and was thrown away. Order of preference:
+ *
+ *  1. disk-full — the #1 environment killer (ENOSPC / os error 28), named
+ *     plainly instead of the package manager's multi-line essay
+ *  2. node-style crash — the `Error: …` headline plus its `code:`
+ *  3. package-manager lines (npm error…, error:, fatal:, hint:…)
+ *  4. otherwise the last lines that aren't banner junk
+ */
+export function summarizeStderr(tail: string): string {
+  const lines = tail.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+  if (!lines.length) return ''
+  // 1) disk full
+  const enospc = lines.find((l) => /no space left on device|ENOSPC|\(os error 28\)/i.test(l))
+  if (enospc) {
+    const t = enospc.slice(0, 160)
+    return /disk (?:is )?full/i.test(t) ? t : `${t} — disk full`
+  }
+  // 2) node-style crash: headline + code
+  const headline = lines.find((l) => STDERR_HEADLINE.test(l))
+  if (headline) {
+    const code = [...lines]
+      .reverse()
+      .find((l) => /^code:\s*['"]?[A-Za-z_]/.test(l) || /^errno:\s*-?\d/.test(l))
+      ?.replace(/,\s*$/, '')
+    return (code && code !== headline ? `${headline} | ${code}` : headline).slice(0, 180)
+  }
+  // 3) package-manager complaints
+  const informative = lines.filter(
+    (l) => STDERR_INFORMATIVE.test(l) || STDERR_CODES.test(l) || /^code:\s*['"]?[A-Za-z_]/.test(l) || /^errno:\s*-?\d/.test(l),
+  )
+  if (informative.length) return informative.slice(-2).join(' | ').slice(0, 180)
+  // 4) unknown format — last lines that aren't crash shrapnel
+  const meaningful = lines.filter((l) => !STDERR_JUNK.test(l))
+  return meaningful.length ? meaningful.slice(-2).join(' | ').slice(0, 180) : ''
+}
+
+/** npx's package cache — corrupted regularly by a full disk mid-extract;
+ *  clearing it is always safe (npx just re-downloads) */
+function npxCacheDir(): string {
+  return process.platform === 'win32' ? '%LOCALAPPDATA%\\npm-cache\\_npx' : '~/.npm/_npx'
+}
+
+/** Map a surfaced MCP failure to the ONE move that usually fixes it.
+ *  Returns undefined for unknown causes — the raw reason speaks for itself. */
+export function mcpFailureHint(reason: string, command: string): string | undefined {
+  const r = reason.toLowerCase()
+  if (/no space left on device|enospc|os error 28|disk full/.test(r))
+    return 'free disk space (npm cache clean --force · bun pm cache rm · docker system prune), then /mcp reload'
+  if (/module_not_found|cannot find module|cannot find package/.test(r) && /(?:^|\/)(?:npx|bunx)(?:\.cmd)?$/.test(command))
+    return `broken npx cache (common after a full disk) — rm -rf ${npxCacheDir()}, then /mcp reload`
+  if (/enotfound|getaddrinfo|network/.test(r)) return 'network unreachable — check the connection, then /mcp reload'
+  if (/eacces|eperm|permission denied/.test(r)) return 'permissions — the launcher or its files are not accessible'
+  if (/eaddrinuse/.test(r)) return 'port already in use — stop the process holding it, then /mcp reload'
+  if (/econnrefused/.test(r)) return 'connection refused — the service this server needs is not running'
+  return undefined
+}
+
+/** Free bytes on the filesystem holding `p` — the disk npx/uvx install MCP
+ *  servers onto. statfs when the runtime has it (bun, node ≥18.15), `df -k`
+ *  as the portable fallback, undefined when unknowable. */
+export function diskFreeBytes(p: string): number | undefined {
+  try {
+    const st = fs.statfsSync(p) as { bsize?: number; bavail?: number }
+    if (typeof st?.bsize === 'number' && typeof st?.bavail === 'number' && st.bsize > 0) return st.bavail * st.bsize
+  } catch { /* runtime/OS without statfs — try df */ }
+  try {
+    const out = spawnSync('df', ['-k', p], { timeout: 5000, encoding: 'utf8' }).stdout ?? ''
+    const last = out.trim().split('\n').pop() ?? ''
+    const availKb = Number(last.trim().split(/\s+/)[3])
+    if (Number.isFinite(availKb) && availKb >= 0) return availKb * 1024
+  } catch { /* no df either */ }
+  return undefined
+}
+
+function schemaToParams(schema?: Record<string, unknown>): Record<string, string> {
+  const props = (schema?.properties ?? {}) as Record<string, Record<string, unknown>>
+  const required = new Set((schema?.required ?? []) as string[])
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(props)) {
+    const t = typeof v.type === 'string' ? v.type : 'any'
+    const req = required.has(k) ? '' : '?'
+    const desc = typeof v.description === 'string' ? ` — ${v.description.slice(0, 90)}` : ''
+    out[k + req] = `${t}${desc}`
+  }
+  return out
+}
+
+/** one connected server process */
+class McpConnection {
+  private proc: ChildProcess
+  private nextId = 1
+  private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>()
+  /** last ~2.5KB of the server's stderr — WHY it died, for doctor + status.
+   *  Generous on purpose: a node crash can stack up hundreds of bytes of
+   *  frames between the "Error: …" headline and the banner at the end. */
+  private stderrTail = ''
+  /** set the moment the process leaves the stage: the readable reason */
+  exitError?: string
+  tools: RemoteTool[] = []
+  serverInfo?: { name?: string; version?: string }
+  /** non-fatal note (e.g. "npx missing — using bunx") surfaced in status */
+  via?: string
+  /** live handshake state — 'connecting' until initialize + tools/list land */
+  state: 'connecting' | 'ready' | 'error' = 'connecting'
+  error?: string
+
+  constructor(
+    public name: string,
+    public cfg: McpServerConfig,
+  ) {
+    const resolved = resolveMcpLauncher(cfg.command)
+    this.via = resolved.via
+    this.proc = spawn(resolved.command, cfg.args ?? [], {
+      env: { ...process.env, ...(cfg.env ?? {}) },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    })
+    let buf = ''
+    this.proc.stdout!.setEncoding('utf8')
+    this.proc.stdout!.on('data', (chunk: string) => {
+      buf += chunk
+      let nl: number
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim()
+        buf = buf.slice(nl + 1)
+        if (!line) continue
+        try {
+          this.receive(JSON.parse(line))
+        } catch {
+          // non-JSON stderr-ish noise on stdout — ignore
+        }
+      }
+    })
+    // WHY a server died used to be thrown away — doctor could only say
+    // "exited (code 1)". Keep a tail of stderr so the real reason (npm
+    // network error, old node, missing API key, bad package) is surfaced.
+    this.proc.stderr!.setEncoding('utf8')
+    this.proc.stderr!.on('data', (chunk: string) => {
+      this.stderrTail = (this.stderrTail + chunk).slice(-2500)
+    })
+    this.proc.on('exit', (code, signal) => {
+      const why = signal ? `signal ${signal}` : `code ${code}`
+      const tail = this.stderrSummary()
+      this.exitError = `server exited (${why})${tail ? `: ${tail}` : ''}`
+      const err = new Error(this.exitError)
+      for (const p of this.pending.values()) {
+        clearTimeout(p.timer)
+        p.reject(err)
+      }
+      this.pending.clear()
+    })
+    this.proc.on('error', (err) => {
+      const e = err as NodeJS.ErrnoException
+      let msg: string
+      if (e?.code === 'ENOENT') {
+        msg = `cannot start '${resolved.command}' — not found on PATH`
+        if (cfg.command === 'npx') {
+          msg += resolved.command === 'bunx'
+            ? ' (bunx was resolved from your bun install)'
+            : ' — install Node.js (npmjs.com), or bun (bun.sh, ships bunx which tagent uses automatically)'
+        }
+      } else {
+        msg = err instanceof Error ? err.message : String(err)
+      }
+      this.exitError = msg
+      for (const p of this.pending.values()) {
+        clearTimeout(p.timer)
+        p.reject(new Error(msg))
+      }
+      this.pending.clear()
+    })
+  }
+
+  /** compact the captured stderr into the diagnosis — see summarizeStderr */
+  private stderrSummary(): string {
+    return summarizeStderr(this.stderrTail)
+  }
+
+  private receive(msg: Record<string, unknown>) {
+    const id = msg.id
+    if (typeof id !== 'number') return // notification or server request — ignore
+    const p = this.pending.get(id)
+    if (!p) return
+    this.pending.delete(id)
+    clearTimeout(p.timer)
+    if (msg.error) p.reject(new Error(String((msg.error as { message?: string }).message ?? msg.error)))
+    else p.resolve(msg.result)
+  }
+
+  private request(method: string, params: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      if (this.proc.killed || this.proc.exitCode !== null) {
+        return reject(new Error(this.exitError ? `server is not running — ${this.exitError}` : 'server process is not running'))
+      }
+      const id = this.nextId++
+      const timer = setTimeout(() => {
+        this.pending.delete(id)
+        reject(new Error(`${method} timed out after ${timeoutMs / 1000}s`))
+      }, timeoutMs)
+      this.pending.set(id, { resolve, reject, timer })
+      const json = JSON.stringify({ jsonrpc: '2.0', id, method, params })
+      try {
+        this.proc.stdin!.write(json + '\n')
+      } catch (e) {
+        clearTimeout(timer)
+        this.pending.delete(id)
+        reject(e as Error)
+      }
+    })
+  }
+
+  async initialize(timeoutMs = initTimeoutMs()): Promise<void> {
+    const result = (await this.request(
+      'initialize',
+      {
+        protocolVersion: '2024-11-05',
+        capabilities: { tools: {} },
+        clientInfo: { name: 'tagent', version: CURRENT_VERSION },
+      },
+      timeoutMs,
+    )) as { serverInfo?: { name?: string; version?: string } }
+    this.serverInfo = result?.serverInfo
+    // initialized notification (no response expected)
+    try {
+      this.proc.stdin!.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n')
+    } catch { /* best-effort */ }
+  }
+
+  async loadTools(): Promise<RemoteTool[]> {
+    const result = (await this.request('tools/list', {}, LIST_TIMEOUT_MS)) as { tools?: RemoteTool[] }
+    this.tools = Array.isArray(result?.tools) ? result.tools : []
+    return this.tools
+  }
+
+  async call(tool: string, args: Record<string, unknown>, timeoutMs?: number): Promise<string> {
+    const budget = timeoutMs ?? CALL_TIMEOUT_MS
+    const result = (await this.request('tools/call', { name: tool, arguments: args }, budget)) as {
+      content?: { type: string; text?: string }[]
+      isError?: boolean
+    }
+    const text = (result?.content ?? [])
+      .map((c) => (c.type === 'text' && typeof c.text === 'string' ? c.text : c.type === 'resource' ? JSON.stringify(c) : `[${c.type}]`))
+      .join('\n')
+      .trim()
+    const out = text || '(empty result)'
+    if (result?.isError) throw new Error(out)
+    return out.length > MAX_OUTPUT ? out.slice(0, MAX_OUTPUT) + '\n…(truncated)' : out
+  }
+
+  kill() {
+    for (const p of this.pending.values()) {
+      clearTimeout(p.timer)
+      p.reject(new Error('server stopped'))
+    }
+    this.pending.clear()
+    try {
+      this.proc.stdin?.end()
+    } catch { /* already closed */ }
+    this.proc.kill()
+  }
+}
+
+/**
+ * McpManager — owns every server connection of a workspace.
+ * Created once per host; `ensureStarted` connects enabled servers (with
+ * per-server isolation — one broken server never blocks the rest).
+ */
+export class McpManager {
+  private conns = new Map<string, McpConnection>()
+  private started = false
+
+  constructor(private mcp?: McpConfig) {}
+
+  private servers(): [string, McpServerConfig][] {
+    return Object.entries(this.mcp?.servers ?? {})
+  }
+
+  /** spawn + initialize + tools/list for every enabled server (idempotent).
+   *  A timeout gets ONE automatic retry — npx cold-starts (Codespace, CI,
+   *  Termux) regularly blow past the first budget while the download warms
+   *  the cache; the second attempt then completes in seconds. */
+  async ensureStarted(force = false): Promise<void> {
+    if (this.started && !force) return
+    this.started = true
+    const enabled = this.servers().filter(([, cfg]) => cfg.enabled !== false && cfg.command)
+    await Promise.all(
+      enabled.map(async ([name, cfg]) => {
+        if (this.conns.has(name)) return
+        let conn = new McpConnection(name, cfg)
+        this.conns.set(name, conn) // registered immediately — status shows 'connecting'
+        try {
+          await conn.initialize()
+          await conn.loadTools()
+          conn.state = 'ready'
+        } catch (e) {
+          conn.state = 'error'
+          conn.error = (e as Error).message
+          if (/timed out/.test(conn.error)) {
+            // one fresh spawn with a doubled budget — see the doc comment
+            conn.kill()
+            conn = new McpConnection(name, cfg)
+            this.conns.set(name, conn)
+            try {
+              await conn.initialize(initTimeoutMs() * 2)
+              await conn.loadTools()
+              conn.state = 'ready'
+            } catch (e2) {
+              conn.state = 'error'
+              conn.error = (e2 as Error).message
+            }
+          }
+        }
+      }),
+    )
+  }
+
+  /** restart a single server after a config change */
+  async restart(name: string): Promise<void> {
+    this.conns.get(name)?.kill()
+    this.conns.delete(name)
+    this.started = true
+    const cfg = this.mcp?.servers?.[name]
+    if (!cfg || cfg.enabled === false || !cfg.command) return
+    const conn = new McpConnection(name, cfg)
+    this.conns.set(name, conn)
+    try {
+      await conn.initialize()
+      await conn.loadTools()
+      conn.state = 'ready'
+    } catch (e) {
+      conn.state = 'error'
+      conn.error = (e as Error).message
+    }
+  }
+
+  /** replace config wholesale (daemon settings save) and reconnect */
+  async reconfigure(mcp: McpConfig): Promise<void> {
+    this.mcp = mcp
+    for (const conn of this.conns.values()) conn.kill()
+    this.conns.clear()
+    this.started = false
+    await this.ensureStarted()
+  }
+
+  /** ToolDefinitions for the agent loop — only READY servers contribute */
+  toolDefinitions(): ToolDefinition[] {
+    const defs: ToolDefinition[] = []
+    for (const [name, conn] of this.conns) {
+      if (conn.state !== 'ready') continue
+      for (const t of conn.tools) {
+        const tn = toolName(name, t.name)
+        const baseParams = schemaToParams(t.inputSchema)
+        const schema = (t.inputSchema as Record<string, unknown>) ?? { type: 'object', properties: {} }
+        defs.push({
+          name: tn,
+          description: `[mcp:${name}] ${t.description ?? t.name}`.slice(0, 400),
+          risk: 'medium',
+          params: { ...baseParams, __timeout_ms: 'number — per-call budget in ms (min 1000, max 3600000, default 120000)' },
+          inputSchema: {
+            ...(typeof schema === 'object' && schema !== null ? schema : {}),
+            properties: {
+              ...(((schema as { properties?: Record<string, unknown> }).properties ?? {}) as Record<string, unknown>),
+              __timeout_ms: { type: 'number', description: 'Per-call timeout in milliseconds (1000-3600000). Override when this tool is known to be slow.' },
+            },
+          },
+          run: async (input) => {
+            const { __timeout_ms, ...args } = input
+            return conn.call(t.name, args, clampCallTimeout(__timeout_ms))
+          },
+        })
+      }
+    }
+    return defs
+  }
+
+  status(): McpServerStatus[] {
+    return this.servers().map(([name, cfg]) => {
+      const conn = this.conns.get(name)
+      return {
+        name,
+        command: [cfg.command, ...(cfg.args ?? [])].join(' '),
+        enabled: cfg.enabled !== false,
+        state: cfg.enabled === false ? 'disabled' : conn ? conn.state : 'connecting',
+        tools: conn?.tools.length ?? 0,
+        error: conn?.state === 'error' ? conn.error : undefined,
+        note: conn?.via,
+        hint: conn?.state === 'error' && conn.error ? mcpFailureHint(conn.error, cfg.command) : undefined,
+      }
+    })
+  }
+
+  /** count of live tools — for the banner / hello payload */
+  toolCount(): number {
+    return this.toolDefinitions().length
+  }
+
+  close() {
+    for (const conn of this.conns.values()) conn.kill()
+    this.conns.clear()
+    this.started = false
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* config helpers                                                       */
+/* ------------------------------------------------------------------ */
+
+export function mcpServersFromConfig(cfg: { mcp?: McpConfig }): [string, McpServerConfig][] {
+  return Object.entries(cfg.mcp?.servers ?? {})
+}
+
+/** normalize user input into a McpServerConfig entry */
+export function normalizeMcpServer(input: {
+  name?: string
+  command?: string
+  args?: unknown
+  env?: unknown
+  enabled?: boolean
+  description?: string
+}): { name: string; server?: McpServerConfig; error?: string } {
+  const name = slug(String(input.name ?? ''))
+  if (!name) return { name: '', error: 'server name required (letters, numbers, -)' }
+  const command = String(input.command ?? '').trim()
+  if (!command) return { name, error: 'command required (e.g. npx, uvx, node)' }
+  const args = Array.isArray(input.args) ? input.args.map((a) => String(a)) : []
+  let env: Record<string, string> | undefined
+  if (input.env && typeof input.env === 'object' && !Array.isArray(input.env)) {
+    env = {}
+    for (const [k, v] of Object.entries(input.env as Record<string, unknown>)) {
+      const val = String(v ?? '').trim()
+      if (val) env[k] = val
+    }
+    if (Object.keys(env).length === 0) env = undefined
+  }
+  return {
+    name,
+    server: {
+      command,
+      args,
+      env,
+      enabled: input.enabled !== false,
+      description: input.description ? String(input.description) : undefined,
+    },
+  }
+}
+
+/** a few known-good servers the TUI / GUI offer as one-click templates */
+export const MCP_TEMPLATES: { name: string; label: string; command: string; args: string[]; note: string }[] = [
+  {
+    name: 'context7',
+    label: 'Context7 — up-to-date library docs',
+    command: 'npx',
+    args: ['-y', '@upstash/context7-mcp'],
+    note: 'Fresh documentation for any library the agent is working with',
+  },
+  {
+    name: 'filesystem',
+    label: 'Filesystem (official) — jailed extra dirs',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-filesystem', '.'],
+    note: 'MCP-native file access; Tagent built-ins already cover most cases',
+  },
+  {
+    name: 'memory',
+    label: 'Memory (official) — knowledge graph',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-memory'],
+    note: 'Persistent semantic graph memory the agent can query',
+  },
+  {
+    name: 'sequential-thinking',
+    label: 'Sequential Thinking — step-by-step reasoning',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-sequential-thinking'],
+    note: 'Structured thinking space for complex multi-step problems',
+  },
+  {
+    name: 'fetch',
+    label: 'Fetch (official) — fetch & process web pages',
+    command: 'uvx',
+    args: ['mcp-server-fetch'],
+    note: 'Needs uv installed (pip install uv). Tagent web_fetch already covers basics',
+  },
+]

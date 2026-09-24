@@ -1,0 +1,950 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import type {
+  AgentEvents,
+  AgentMode,
+  ChatMessage,
+  LoopSummary,
+  PermissionManager,
+  ProviderAdapter,
+  SessionData,
+  SubagentInfo,
+  TokenUsage,
+  ToolCallRecord,
+  ToolContext,
+  ToolDefinition,
+} from './types'
+import { getAdapter, acceptsImages, type NativeToolDef, type WireMessage } from './providers'
+import { parseModelRef } from './providers/registry'
+import { buildSystemPrompt } from './system-prompt'
+import { createCheckpoint, shouldCheckpoint } from './checkpoints'
+import { jailPath, trunc, uid } from './util'
+import { fileStateFor } from './cache'
+import { buildToolset, TEST_MODE_TOOLS, ALL_TOOLS } from './tools'
+import { findSubagent, listSubagents } from './subagents'
+import { resolveSubagentModel } from './modelroles'
+import { diagnosticsCommand, renderDiagnosticsBlock, runDiagnostics } from './diagnostics'
+import { completeWithFallback, fallbackTailFor, type ResolvedChainEntry } from './fallback'
+import { BackgroundSubagents } from './bgsubs'
+import { compressOutput, slimActionInput } from './compact'
+import { modelContextWindow, estimateTokens } from './context'
+
+const ACTION_RE = /```tagent:action\s*\n([\s\S]*?)```/g
+const MAX_TOOL_OUTPUT = 24_000
+/** caveman mode: tighter tool-output budget — real token savings */
+const MAX_TOOL_OUTPUT_CAVEMAN = 8_000
+/** how often streamed text is pushed to the UI (ms) — keeps phones calm */
+const CHUNK_EMIT_MS = 60
+/** context diet: above this, OLD tool results get compacted to digests */
+const COMPACT_THRESHOLD = 150_000
+/** caveman mode starts dieting earlier — the whole point is saving tokens */
+const COMPACT_THRESHOLD_CAVEMAN = 80_000
+/** how many of the newest tool-result turns stay uncompacted */
+const COMPACT_KEEP = 4
+/** how many of the newest assistant turns keep their FULL action inputs —
+ * older ones get their bulky inputs elided (write_file contents etc.) */
+const KEEP_FULL_ACTION_TURNS = 2
+const KEEP_FULL_ACTION_TURNS_CAVEMAN = 1
+
+function toNativeToolDef(t: ToolDefinition): NativeToolDef {
+  return {
+    type: 'function',
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.inputSchema ?? { type: 'object', properties: {} },
+    },
+  }
+}
+
+/** Hide the raw action protocol from the streamed text shown to the user. */
+function displayText(s: string): string {
+  const i = s.indexOf('```tagent:action')
+  return i >= 0 ? s.slice(0, i).trimEnd() : s
+}
+
+/**
+ * Digest of one old TOOL RESULTS message: keep every action header plus its
+ * key input (path / command / pattern) and status, drop the bulk output.
+ * Deterministic — facts are copied, never generated.
+ */
+function digestOldToolResults(content: string): string {
+  const lines: string[] = []
+  let current: { tool: string; status: string; input?: string } | undefined
+  const flush = () => {
+    if (!current) return
+    lines.push(
+      `[older tool results — output elided] ${current.tool} (${current.status})${
+        current.input ? ` · ${current.input.slice(0, 160)}` : ''
+      }`,
+    )
+  }
+  for (const l of content.split('\n')) {
+    const head = l.match(/^### (\S+) \((\w+)\)$/)
+    if (head) {
+      flush()
+      current = { tool: head[1], status: head[2] }
+    } else if (current && !current.input && l.startsWith('input: ')) {
+      current.input = l.slice(7, 167)
+    }
+  }
+  flush()
+  if (!lines.length) {
+    return '[older tool results compacted — re-run a tool if you need the output]'
+  }
+  return (
+    'TOOL RESULTS (older ones compacted to digests — outputs you read earlier are summarized by tool+status; ' +
+    're-run a tool for fresh output):\n' +
+    lines.join('\n')
+  )
+}
+
+export interface AgentLoopOptions {
+  session: SessionData
+  provider: ProviderAdapter
+  model: string
+  events: AgentEvents
+  permissions: PermissionManager
+  config: import('./types').TagentConfig
+  mode: AgentMode
+  /** nesting depth — 0 = primary agent */
+  depth?: number
+  /** restrict to read-only tools (subagent explore) */
+  readOnly?: boolean
+  signal?: AbortSignal
+  onSessionUpdate?: (session: SessionData) => void
+  /** timeline support — the host persists subagent sessions through this */
+  onSubagentSession?: (sub: SessionData, phase: 'start' | 'end') => void
+  /** extra tools injected by the host (MCP servers, plugins, …) */
+  extraTools?: ToolDefinition[]
+  /** custom subagent persona — replaces the default identity in the system prompt */
+  agentPrompt?: string
+  /** custom subagent tool whitelist (tool names) */
+  toolsFilter?: string[]
+  /** host-owned registry of background subagents (task background:true) —
+   *  shared across runs so a late report can wake a FRESH run */
+  backgroundSubs?: BackgroundSubagents
+  /** fired exactly once when a background subagent finishes (done|error) —
+   *  the host notifies the user and decides delivery: inject into the
+   *  running loop, or auto-continue with a new run. Never asks the user. */
+  onBackgroundSub?: (info: import('./types').BgSubInfo) => void
+}
+
+interface ParsedAction {
+  id: string
+  tool: string
+  input: Record<string, unknown>
+}
+
+/**
+ * The agent loop: prompt → model → parse action blocks → execute tools
+ * (permission-gated, checkpointed) → feed results back → repeat until the
+ * model answers without actions, or the turn budget is spent.
+ */
+export class AgentLoop {
+  private abort = new AbortController()
+  private snapshots = new Map<string, boolean>()
+  /** reports from finished background subagents, waiting to be fed into the
+   *  next turn — flushed at the top of each iteration (mid-run delivery) */
+  private pendingReports: string[] = []
+  /** run() has returned — a dead loop must not be stopped (its detached
+   *  background subs inherit its abort signal) nor receive injections */
+  private finished = false
+  tools: ToolDefinition[]
+  readonly ctx: ToolContext
+  /** primary first, then the ordered fallback chain */
+  private chain: ResolvedChainEntry[]
+  /** the model's context window (0 = unknown) — powers onContext */
+  private ctxLimit: number
+
+  constructor(private opts: AgentLoopOptions) {
+    this.tools = this.buildToolsetFor(opts.mode)
+    // failover lane: subagent loops walk their OWN chain; the main agent the
+    // legacy one (role overrides keep working through the loop's provider)
+    this.chain = [
+      { adapter: opts.provider, model: opts.model, label: 'primary' },
+      ...fallbackTailFor(opts.config, (opts.depth ?? 0) > 0 ? 'subagent' : 'main'),
+    ]
+    this.ctxLimit = modelContextWindow(opts.provider.id, opts.model)
+    this.ctx = {
+      workspaceRoot: opts.session.workspaceId,
+      sessionId: opts.session.id,
+      depth: opts.depth ?? 0,
+      config: opts.config,
+      events: opts.events,
+      signal: this.abort.signal,
+      todos: opts.session.todos,
+      spawnSubagent: (description, prompt, agent, maxTurns) =>
+        this.spawnSubagent(description, prompt, agent, maxTurns),
+      spawnBackgroundSubagent: (description, prompt, agent, maxTurns) =>
+        this.spawnSubagentBackground(description, prompt, agent, maxTurns),
+      ...(opts.backgroundSubs ? { backgroundSubs: opts.backgroundSubs } : {}),
+      // switch_mode — the primary agent's mode escape hatch (user-approved)
+      ...((opts.depth ?? 0) === 0
+        ? {
+            switchMode: (mode: AgentMode, reason: string) => this.switchMode(mode, reason),
+          }
+        : {}),
+    }
+    if (opts.signal) {
+      opts.signal.addEventListener('abort', () => this.abort.abort(), { once: true })
+    }
+  }
+
+  stop(): void {
+    this.abort.abort()
+  }
+
+  /** false once run() has returned — stopping a dead loop would abort its
+   *  detached background subs, and injecting into it would be lost work. */
+  get alive(): boolean {
+    return !this.finished
+  }
+
+  /** Host → running loop: queue a background subagent's report; it is fed
+   *  into the next turn as a user message ("[SUBAGENT REPORT …]"). Returns
+   *  false when the loop can no longer receive it (already finished). */
+  deliverBackgroundReport(text: string): boolean {
+    if (!this.alive || this.abort.signal.aborted) return false
+    this.pendingReports.push(text)
+    return true
+  }
+
+  /** switch_mode (primary agent, user-approved through the permission gate):
+   *  flips THIS run's mode, swaps the toolset, persists the session mode.
+   *  The system prompt + native tool defs are rebuilt by the run loop right
+   *  after, so the following turns run under the new persona. */
+  switchMode(mode: AgentMode, reason: string): { ok: true; mode: AgentMode } | { error: string } {
+    if ((this.opts.depth ?? 0) > 0) return { error: 'subagents run with a fixed mode' }
+    if (this.opts.readOnly) return { error: 'read-only loops cannot switch mode' }
+    if (mode !== 'build' && mode !== 'plan' && mode !== 'test') return { error: `unknown mode "${mode}"` }
+    if (mode === this.opts.mode) return { error: `already in ${mode} mode` }
+    this.opts.mode = mode
+    const session = this.opts.session
+    session.mode = mode
+    this.opts.onSessionUpdate?.(session)
+    this.tools = this.buildToolsetFor(mode)
+    this.opts.events.onModeChange?.(mode)
+    this.opts.events.onNotify?.('info', `mode switched to ${mode} — ${reason.slice(0, 120)}`)
+    return { ok: true, mode }
+  }
+
+  /** assemble the mode-scoped toolset (extraTools + toolsFilter preserved) */
+  private buildToolsetFor(mode: AgentMode | undefined): ToolDefinition[] {
+    return [
+      ...buildToolset({
+        readOnly: this.opts.readOnly,
+        depth: this.opts.depth ?? 0,
+        config: this.opts.config,
+        ...(mode ? { mode } : {}),
+      }),
+      ...(this.opts.readOnly ? [] : (this.opts.extraTools ?? [])),
+    ].filter((t) => !this.opts.toolsFilter || this.opts.toolsFilter.includes(t.name))
+  }
+
+  /** the run's system prompt for the CURRENT mode/toolset (rebuilt after a
+   *  mid-run switch_mode so the persona follows the new mode) */
+  private buildSystemPromptNow(caveman: boolean): string {
+    const { session } = this.opts
+    return buildSystemPrompt({
+      workspaceRoot: session.workspaceId,
+      mode: this.opts.mode,
+      tools: this.tools,
+      subagent: (this.opts.depth ?? 0) > 0,
+      caveman,
+      ...(this.opts.agentPrompt ? { agentPrompt: this.opts.agentPrompt } : {}),
+      ...(diagnosticsCommand(this.opts.config) && !this.opts.readOnly
+        ? { diagnostics: diagnosticsCommand(this.opts.config) }
+        : {}),
+      // the primary agent keeps the journal; subagents & plan mode stay lean
+      worklog:
+        this.opts.config.worklog?.enabled !== false &&
+        (this.opts.depth ?? 0) === 0 &&
+        this.opts.mode === 'build',
+    })
+  }
+
+  /** native tool defs for the CURRENT toolset (rebuilt after switch_mode) */
+  private buildNativeTools() {
+    const useNativeTools =
+      this.opts.config.nativeTools !== false &&
+      this.opts.provider.supportsNativeTools === true &&
+      this.tools.length > 0
+    return useNativeTools ? this.tools.map(toNativeToolDef) : undefined
+  }
+
+  /* ---------------------------------------------------------------- */
+
+  async run(userText: string): Promise<LoopSummary> {
+    try {
+      return await this.runInner(userText)
+    } finally {
+      // the loop is dead from here on — hosts route late background reports
+      // into a FRESH run instead of injecting into this one
+      this.finished = true
+    }
+  }
+
+  private async runInner(userText: string): Promise<LoopSummary> {
+    const { session } = this.opts
+    // the last provider-failure message — lets the catch avoid echoing the
+    // same provider JSON a second time as "Agent error"
+    let lastProviderFail = ''
+    // @-mentions → inline file attachments: zero tool turns for known files
+    const expanded = this.expandFileMentions(userText)
+    const userMsg: ChatMessage = { id: uid(), role: 'user', content: expanded, createdAt: Date.now() }
+    session.messages.push(userMsg)
+    this.opts.events.onUserMessage?.(userMsg)
+
+    const caveman = this.opts.config.caveman === true
+    // rebuilt on a mid-run mode switch (switch_mode, user-approved) — the
+    // persona and the toolset must follow the mode the run is NOW in
+    let system = this.buildSystemPromptNow(caveman)
+
+    let turns = 0
+    let toolCalls = 0
+    let usageTotal: TokenUsage | undefined
+    const maxTurns = Math.min(this.opts.config.maxTurns ?? 40, 80)
+    // native function-calling when the provider supports it (config: nativeTools)
+    let nativeTools = this.buildNativeTools()
+    // the mode this run's system prompt was built for — a mid-run switch
+    // (switch_mode) rebuilds persona + toolset for the following turns
+    let activeMode = this.opts.mode
+
+    try {
+      while (turns < maxTurns) {
+        if (this.abort.signal.aborted) return { turns, toolCalls, finished: 'aborted', usage: usageTotal }
+        turns++
+
+        // ---- background subagent reports that arrived mid-run: feed them
+        // as user messages BEFORE the model call, so the agent works with
+        // fresh evidence instead of stale assumptions. ----
+        if (this.pendingReports.length > 0) {
+          const batch = this.pendingReports.splice(0)
+          for (const text of batch) {
+            const msg: ChatMessage = { id: uid(), role: 'user', content: text, createdAt: Date.now() }
+            session.messages.push(msg)
+            this.opts.events.onUserMessage?.(msg)
+          }
+          this.opts.events.onNotify?.('info', `${batch.length} background subagent report(s) delivered`)
+        }
+
+        this.opts.events.onStatus?.(
+          'thinking',
+          `turn ${turns}${usageTotal ? ` · ${fmtTokens(usageTotal.input)} in` : ''}`,
+        )
+        // streamed token display — throttled, idempotent (full text so far)
+        let lastEmit = 0
+        const emitStream = (full: string, force = false) => {
+          const now = Date.now()
+          if (force || now - lastEmit >= CHUNK_EMIT_MS) {
+            lastEmit = now
+            this.opts.events.onAssistantChunk?.(session.id, displayText(full))
+          }
+        }
+        const rendered = this.renderMessages(system)
+        const result = await completeWithFallback(
+          this.chain,
+          {
+            model: this.opts.model,
+            signal: this.abort.signal,
+            messages: rendered,
+            tools: nativeTools,
+            onText: (full) => emitStream(full),
+          },
+          (info) => {
+            lastProviderFail = info.error
+            // one short line — the full story lands in the error card when the
+            // run ends (a multi-line provider error must not wrap mid-word here)
+            this.opts.events.onNotify?.(
+              'warn',
+              `provider ${info.failed} failed — ${info.error.split('\n')[0].slice(0, 140)}${info.next ? ` · switching to ${info.next}` : ' · no fallback left'}`,
+            )
+          },
+        )
+
+        if (this.abort.signal.aborted) return { turns, toolCalls, finished: 'aborted', usage: usageTotal }
+
+        const raw = result.text
+        // token accounting (when the provider reports usage in its stream)
+        if (result.usage) {
+          usageTotal = usageTotal
+            ? {
+                input: usageTotal.input + (result.usage.input ?? 0),
+                output: usageTotal.output + (result.usage.output ?? 0),
+                cacheRead: (usageTotal.cacheRead ?? 0) + (result.usage.cacheRead ?? 0),
+              }
+            : { input: result.usage.input ?? 0, output: result.usage.output ?? 0, cacheRead: result.usage.cacheRead }
+          this.opts.events.onUsage?.({ input: result.usage.input ?? 0, output: result.usage.output ?? 0, cacheRead: result.usage.cacheRead, turn: turns })
+        }
+        // context-window state — provider usage when available, else a local
+        // estimate of what this request carried. Powers the usage bar + the
+        // 80% compact prompt in the hosts.
+        {
+          const used = result.usage
+            ? (result.usage.input ?? 0) + (result.usage.output ?? 0)
+            : rendered.reduce((n, m) => n + estimateTokens(m.content), estimateTokens(system))
+          this.opts.events.onContext?.({ used, limit: this.ctxLimit, turn: turns, estimated: !result.usage })
+        }
+        const { cleanText, actions } = this.parseActions(raw)
+        // merge actions that came through native function calling
+        const nativeActions: ParsedAction[] = (result.toolCalls ?? []).map((c) => ({
+          id: c.id ?? uid(),
+          tool: c.tool,
+          input: (c.input ?? {}) as Record<string, unknown>,
+        }))
+        const allActions = [...actions, ...nativeActions]
+
+        const assistantMsg: ChatMessage = {
+          id: uid(),
+          role: 'assistant',
+          content: cleanText.trim(),
+          createdAt: Date.now(),
+          ...(result.usage ? { meta: { usage: { input: result.usage.input ?? 0, output: result.usage.output ?? 0, cacheRead: result.usage.cacheRead } } } : {}),
+        }
+        session.messages.push(assistantMsg)
+
+        if (allActions.length === 0) {
+          emitStream(assistantMsg.content, true)
+          this.opts.events.onAssistantMessage?.(assistantMsg)
+          this.opts.onSessionUpdate?.(session)
+          // a background report may have landed during the final model call —
+          // finishing now would strand it for a full host wake-up when the
+          // loop could simply take one more turn with the fresh evidence
+          if (this.pendingReports.length > 0) continue
+          this.opts.events.onStatus?.('done', usageDetail(turns, usageTotal))
+          // plan mode: a clean finish that presents a plan enables the
+          // approve-and-build flow in the host
+          const plan = this.opts.mode === 'plan' ? extractPlan(assistantMsg.content) : undefined
+          return { turns, toolCalls, finished: 'complete', usage: usageTotal, ...(plan ? { plan } : {}) }
+        }
+
+        // brief text streams out before the actions execute
+        emitStream(assistantMsg.content, true)
+        this.opts.events.onAssistantMessage?.(assistantMsg)
+        this.opts.onSessionUpdate?.(session)
+
+        const results: string[] = []
+        this.opts.events.onStatus?.('acting', `${allActions.length} action(s)`)
+        let editedThisTurn = false
+
+        for (const action of allActions) {
+          if (this.abort.signal.aborted) break
+          const record: ToolCallRecord = {
+            id: action.id,
+            tool: action.tool,
+            input: action.input,
+            status: 'running',
+            startedAt: Date.now(),
+          }
+          assistantMsg.toolCalls = [...(assistantMsg.toolCalls ?? []), record]
+          this.opts.events.onToolStart?.(record)
+
+          let output: string
+          try {
+            const tool = this.tools.find((t) => t.name === action.tool)
+            if (!tool) {
+              const known = ALL_TOOLS.some((t) => t.name === action.tool)
+              throw new Error(
+                known
+                  ? `Tool "${action.tool}" is not available in ${this.opts.mode} mode${
+                      this.opts.mode === 'test'
+                        ? ' — test mode verifies the project without modifying it. Switch to build mode to fix issues.'
+                        : '. Switch to build mode to use it.'
+                    }`
+                  : `Unknown tool "${action.tool}". Available: ${this.tools.map((t) => t.name).join(', ')}`,
+              )
+            }
+            // plan mode is read-only for the PROJECT — but external MCP/plugin
+            // tools stay available: they are what plan mode investigates with
+            // (search servers, data lookups, …) and the permission gate still
+            // asks the human for every risky call
+            const external = tool.name.startsWith('mcp_') || tool.name.startsWith('plugin_')
+            if (this.opts.mode === 'plan' && !isReadOnlyTool(tool.name) && !external) {
+              throw new Error('Plan mode is read-only — switch to build mode to modify files.')
+            }
+            // same for test mode: the QA toolset + external tools, no source writes
+            if (this.opts.mode === 'test' && !TEST_MODE_TOOLS.has(tool.name) && !external) {
+              throw new Error(
+                'Test mode is read-only — it verifies the project without modifying it (the only write is test_report). ' +
+                  'Switch to build mode to fix issues.',
+              )
+            }
+            // permission gate — ask the human when the rule says so
+            this.opts.events.onStatus?.('waiting-permission', tool.name)
+            const decision = await this.opts.permissions.gate(tool.name, action.input, this.ctx, tool.risk)
+            if (!decision.approved) {
+              record.status = 'denied'
+              output = 'Permission denied by the user. Do not retry this exact action; ask the user how to proceed or continue with what you can.'
+            } else {
+              this.opts.events.onStatus?.('acting', tool.name)
+              // pre-write checkpoint
+              if (shouldCheckpoint(tool.name, this.snapshots.get(session.id) === true, this.ctx)) {
+                this.snapshots.set(session.id, true)
+                try {
+                  createCheckpoint(session.workspaceId, `pre-${tool.name} (session ${session.id})`)
+                } catch { /* checkpoint is best-effort */ }
+              }
+              output = await tool.run(action.input, this.ctx)
+              record.status = 'done'
+              if (record.status === 'done' && (tool.name === 'write_file' || tool.name === 'edit_file')) {
+                editedThisTurn = true
+              }
+            }
+          } catch (e) {
+            record.status = 'error'
+            output = `Error: ${(e as Error).message}`
+          }
+          record.output = compressOutput(output, caveman ? 1_600 : 4_000)
+          record.endedAt = Date.now()
+          toolCalls++
+          this.opts.events.onToolEnd?.(record)
+          results.push(
+            `### ${action.tool} (${record.status})\ninput: ${compressOutput(JSON.stringify(action.input), 400)}\noutput:\n${compressOutput(output, caveman ? MAX_TOOL_OUTPUT_CAVEMAN : MAX_TOOL_OUTPUT)}`,
+          )
+        }
+
+        this.opts.onSessionUpdate?.(session)
+
+        if (this.abort.signal.aborted) return { turns, toolCalls, finished: 'aborted', usage: usageTotal }
+
+        // auto-diagnostics: one quality-gate run per edit turn — failures are
+        // fed straight back so the model self-corrects before saying "done"
+        if (editedThisTurn && diagnosticsCommand(this.opts.config)) {
+          this.opts.events.onStatus?.('acting', 'diagnostics')
+          const diag = await runDiagnostics(session.workspaceId, this.opts.config)
+          if (diag) {
+            results.push(renderDiagnosticsBlock(diag))
+            if (!diag.ok) {
+              this.opts.events.onNotify?.('warn', `diagnostics failed — the agent is fixing it (${(diag.ms / 1000).toFixed(1)}s)`)
+            }
+          }
+        }
+
+        // feed results back as the next user turn
+        const { content: fedText, images } = this.collectImages(results.join('\n\n'), this.opts.session.workspaceId)
+        const resultMsg: ChatMessage = {
+          id: uid(),
+          role: 'user',
+          content: `TOOL RESULTS:\n\n${fedText}\n\nContinue. If the task is complete, reply with a summary and NO action blocks.`,
+          createdAt: Date.now(),
+          meta: { toolResults: true, ...(images.length ? { images } : {}) },
+        }
+        session.messages.push(resultMsg)
+
+        // mid-run mode switch (switch_mode, user-approved): the persona and
+        // the toolset must reflect the mode the run is NOW in
+        if (this.opts.mode !== activeMode) {
+          activeMode = this.opts.mode
+          system = this.buildSystemPromptNow(caveman)
+          nativeTools = this.buildNativeTools()
+        }
+      }
+
+      this.opts.events.onStatus?.('done', 'max turns reached')
+      return { turns, toolCalls, finished: 'max-turns', usage: usageTotal }
+    } catch (e) {
+      const err = (e as Error).message
+      this.opts.events.onStatus?.('error', err)
+      // the provider-failure line above already told this story — printing it
+      // again as "Agent error: …" was the triple-JSON-dump users complained
+      // about. Only notify when this is a DIFFERENT failure (abort mid-flight,
+      // tool explosion, session write, …)
+      if (err !== lastProviderFail) {
+        this.opts.events.onNotify?.('error', `Agent error: ${err.split('\n')[0]}`)
+      }
+      return { turns, toolCalls, finished: 'error', error: err, usage: usageTotal }
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * @path mentions → inline attachments (max 5 files, ≤60KB each).
+   * The agent starts with the content already in context — no read turn spent.
+   * Attached files are recorded in the file-state cache, so a later
+   * read_file of the same path correctly answers "unchanged, in context".
+   */
+  private expandFileMentions(text: string): string {
+    if (!text.includes('@')) return text
+    const { session } = this.opts
+    const attachments: string[] = []
+    const expanded = text.replace(/(^|\s)@([\w./@-]+)/g, (whole, pre: string, p: string) => {
+      if (attachments.length >= 5) return whole
+      if (!/[./]/.test(p)) return whole // @mention without a path shape stays as-is
+      let abs: string
+      try {
+        abs = jailPath(session.workspaceId, p)
+      } catch {
+        return whole // escapes workspace — leave untouched
+      }
+      try {
+        const st = fs.statSync(abs)
+        if (!st.isFile() || st.size > 60_000) return whole
+        const raw = fs.readFileSync(abs, 'utf8')
+        if (raw.includes('\u0000')) return whole // binary
+        attachments.push(`===== @${p} (user-attached, ${st.size} bytes) =====\n${raw}`)
+        if (this.opts.config.cache?.fileState !== false) fileStateFor(session.workspaceId).record(abs)
+        return `${pre}@${p} (attached below)`
+      } catch {
+        return whole
+      }
+    })
+    if (attachments.length === 0) return text
+    return `${expanded}\n\n${attachments.join('\n\n')}`
+  }
+
+  /** built-in agent kinds — custom .tagent/agents/<name>.md definitions can't take these names */
+  private static BUILTIN_KINDS = new Set(['general', 'explore', 'test'])
+
+  /**
+   * Spawn a subagent. `agentKind` is "general" (full toolset, no nesting),
+   * "explore" (read-only), "test" (the QA toolset — browser + vision +
+   * serve, read-only), or the name of a custom subagent
+   * (.tagent/agents/<name>.md) — persona, tool whitelist, model override, and
+   * turn budget come from the definition. Subagents run in the SAME workspace
+   * with the parent's file tools, so their prompts carry instructions and
+   * paths, never pasted file contents.
+   */
+  private async spawnSubagent(
+    description: string,
+    prompt: string,
+    agentKind: string,
+    maxTurns: number,
+  ): Promise<string> {
+    const { session } = this.opts
+    const builtin = AgentLoop.BUILTIN_KINDS.has(agentKind)
+    const def = builtin ? undefined : findSubagent(session.workspaceId, agentKind)
+    if (!builtin && !def) {
+      return `Error: unknown agent "${agentKind}" — available: general, explore, test${
+        listSubagentNames(session.workspaceId)
+          .map((n) => `, ${n}`)
+          .join('')
+      }`
+    }
+    // model resolution: the subagent's own definition → the models.subagent
+    // role (config) → the parent's model. "provider/model" (cross-provider)
+    // or a bare model id (same provider as the parent).
+    let provider = this.opts.provider
+    let model = this.opts.model
+    const ref = def?.model ? parseModelRef(def.model, this.opts.config) : resolveSubagentModel(this.opts.config)
+    if (ref) {
+      try {
+        provider = getAdapter(ref.provider, this.opts.config)
+        model = ref.model
+      } catch {
+        /* fall back to the parent's provider */
+      }
+    } else if (def?.model) {
+      model = def.model // bare id — same provider as the parent
+    }
+    const sub: SessionData = {
+      id: uid(),
+      workspaceId: session.workspaceId,
+      title: `${def ? `${def.name}: ` : agentKind === 'test' ? 'test: ' : ''}${description}`,
+      model,
+      mode: def ? def.mode : agentKind === 'test' ? 'test' : this.opts.mode,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      messageCount: 0,
+      messages: [],
+      todos: [],
+      // timeline metadata — persisted by the host, hidden from the sidebar
+      parentId: session.id,
+      subagent: true,
+    }
+    this.opts.onSubagentSession?.(sub, 'start')
+    const events = wrapEventsForSubagent(this.opts.events, sub.title)
+    const loop = new AgentLoop({
+      session: sub,
+      provider,
+      model,
+      events,
+      permissions: this.opts.permissions,
+      config: { ...this.opts.config, maxTurns: def?.maxTurns ?? maxTurns },
+      // built-in kinds: "test" runs in QA mode (read-only toolset + the TEST
+      // persona) regardless of the parent's mode — that's the whole point of
+      // delegating verification. "general"/default inherit the parent's mode.
+      mode: def ? def.mode : agentKind === 'test' ? 'test' : this.opts.mode,
+      depth: (this.opts.depth ?? 0) + 1,
+      readOnly: agentKind === 'explore' || def?.mode === 'plan',
+      signal: this.abort.signal,
+      onSubagentSession: this.opts.onSubagentSession,
+      ...(def ? { agentPrompt: def.systemPrompt, toolsFilter: def.tools } : {}),
+    })
+    const summary = await loop.run(prompt)
+    this.opts.onSubagentSession?.(sub, 'end')
+    const report =
+      sub.messages.filter((m) => m.role === 'assistant' && !m.meta?.toolResults).map((m) => m.content).join('\n\n') ||
+      `(subagent produced no text report; finished=${summary.finished})`
+    return report
+  }
+
+  /**
+   * Spawn a DETACHED subagent — returns its registry id immediately ("a1",
+   * "a2"…) and never blocks the caller. The agent keeps working; when the
+   * sub finishes, its report is delivered by the host (mid-run injection or
+   * an automatic fresh run) — no user confirmation anywhere in the loop.
+   *
+   * The registry (host-owned, shared across runs) tracks status for the
+   * subs tool and enforces the parallel limit (config subagents.maxParallel).
+   */
+  private spawnSubagentBackground(
+    description: string,
+    prompt: string,
+    agentKind: string,
+    maxTurns: number,
+  ): { id: string } | { error: string } {
+    const registry = this.opts.backgroundSubs
+    if (!registry) return { error: 'background subagents are unavailable in this context' }
+    const r = registry.register(description, agentKind)
+    if ('error' in r) return r
+    const id = r.id
+    this.opts.events.onSubagent?.({
+      id,
+      parentId: this.opts.session.id,
+      description: `${description} (background ${id})`,
+      status: 'running',
+      turns: 0,
+    })
+    void (async () => {
+      try {
+        const report = await this.spawnSubagent(description, prompt, agentKind, maxTurns)
+        registry.finish(id, 'done', report)
+        this.opts.events.onSubagent?.({ id, parentId: this.opts.session.id, description, status: 'done', turns: 0, report: trunc(report, 500) })
+        this.opts.onBackgroundSub?.(registry.get(id) ?? { id, description, kind: agentKind, status: 'done', startedAt: 0, turns: 0, report })
+      } catch (e) {
+        const msg = `Error: ${(e as Error).message}`
+        registry.finish(id, 'error', msg)
+        this.opts.events.onSubagent?.({ id, parentId: this.opts.session.id, description, status: 'error', turns: 0, report: trunc(msg, 500) })
+        this.opts.onBackgroundSub?.(registry.get(id) ?? { id, description, kind: agentKind, status: 'error', startedAt: 0, turns: 0, report: msg })
+      }
+    })()
+    return { id }
+  }
+
+  /**
+   * Screenshot wiring — [IMAGE:<path>] markers from tool output become image
+   * parts on the tool-results message (when the model can see images) or a
+   * plain path reference (when it cannot). Session stores only the paths;
+   * base64 is read lazily at request time.
+   */
+  private collectImages(
+    text: string,
+    workspaceRoot: string,
+  ): { content: string; images: string[] } {
+    const markerRe = /\[IMAGE:([^\]]+)\]/g
+    const paths = [...new Set([...text.matchAll(markerRe)].map((m) => m[1]))].slice(0, 4)
+    if (!paths.length) return { content: text, images: [] }
+
+    const canSee = acceptsImages(this.opts.provider, this.opts.model)
+    if (!canSee) {
+      // keep the reference readable — the model can still cite the path
+      return { content: text.replace(markerRe, (_m, p) => `(screenshot at ${path.relative(workspaceRoot, p)})`), images: [] }
+    }
+    const keep: string[] = []
+    for (const p of paths) {
+      try {
+        if (fs.statSync(p).size > 2_500_000) continue // ~1.9MB binary cap — skip monsters
+        keep.push(p)
+      } catch { /* deleted — skip */ }
+    }
+    if (!keep.length) {
+      return { content: text.replace(markerRe, (_m, p) => `(screenshot at ${p})`), images: [] }
+    }
+    return { content: text.replace(markerRe, ''), images: keep }
+  }
+
+  private renderMessages(system: string): WireMessage[] {
+    const out: WireMessage[] = [
+      { role: 'system', content: system },
+    ]
+    // how many assistant turns carry tools at all — the NEWEST ones keep
+    // their full action inputs; older ones get bulky fields elided. A
+    // write_file content re-sent every turn forever is pure ballast: the
+    // file is on disk, the trail stays auditable via path + preview.
+    const caveman = this.opts.config.caveman === true
+    const keepFull = caveman ? KEEP_FULL_ACTION_TURNS_CAVEMAN : KEEP_FULL_ACTION_TURNS
+    const toolTurns = this.opts.session.messages.filter(
+      (m) => m.role === 'assistant' && (m.toolCalls?.length ?? 0) > 0,
+    ).length
+    let toolTurnsSeen = 0
+    for (const m of this.opts.session.messages) {
+      if (m.role === 'assistant') {
+        const isToolTurn = (m.toolCalls?.length ?? 0) > 0
+        const full = !isToolTurn || toolTurnsSeen >= toolTurns - keepFull
+        if (isToolTurn) toolTurnsSeen++
+        const actions = (m.toolCalls ?? []).map((c) =>
+          '```tagent:action\n' +
+          JSON.stringify({
+            tool: c.tool,
+            input: full
+              ? c.input
+              : slimActionInput(c.tool, (c.input ?? {}) as Record<string, unknown>),
+          }) +
+          '\n```',
+        )
+        out.push({ role: 'assistant', content: [m.content, ...actions].filter(Boolean).join('\n\n') })
+      } else if (m.meta?.toolResults) {
+        out.push({ role: 'user', content: m.content })
+      } else {
+        out.push({ role: 'user', content: m.content })
+      }
+    }
+
+    // ---- visual context: attach screenshots to the newest tool results -----
+    // base64 is read at request time (session files only store paths); keep
+    // the last 2 image-bearing messages, max 4 images total — older ones
+    // degrade to text references. Positional: out[i + 1] ↔ session.messages[i].
+    if (acceptsImages(this.opts.provider, this.opts.model)) {
+      let budget = 4
+      let msgsUsed = 0
+      for (let i = this.opts.session.messages.length - 1; i >= 0 && budget > 0 && msgsUsed < 2; i--) {
+        const m = this.opts.session.messages[i]
+        if (m.role !== 'user' || !Array.isArray(m.meta?.images) || !(m.meta.images as string[]).length) continue
+        msgsUsed++
+        const wireIdx = i + 1 // +1 — out[0] is the system message
+        if (wireIdx >= out.length) continue
+        const parts: { data: string; mediaType: string }[] = []
+        for (const p of m.meta.images as string[]) {
+          if (budget <= 0) break
+          try {
+            const buf = fs.readFileSync(p)
+            if (buf.byteLength > 1_900_000) continue
+            parts.push({ data: buf.toString('base64'), mediaType: 'image/png' })
+            budget--
+          } catch { /* unreadable — skip */ }
+        }
+        if (parts.length) out[wireIdx] = { ...out[wireIdx], images: parts }
+      }
+    }
+
+    // ---- context diet -------------------------------------------------
+    // 1) compact OLD tool results: keep the newest COMPACT_KEEP full, turn
+    //    older ones into per-tool digests (tool + key input + status — the
+    //    what/where is preserved, only the bulk output is dropped).
+    let total = out.reduce((n, m) => n + m.content.length, 0)
+    const threshold = caveman ? COMPACT_THRESHOLD_CAVEMAN : COMPACT_THRESHOLD
+    if (total > threshold) {
+      const toolIdx: number[] = []
+      for (let i = 0; i < out.length; i++) {
+        if (out[i].role === 'user' && out[i].content.startsWith('TOOL RESULTS:')) toolIdx.push(i)
+      }
+      const keep = new Set(toolIdx.slice(-COMPACT_KEEP))
+      for (const i of toolIdx) {
+        if (keep.has(i)) continue
+        const digest = digestOldToolResults(out[i].content)
+        total -= out[i].content.length - digest.length
+        out[i] = { role: 'user', content: digest }
+      }
+    }
+
+    // 2) hard backstop: drop oldest middle turns if still huge
+    const MAX_CHARS = 400_000
+    while (total > MAX_CHARS && out.length > 4) {
+      const removed = out.splice(1, 1) // keep system + latest
+      total -= removed[0].content.length
+    }
+    return out
+  }
+
+  private parseActions(raw: string): { cleanText: string; actions: ParsedAction[] } {
+    const actions: ParsedAction[] = []
+    let clean = raw
+    for (const m of raw.matchAll(ACTION_RE)) {
+      try {
+        const parsed = JSON.parse(m[1])
+        if (parsed && typeof parsed.tool === 'string') {
+          actions.push({
+            id: uid(),
+            tool: parsed.tool,
+            input: (parsed.input ?? {}) as Record<string, unknown>,
+          })
+        }
+      } catch {
+        actions.push({
+          id: uid(),
+          tool: '__invalid_json__',
+          input: { raw: m[1].slice(0, 500) },
+        })
+      }
+    }
+    clean = raw.replace(ACTION_RE, '').trim()
+    return { cleanText: clean, actions }
+  }
+}
+
+const READ_ONLY_TOOLS = new Set([
+  'read_file', 'read_files', 'list_files', 'grep', 'web_fetch', 'ddg_search', 'task', 'todowrite', 'memory', 'load_skill', 'ask_user', 'switch_mode',
+])
+
+export function isReadOnlyTool(name: string): boolean {
+  return READ_ONLY_TOOLS.has(name)
+}
+
+/** custom subagent names — for unknown-agent error messages */
+function listSubagentNames(workspaceRoot: string): string[] {
+  try {
+    return listSubagents(workspaceRoot).map((a) => a.name)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Detect a presented implementation plan in a plan-mode final answer.
+ * Accepts a "## Plan"-style heading (returns the text under it) or a bare
+ * numbered step list (>= 4 steps, no question marks) — questions and short
+ * chatter don't count.
+ */
+export function extractPlan(text: string): string | undefined {
+  if (!text || !text.trim()) return undefined
+  const heading = text.match(/^\s*#{1,3}\s*(?:implementation\s+)?plan\b[^\n]*\n?/im)
+  if (heading && heading.index !== undefined) {
+    const rest = text.slice(heading.index).trim()
+    return rest.length >= 24 ? rest.slice(0, 16_000) : undefined
+  }
+  const steps = text.match(/^\s*(?:\d+[.)]|[-*])\s+\S/gm) ?? []
+  if (steps.length >= 4 && !text.includes('?') && text.trim().length >= 20) {
+    return text.trim().slice(0, 16_000)
+  }
+  return undefined
+}
+
+/** 12345 → "12.3k" */
+function fmtTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+}
+
+function usageDetail(turns: number, usage?: TokenUsage): string {
+  if (!usage) return `turns: ${turns}`
+  const cache = usage.cacheRead ? `, ${fmtTokens(usage.cacheRead)} cached` : ''
+  return `turns: ${turns} · tokens ${fmtTokens(usage.input)} in / ${fmtTokens(usage.output)} out${cache}`
+}
+
+/** Rename subagent events so the UI can nest them under the parent activity. */
+function wrapEventsForSubagent(
+  parent: AgentEvents,
+  description: string,
+): AgentEvents {
+  let info: SubagentInfo = {
+    id: uid(),
+    parentId: '',
+    description,
+    status: 'running',
+    turns: 0,
+  }
+  return {
+    ...parent,
+    onStatus: (phase, detail) => parent.onSubagent?.({ ...info, status: 'running' }),
+    onAssistantMessage: () => undefined,
+    onAssistantChunk: () => undefined,
+    onToolStart: (call) => {
+      info.turns++
+      parent.onSubagent?.({ ...info, status: 'running' })
+    },
+    onUserMessage: () => undefined,
+    onFilesChanged: (paths) => parent.onFilesChanged?.(paths),
+    onNotify: (level, msg) => parent.onNotify?.(level, `[subagent:${description}] ${msg}`),
+  }
+}

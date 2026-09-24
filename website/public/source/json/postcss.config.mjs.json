@@ -1,0 +1,1 @@
+{"path":"postcss.config.mjs","content":"const config = {\n  plugins: [\"@tailwindcss/postcss\"],\n};\n\nexport default config;\n","language":"js","lines":6,"bytes":81,"rawUrl":"/source/raw/postcss.config.mjs"}
