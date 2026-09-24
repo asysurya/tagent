@@ -202,7 +202,7 @@ if (args.length === 0 || args[0] === 'start') {
 } else if (has('--check-update')) {
   const info = await checkUpdate(true)
   if (!info) {
-    console.log('could not reach the update endpoint (offline?)')
+    console.log('could not reach any update endpoint (offline?) — raw.githubusercontent, jsDelivr and the GitHub API were all tried')
     process.exit(1)
   }
   console.log(
@@ -1779,7 +1779,7 @@ async function mainUpdate() {
   console.log(`\n  ${bold('tagent update')} · install: ${detectInstallKind()} · v${CURRENT_VERSION}\n`)
   const info = await checkUpdate(true)
   if (!info) {
-    console.log('  could not reach the update endpoint (offline?) — try again later')
+    console.log('  could not reach any update endpoint (offline?) — raw.githubusercontent, jsDelivr and the GitHub API were all tried')
     process.exit(1)
   }
   if (!info.outdated) {

@@ -3687,7 +3687,7 @@ export class TuiApp {
       case 'update': {
         this.println(dim('  checking for updates…'))
         const info = await checkUpdate(true)
-        if (!info) return this.println(red('  could not reach the update endpoint (offline?)'))
+        if (!info) return this.println(red('  could not reach any update endpoint (offline?)'))
         if (!info.outdated) return this.println(`  ${okPill()} up to date — v${info.current}`)
         this.println(`  update available: v${info.current} → ${bold('v' + info.latest)}`)
         if (info.notes) this.println(dim(`  ${info.notes}`))
