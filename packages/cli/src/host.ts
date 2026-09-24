@@ -587,6 +587,10 @@ export class AgentHost {
       onSubagent: (info) => this.bus.emit('subagent:update', { sessionId: runSessionId, info }),
       onFilesChanged: (paths) => this.bus.emit('files:changed', { paths }),
       onNotify: (level, message) => this.bus.emit('notify', { level, message }),
+      onModeChange: (mode) => {
+        // switch_mode (user-approved) — keep session + hosts in sync
+        this.bus.emit('mode:change', { sessionId: runSessionId, mode })
+      },
       onContext: (info) => {
         this.lastContext = info
         this.bus.emit('context:update', { sessionId: runSessionId, ...info })

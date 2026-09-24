@@ -172,7 +172,7 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
     'agent:status', 'message:new', 'agent:chunk', 'tool:start', 'tool:end',
     'todos:update', 'subagent:update', 'files:changed', 'notify', 'context:update',
     'permission:request', 'ask:request', 'chat:done', 'session:active', 'session:list',
-    'workspace:changed', 'plan:ready',
+    'workspace:changed', 'plan:ready', 'mode:change',
   ]
   for (const event of forward) host.bus.on(event, (payload) => io.to('gui').emit(event, payload))
 
@@ -188,7 +188,7 @@ export function createDaemon(opts: DaemonOptions): Promise<DaemonHandle> {
   }
 
   // session-scoped events go ONLY to the viewers bound to that session
-  for (const event of ['message:new', 'agent:chunk', 'tool:start', 'tool:end', 'todos:update', 'subagent:update', 'chat:done']) {
+  for (const event of ['message:new', 'agent:chunk', 'tool:start', 'tool:end', 'todos:update', 'subagent:update', 'chat:done', 'mode:change']) {
     host.bus.on(event, (payload) => {
       const sid = (payload as { sessionId?: string } | undefined)?.sessionId
       if (!sid) return

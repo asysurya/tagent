@@ -150,7 +150,7 @@ export class AgentLoop {
   /** run() has returned — a dead loop must not be stopped (its detached
    *  background subs inherit its abort signal) nor receive injections */
   private finished = false
-  readonly tools: ToolDefinition[]
+  tools: ToolDefinition[]
   readonly ctx: ToolContext
   /** primary first, then the ordered fallback chain */
   private chain: ResolvedChainEntry[]
@@ -158,15 +158,7 @@ export class AgentLoop {
   private ctxLimit: number
 
   constructor(private opts: AgentLoopOptions) {
-    this.tools = [
-      ...buildToolset({
-        readOnly: opts.readOnly,
-        depth: opts.depth ?? 0,
-        config: opts.config,
-        ...(opts.mode ? { mode: opts.mode } : {}),
-      }),
-      ...(opts.readOnly ? [] : (opts.extraTools ?? [])),
-    ].filter((t) => !opts.toolsFilter || opts.toolsFilter.includes(t.name))
+    this.tools = this.buildToolsetFor(opts.mode)
     // failover lane: subagent loops walk their OWN chain; the main agent the
     // legacy one (role overrides keep working through the loop's provider)
     this.chain = [
@@ -187,6 +179,12 @@ export class AgentLoop {
       spawnBackgroundSubagent: (description, prompt, agent, maxTurns) =>
         this.spawnSubagentBackground(description, prompt, agent, maxTurns),
       ...(opts.backgroundSubs ? { backgroundSubs: opts.backgroundSubs } : {}),
+      // switch_mode — the primary agent's mode escape hatch (user-approved)
+      ...((opts.depth ?? 0) === 0
+        ? {
+            switchMode: (mode: AgentMode, reason: string) => this.switchMode(mode, reason),
+          }
+        : {}),
     }
     if (opts.signal) {
       opts.signal.addEventListener('abort', () => this.abort.abort(), { once: true })
@@ -210,6 +208,69 @@ export class AgentLoop {
     if (!this.alive || this.abort.signal.aborted) return false
     this.pendingReports.push(text)
     return true
+  }
+
+  /** switch_mode (primary agent, user-approved through the permission gate):
+   *  flips THIS run's mode, swaps the toolset, persists the session mode.
+   *  The system prompt + native tool defs are rebuilt by the run loop right
+   *  after, so the following turns run under the new persona. */
+  switchMode(mode: AgentMode, reason: string): { ok: true; mode: AgentMode } | { error: string } {
+    if ((this.opts.depth ?? 0) > 0) return { error: 'subagents run with a fixed mode' }
+    if (this.opts.readOnly) return { error: 'read-only loops cannot switch mode' }
+    if (mode !== 'build' && mode !== 'plan' && mode !== 'test') return { error: `unknown mode "${mode}"` }
+    if (mode === this.opts.mode) return { error: `already in ${mode} mode` }
+    this.opts.mode = mode
+    const session = this.opts.session
+    session.mode = mode
+    this.opts.onSessionUpdate?.(session)
+    this.tools = this.buildToolsetFor(mode)
+    this.opts.events.onModeChange?.(mode)
+    this.opts.events.onNotify?.('info', `mode switched to ${mode} — ${reason.slice(0, 120)}`)
+    return { ok: true, mode }
+  }
+
+  /** assemble the mode-scoped toolset (extraTools + toolsFilter preserved) */
+  private buildToolsetFor(mode: AgentMode | undefined): ToolDefinition[] {
+    return [
+      ...buildToolset({
+        readOnly: this.opts.readOnly,
+        depth: this.opts.depth ?? 0,
+        config: this.opts.config,
+        ...(mode ? { mode } : {}),
+      }),
+      ...(this.opts.readOnly ? [] : (this.opts.extraTools ?? [])),
+    ].filter((t) => !this.opts.toolsFilter || this.opts.toolsFilter.includes(t.name))
+  }
+
+  /** the run's system prompt for the CURRENT mode/toolset (rebuilt after a
+   *  mid-run switch_mode so the persona follows the new mode) */
+  private buildSystemPromptNow(caveman: boolean): string {
+    const { session } = this.opts
+    return buildSystemPrompt({
+      workspaceRoot: session.workspaceId,
+      mode: this.opts.mode,
+      tools: this.tools,
+      subagent: (this.opts.depth ?? 0) > 0,
+      caveman,
+      ...(this.opts.agentPrompt ? { agentPrompt: this.opts.agentPrompt } : {}),
+      ...(diagnosticsCommand(this.opts.config) && !this.opts.readOnly
+        ? { diagnostics: diagnosticsCommand(this.opts.config) }
+        : {}),
+      // the primary agent keeps the journal; subagents & plan mode stay lean
+      worklog:
+        this.opts.config.worklog?.enabled !== false &&
+        (this.opts.depth ?? 0) === 0 &&
+        this.opts.mode === 'build',
+    })
+  }
+
+  /** native tool defs for the CURRENT toolset (rebuilt after switch_mode) */
+  private buildNativeTools() {
+    const useNativeTools =
+      this.opts.config.nativeTools !== false &&
+      this.opts.provider.supportsNativeTools === true &&
+      this.tools.length > 0
+    return useNativeTools ? this.tools.map(toNativeToolDef) : undefined
   }
 
   /* ---------------------------------------------------------------- */
@@ -236,33 +297,19 @@ export class AgentLoop {
     this.opts.events.onUserMessage?.(userMsg)
 
     const caveman = this.opts.config.caveman === true
-    const system = buildSystemPrompt({
-      workspaceRoot: session.workspaceId,
-      mode: this.opts.mode,
-      tools: this.tools,
-      subagent: (this.opts.depth ?? 0) > 0,
-      caveman,
-      ...(this.opts.agentPrompt ? { agentPrompt: this.opts.agentPrompt } : {}),
-      ...(diagnosticsCommand(this.opts.config) && !this.opts.readOnly
-        ? { diagnostics: diagnosticsCommand(this.opts.config) }
-        : {}),
-      // the primary agent keeps the journal; subagents & plan mode stay lean
-      worklog:
-        this.opts.config.worklog?.enabled !== false &&
-        (this.opts.depth ?? 0) === 0 &&
-        this.opts.mode === 'build',
-    })
+    // rebuilt on a mid-run mode switch (switch_mode, user-approved) — the
+    // persona and the toolset must follow the mode the run is NOW in
+    let system = this.buildSystemPromptNow(caveman)
 
     let turns = 0
     let toolCalls = 0
     let usageTotal: TokenUsage | undefined
     const maxTurns = Math.min(this.opts.config.maxTurns ?? 40, 80)
     // native function-calling when the provider supports it (config: nativeTools)
-    const useNativeTools =
-      this.opts.config.nativeTools !== false &&
-      this.opts.provider.supportsNativeTools === true &&
-      this.tools.length > 0
-    const nativeTools = useNativeTools ? this.tools.map(toNativeToolDef) : undefined
+    let nativeTools = this.buildNativeTools()
+    // the mode this run's system prompt was built for — a mid-run switch
+    // (switch_mode) rebuilds persona + toolset for the following turns
+    let activeMode = this.opts.mode
 
     try {
       while (turns < maxTurns) {
@@ -484,6 +531,14 @@ export class AgentLoop {
           meta: { toolResults: true, ...(images.length ? { images } : {}) },
         }
         session.messages.push(resultMsg)
+
+        // mid-run mode switch (switch_mode, user-approved): the persona and
+        // the toolset must reflect the mode the run is NOW in
+        if (this.opts.mode !== activeMode) {
+          activeMode = this.opts.mode
+          system = this.buildSystemPromptNow(caveman)
+          nativeTools = this.buildNativeTools()
+        }
       }
 
       this.opts.events.onStatus?.('done', 'max turns reached')
@@ -820,7 +875,7 @@ export class AgentLoop {
 }
 
 const READ_ONLY_TOOLS = new Set([
-  'read_file', 'read_files', 'list_files', 'grep', 'web_fetch', 'ddg_search', 'task', 'todowrite', 'memory', 'load_skill', 'ask_user',
+  'read_file', 'read_files', 'list_files', 'grep', 'web_fetch', 'ddg_search', 'task', 'todowrite', 'memory', 'load_skill', 'ask_user', 'switch_mode',
 ])
 
 export function isReadOnlyTool(name: string): boolean {

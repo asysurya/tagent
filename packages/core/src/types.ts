@@ -283,6 +283,13 @@ export interface ToolContext {
   ) => { id: string } | { error: string }
   /** host-owned registry of background subagents — read by the subs tool */
   backgroundSubs?: { list(): BgSubInfo[] }
+  /** injected by AgentLoop (primary agent only) — switch the CURRENT run's
+   *  mode. The user approves every switch through the permission gate before
+   *  this is ever called (the switch_mode tool is risk:medium). */
+  switchMode?: (
+    mode: AgentMode,
+    reason: string,
+  ) => { ok: true; mode: AgentMode } | { error: string }
 }
 
 export interface ToolDefinition {
@@ -314,6 +321,9 @@ export interface AgentEvents {
   onUsage?(usage: TokenUsage & { turn: number }): void
   /** per-turn context-window state — powers the usage bar + compact prompts */
   onContext?(info: ContextInfo): void
+  /** the agent switched modes mid-run via switch_mode (user-approved) —
+   *  hosts update their mode display + session persistence from this */
+  onModeChange?(mode: AgentMode): void
 }
 
 export interface MemoryFact {

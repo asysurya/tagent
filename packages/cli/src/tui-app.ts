@@ -1146,6 +1146,13 @@ export class TuiApp {
     add('permission:request', (req: PermissionRequest) => void this.onPermission(req))
     add('ask:request', (form: AskFormRequest) => void this.onAskUserHost(form))
     add('chat:done', (d: { summary: LoopSummary }) => this.onChatDone(d.summary))
+    // switch_mode (user-approved) — the navbar's mode chip follows mid-run
+    add('mode:change', (d: { mode: AgentMode }) => {
+      if (this.mode !== d.mode) {
+        this.mode = d.mode
+        this.requestRender()
+      }
+    })
     // /open · /new · boot — the navbar's title + mode follow the active session
     add('session:active', (s: SessionData) => {
       if (this.sessionTitle !== s.title) this.sessionTitle = s.title
