@@ -5,6 +5,67 @@ packages/core/src/tools/worklog.ts). Append-only; every agent adds a
 section per task. Fresh agents: read top-down before working.
 
 ---
+Task ID: 11
+Agent: Super Z (main)
+Task: Fix `tagent update` (gagal mulu — clone & binary, user kept
+re-downloading by hand) + release v0.28.0. Commits 03fede6 · 7fc6c9b.
+
+Work Log:
+- Root-cause hunt: checkUpdate was ONE raw.githubusercontent fetch
+  behind a 4s timeout — on DNS-hijacked/slow ISPs (Indonesia!) it said
+  "could not reach the update endpoint" EVERY time, for BOTH install
+  kinds (the only code shared by both paths). Secondary: binary
+  downloads had no resume/progress/checksum (a flaky 100 MB transfer =
+  hard fail that looked frozen), EACCES on root-owned install dirs was
+  a dead end, npm/bun kinds 404 forever (tagent is NOT on npm —
+  verified E404), detached-HEAD clones recovered via a misleading
+  "diverged" reset, and `bun install` failures were swallowed.
+- version.ts: endpoint CHAIN — TAGENT_UPDATE_URL → raw.githubusercontent
+  → cdn.jsdelivr.net (fast in Asia) → api.github.com releases/latest
+  (tag_name normalized), 8s/hop; TAGENT_UPDATE_URLS / TAGENT_RELEASE_API
+  test hooks.
+- updater.ts: downloadAsset async curl (spawnSync froze the whole TUI
+  AND deadlocked hermetic tests — Bun.serve can't serve while the
+  thread blocks), live progress meter, 3 attempts RESUMING (-C -),
+  stall kill (10 KB/s × 90s), connect timeout, 8 MB size floor, SHA256
+  verify vs SHA256SUMS.txt (corrupted → discarded + retried, never
+  swapped), 404 → "not found (yet)". swapBinary extracted: ETXTBSY
+  retry, EACCES/EPERM → rescue install to ~/.local/bin (earlier on
+  PATH, no sudo) + exact one-liner if even that fails; npm/bun →
+  standalone-binary fallback; source: detached HEAD → checkout main
+  first, bun install failures surfaced with the fix command. homeDir()
+  now matches core (env.HOME first — os.homedir() reads STARTUP env
+  in bun; fixed a real prod inconsistency found by the test).
+- scripts/test-updater.ts (NEW, 31 checks): hermetic — local Bun.serve
+  release feed (9 MB asset + sums), fake HOME/TMPDIR, chain
+  refused/404/bad-shape → good, API-shape, legacy TAGENT_UPDATE_URL,
+  download ok/reuse/corrupt/wrong-sums/small/missing/nosums classes,
+  swap + EACCES rescue + installBinaryTo. Battery: subagents 71 ·
+  async-subs 40 · testmode 59 · ask 41 · features 19 · context-loop 30
+  · switch-mode 46 · fallback 4 · host · tui-app · cache 38 · v0190 71
+  · updater-source 33 · version 8 — all green.
+- LIVE E2E (real network, real releases): compiled binary from the fix
+  commit claiming v0.26.0 updated ITSELF → downloaded the real 101 MB
+  v0.27.0 asset, SHA256-verified, swapped in place, --version flipped
+  to 0.27.0. Source: fresh v0.26.0 clone (OLD updater = user's exact
+  state) pulled to 0.28.0; then detached at 03fede6 with the NEW
+  updater → "was on a detached commit — back on main" → 0.28.0.
+- Release v0.28.0: version.ts · website releases.ts (3 sections) ·
+  LATEST · gh-release.sh BODY · latest.json synced · 6 binaries built
+  (102/106/74/79/102/103 MB) · release id 395570902, 7/7 assets
+  verified UPLOADED by-ID. Endpoints verified serving 0.28.0: raw ✓ ·
+  jsDelivr ✓ · api.github.com 403 from this DC IP only (last-resort
+  hop, chain-tolerant; fine from residential IPs). Released binary
+  --check-update → "up to date: v0.28.0".
+
+Stage Summary:
+- v0.28.0 LIVE: https://github.com/asysurya/tagent/releases/tag/v0.28.0
+- `tagent update` is now failure-classed and self-healing on every
+  install kind; the update-check can no longer be killed by one host.
+- Old installs (0.26/0.27 updaters) still update fine to 0.28.0 —
+  verified live; from 0.28.0 on, updates resume+verify themselves.
+
+---
 Task ID: 10
 Agent: Super Z (main)
 Task: switch_mode (agent ganti mode dengan izin user) + system prompt
