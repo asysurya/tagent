@@ -1,6 +1,6 @@
 {
-  "version": "0.27.0",
-  "date": "2026-09-23",
-  "notes": "Subagents no longer block. task {background:true} returns an id (a1, a2…) instantly and the main agent keeps working while the sub runs detached — reports flow back on their own: mid-run they arrive as injected [SUBAGENT REPORT] messages, and if the agent already finished, it auto-resumes in a fresh run and continues without ever asking the user. Monitoring is first-class: the subs tool for the agent, /subs for the user. Fallback becomes three independent lanes (main · subagent · vision), and /config turns into the add/apply template: register a provider+model once, then apply it as the model for main/subagent/vision — or as the fallback for any of those three.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.27.0"
+  "version": "0.28.0",
+  "date": "2026-09-24",
+  "notes": "`tagent update` never dead-ends again. The version check walks a chain of four endpoints (raw GitHub → jsDelivr CDN → the GitHub API), binary downloads resume where they stopped and verify their SHA256 before swapping, a root-owned install directory is rescued into ~/.local/bin without sudo, and every failure prints the exact next command. Also: switch_mode — the agent moves PLAN → BUILD → TEST inside one conversation, each flip behind your approval — and the operating prompt is upgraded to the elite-executor spec (identity, language mirroring, the work loop, hard rules, structured finishing summary).",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.28.0"
 }

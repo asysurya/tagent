@@ -28,9 +28,51 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.27.0'
+export const LATEST = '0.28.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.28.0',
+    date: '2026-09-24',
+    title: 'The update that fixes updates — switch_mode, elite-executor prompt',
+    summary:
+      '`tagent update` never dead-ends again. The version check walks a chain of four endpoints (raw GitHub → jsDelivr CDN → the GitHub API), binary downloads resume where they stopped and verify their SHA256 before swapping, a root-owned install directory is rescued into ~/.local/bin without sudo, and every failure prints the exact next command. Also: switch_mode — the agent moves PLAN → BUILD → TEST inside one conversation, each flip behind your approval — and the operating prompt is upgraded to the elite-executor spec (identity, language mirroring, the work loop, hard rules, structured finishing summary).',
+    stable: true,
+    sections: [
+      {
+        name: 'tagent update — bulletproof by default',
+        items: [
+          'version check: a chain answers instead of one flaky host — TAGENT_UPDATE_URL → raw.githubusercontent.com → cdn.jsdelivr.net (fast in Asia, rarely blocked) → the GitHub releases API (tag_name normalized), 8s per hop',
+          'binary downloads show live progress (curl meter), survive interrupted transfers: up to 3 attempts RESUMING the partial file (-C -), stall detection (10 KB/s for 90s kills a hung transfer), connect timeout, and an 8 MB size floor',
+          'every downloaded binary is verified against the release\u2019s SHA256SUMS.txt before it touches disk as your tagent — a corrupted transfer is discarded and retried, never swapped in',
+          'the swap handles ETXTBSY (running binary, brief retry) and rescues EACCES/EPERM (root-owned /usr/local/bin) by installing to ~/.local/bin — usually EARLIER on PATH, so the new binary takes over on the next launch with no sudo; if even that fails, the one-line fix is printed',
+          'npm/bun installs can no longer dead-end: tagent is not published on npm (a global install only ever came from a git URL), so after the package-manager failure the updater falls back to the standalone binary in ~/.local/bin and tells you which old copy to remove',
+          'source installs recover a detached HEAD (checked-out tag/commit) by returning to the default branch before pulling, and a failed `bun install` is now reported with the exact recovery command instead of silently printing "updated"',
+          'downloads run async — a 100 MB update no longer freezes the TUI/daemon; a leftover verified download from a crashed run is reused, not re-fetched',
+        ],
+      },
+      {
+        name: 'switch_mode — the full loop in one conversation',
+        items: [
+          'the agent can flip its own operating mode mid-run — build ↔ plan ↔ test — but every flip is a permission-gated tool call: you see the target mode and the reason, nothing changes until you approve',
+          'on approval the loop swaps the persona and toolset for the FOLLOWING turns, persists session.mode, and fires mode:change through the host bus — TUI navbar chip, GUI and relay viewers all follow',
+          'the loop it unlocks: plan approved → switch to build; implementation done → switch to test and verify; test found bugs → switch back to build and fix',
+          'primary agent only (depth 0) — subagents keep their mode fixed at spawn; deny → "Permission denied" is fed back and nothing changes',
+        ],
+      },
+      {
+        name: 'The operating prompt — elite-executor spec',
+        items: [
+          'identity: an autonomous engineer in the Codex / Claude Code / OpenCode / Aider league — an end-to-end executor (plan → code → test → iterate), not a chatbot; production-grade output on any project',
+          'language: ALWAYS mirror the user\u2019s language in replies; code, comments and commits stay English-convention; to-the-point engineer tone, no filler',
+          'the work loop is explicit: understand → plan → build → test with evidence, escalate after ~5 blind retries, never guess silently; switch_mode is taught as the way to move between phases',
+          'hard rules with teeth: never claim a test passed without running it, never edit a file you haven\u2019t read, no placeholder TODOs, no syntax-broken code, no "should work" claims',
+          'finishing ceremony: every session ends with a structured summary — what was done, files touched, how it was verified, notes, and the next step',
+          'additive rework — every protected contract from the old prompt survives (mode personas, MCP, ask_user, delegation, PRD/QA workflows); 46 new switch_mode checks, 31 new updater checks, full battery green',
+        ],
+      },
+    ],
+  },
   {
     version: '0.27.0',
     date: '2026-09-23',

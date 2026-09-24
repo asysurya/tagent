@@ -36,70 +36,73 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — async subagents: background work, 3-lane fallback, /config add/apply
+## v__VER__ — the update that fixes updates; switch_mode; elite-executor prompt
 
-Subagents no longer block. `task {background:true}` returns an id (a1, a2…)
-INSTANTLY and the main agent keeps working while the sub runs detached in
-the background. Reports flow back on their own — mid-run as injected
-messages, or as an auto-resume when the agent already finished. The user
-is never asked to babysit.
+`tagent update` never dead-ends again — every install kind recovers, every
+failure prints the exact next command.
 
 ```
-  task {background:true, agent:"test"}
-     └─► "BACKGROUND SUBAGENT STARTED — a1 …"   (parent keeps working)
+  version check: raw.githubusercontent → jsDelivr CDN → GitHub API
+                 (one flaky host can't kill the check anymore)
 
-  sub finishes, agent mid-run   ──►  [SUBAGENT REPORT] injected next turn
-  sub finishes, agent already done  ──►  agent auto-resumes, continues alone
-  both cases: notify "subagent a1 finished — report delivered"
+  binary:  ↘ live progress meter
+           ↘ interrupted? RESUME from where it stopped (3 attempts)
+           ↘ SHA256-verified against the release's SHA256SUMS
+           ↘ root-owned /usr/local/bin? rescued to ~/.local/bin — no sudo
+  npm/bun: package 404s (tagent isn't on npm) → standalone binary fallback
+  source:  detached HEAD recovered · bun-install failures reported
 ```
 
-### Background subagents
+### tagent update — bulletproof by default
 
-- `task {background:true}` returns immediately with the sub's id — the
-  parent loop never waits; fire several, they run in parallel
-- report delivery in both directions: live loop → the report is injected
-  as a `[SUBAGENT REPORT]` message mid-run; agent already finished → the
-  host auto-resumes it in a fresh run — no user confirmation, ever
-- multi-sub by design; the parallel limit is yours:
-  `subagents.maxParallel` (default 4, cap 16) via `/config subs <n>`
-- reports never strand: a no-action turn with a pending report takes one
-  more turn; a dead loop's orphan subs are never aborted (stop-block
-  checks loop.alive)
+- the check walks a chain: TAGENT_UPDATE_URL → raw.githubusercontent.com
+  → cdn.jsdelivr.net (fast in Asia, rarely blocked) → the GitHub releases
+  API — 8s per hop, "could not reach the update endpoint" is gone
+- binary downloads: live curl progress, 3 attempts resuming the partial
+  file (`-C -`), stall detection (10 KB/s for 90s kills a hang), an 8 MB
+  size floor, and SHA256 verification before anything is swapped in
+- EACCES/EPERM on the swap (root-owned install dir) → the new binary is
+  installed to `~/.local/bin` (usually EARLIER on PATH — takes over on
+  the next launch, no sudo); worst case the one-line fix is printed
+- a crashed run's verified download is reused, not re-fetched; downloads
+  are async — the TUI no longer freezes during a 100 MB update
+- npm/bun installs fall back to the standalone binary instead of a
+  permanent 404; source installs surface `bun install` failures with the
+  recovery command instead of printing "updated" over a broken tree
 
-### Monitoring — subs everywhere
+### switch_mode — PLAN → BUILD → TEST in one conversation
 
-- agent-side: the `subs` tool — `subs` lists every background sub
-  (id, kind, state, elapsed); `subs {id}` re-reads a finished report
-- user-side: `/subs` live view in the TUI · `subs:view` RPC in the daemon
-  (GUI) — the registry lives on the host, so both see the same truth
+- the agent flips its own mode mid-run, but every flip is permission-
+  gated: you see the target mode + reason, nothing changes until you
+  approve; deny → "Permission denied" fed back, nothing changes
+- approval swaps persona + toolset for the following turns, persists
+  session.mode, fires mode:change → TUI navbar chip, GUI, relay viewers
+- the loop it unlocks: plan approved → build; done → test; bugs → build
+- primary agent only — subagents' modes stay fixed at spawn
 
-### Fallback is per-role now — 3 lanes
+### The operating prompt — elite-executor spec
 
-- three independent chains: **main** (the legacy `fallback` field) ·
-  **subagent** (what task subs walk) · **vision** (the vision tool walks
-  its own chain — failover tested end-to-end)
-- `/fallback` reworked: `/fallback <main|subagent|vision> add|rm|clear`
-  plus the full 3-chain view in one command (aliases: utama/sub/media)
-- role overrides surface as lane primaries: a dedicated subagent or vision
-  model sits at the head of its own chain
+- identity: autonomous engineer in the Codex / Claude Code / OpenCode /
+  Aider league — end-to-end executor, not a chatbot
+- language: ALWAYS mirror the user's language; code stays English-
+  convention; to-the-point engineer tone
+- explicit work loop: understand → plan → build → test with evidence;
+  escalate after ~5 blind retries; switch_mode taught as the phase gate
+- hard rules: never claim an untested pass, never edit unread files, no
+  placeholders, no "should work"
+- structured finishing summary: done · files · verification · notes · next
+- additive rework — all protected prompt contracts survive
 
-### /config is a template now — add · apply
+### Verification
 
-- **add**: register things — MCP servers, provider+apikey+model, keys
-- **apply**: a provider+model you already added → put it to work as the
-  model for a role (**main · subagent · vision**) or as a **fallback**
-  for any of the three lanes
-- the dashboard: `+ add` · `⚡ apply` · `⛓ fallback` · `🤖 subs` (limit +
-  view) · keys · sync (status/push/pull)
-
-### Fixes & internals
-
-- race fix: `chatSend`'s finally only clears ITS loop — a background
-  deliver landing between runs no longer clears a fresh run's state
-- 40 new hermetic checks (`scripts/test-async-subs.ts`): registry ids /
-  limit / finish, immediate-return spawn, mid-run injection (the turn-4
-  model call SAW the report), late delivery after run end, the subs tool,
-  3-lane fallback, vision failover — every suite green
+- new hermetic suites: test-updater.ts (31 checks — endpoint chain,
+  checksum refuse/corrupt/missing classes, EACCES rescue, swap),
+  test-switch-mode.ts (46 checks)
+- full battery green: subagents 71 · async-subs 40 · testmode 59 ·
+  ask 41 · features 19 · context-loop 30 · v0190 71 · host · tui-app…
+- live E2E: a compiled 0.26.0 binary updated itself against a real
+  release — 101 MB asset downloaded, SHA256-verified, swapped in place,
+  `--version` flipped to the new version
 EOF
 )
 
@@ -109,7 +112,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — async subagents, 3-lane fallback, /config add/apply" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — the update that fixes updates; switch_mode; elite-executor prompt" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")
