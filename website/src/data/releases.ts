@@ -28,9 +28,54 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.28.0'
+export const LATEST = '0.29.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.29.0',
+    date: '2026-09-24',
+    title: 'Operating loop v2 — PLAN · BUILD · TEST, verified finishes',
+    summary:
+      'The agent\u2019s operating contract is now a strict loop: PLAN → BUILD → TEST — PASS delivers the structured ✅ SELESAI summary, FAIL goes back to BUILD with the evidence, and the loop repeats until the verification passes. Retry discipline has teeth: every failed round must carry a concrete hypothesis, blind trial-and-error is forbidden, and after 5 fix rounds the agent stops and escalates with the full story. The same loop — and the same rigor — now applies to every project kind: web, CLI, bot, API, library, pipeline.',
+    stable: true,
+    sections: [
+      {
+        name: 'The work loop — PLAN · BUILD · TEST',
+        items: [
+          'the loop, exactly: PLAN ──► BUILD ──► TEST ─┬─ PASS ──► summary to the user (done) · └─ FAIL ──► BUILD (fix) ──► TEST ──► (loop) — the task is NOT done until the verification passes',
+          'numbered contract: PLAN investigates the request AND the repo before writing the steps (PRD.md is the approved spec); BUILD implements step by step; TEST verifies for real — "should work" is not a result',
+          'retry discipline is a HARD RULE: every failed round MUST carry a concrete hypothesis — why it failed and what changes because of it; blind trial-and-error is forbidden',
+          'hard cap of 5 fix rounds: still failing → STOP and escalate to the user with what was tried, the last error verbatim, and what is needed; real blockers (credentials, product decisions) escalate immediately',
+          'PASS means STOP: the agent delivers the final summary and never keeps iterating on finished work',
+        ],
+      },
+      {
+        name: 'The structured finish — ✅ SELESAI',
+        items: [
+          'every finished task closes with the exact block: ✅ SELESAI · 📌 Yang dikerjakan · 📁 File yang diubah · 🧪 Verifikasi · ⚠️ Catatan',
+          'the ✅ is EARNED by verification — untested work must say so under ⚠️ instead of being claimed',
+          'labels follow the user\u2019s language (English: ✅ DONE / What was done / Files changed / Verification / Notes); caveman mode keeps the structure at one telegraphic line per field',
+          'no more vague "done" replies: commands and counts on every line — no "various files", no "works fine"',
+        ],
+      },
+      {
+        name: 'TEST mode — same rigor on every stack',
+        items: [
+          'the QA persona now teaches per-kind methods: web (serve + browser flows + shots/vision) · CLI (real commands, exit codes, stdout/stderr, edge cases) · API (curl, status codes, payloads, error handling, auth) · bot (real channel or simulator, replies + side effects) · library (test suite, build, import, public API) · pipeline (real sample data, output verified end-to-end)',
+          'the workflow is restated stack-neutral — understand → start it → exercise → report — with the web path kept as the fully-detailed reference',
+          '"reading the code is not testing" is now explicit in the persona',
+        ],
+      },
+      {
+        name: 'Fixes + internals',
+        items: [
+          'build persona closes the loop: "implementation done → TEST time — run the checks, exercise what you built, fix what fails; only verified work earns the Finishing summary"',
+          '6 new loop-contract checks + the caveman-summary check (switch-mode suite: 52 green); testmode assertions restated for the renamed workflow steps (59 green); full battery re-run green',
+          'additive again: every protected contract survives (mode personas, MCP, ask_user, delegation, PRD/QA, switch_mode approval gate)',
+        ],
+      },
+    ],
+  },
   {
     version: '0.28.0',
     date: '2026-09-24',

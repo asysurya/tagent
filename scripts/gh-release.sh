@@ -36,73 +36,69 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — the update that fixes updates; switch_mode; elite-executor prompt
+## v__VER__ — operating loop v2: PLAN · BUILD · TEST, verified finishes
 
-`tagent update` never dead-ends again — every install kind recovers, every
-failure prints the exact next command.
+The agent's operating contract is now a strict loop with teeth — same shape
+for every project kind (web, CLI, bot, API, library, pipeline).
 
 ```
-  version check: raw.githubusercontent → jsDelivr CDN → GitHub API
-                 (one flaky host can't kill the check anymore)
+  PLAN ──► BUILD ──► TEST ──┬── PASS ──► ✅ SELESAI summary to the user
+                           └── FAIL ──► BUILD (fix) ──► TEST ──► (loop)
 
-  binary:  ↘ live progress meter
-           ↘ interrupted? RESUME from where it stopped (3 attempts)
-           ↘ SHA256-verified against the release's SHA256SUMS
-           ↘ root-owned /usr/local/bin? rescued to ~/.local/bin — no sudo
-  npm/bun: package 404s (tagent isn't on npm) → standalone binary fallback
-  source:  detached HEAD recovered · bun-install failures reported
+  every failed round NEEDS a concrete hypothesis (why + what changes)
+  blind trial-and-error is FORBIDDEN
+  5 failed fix rounds → STOP, escalate: what was tried · the last error
+                            verbatim · what is needed
 ```
 
-### tagent update — bulletproof by default
+### The work loop — PLAN · BUILD · TEST
 
-- the check walks a chain: TAGENT_UPDATE_URL → raw.githubusercontent.com
-  → cdn.jsdelivr.net (fast in Asia, rarely blocked) → the GitHub releases
-  API — 8s per hop, "could not reach the update endpoint" is gone
-- binary downloads: live curl progress, 3 attempts resuming the partial
-  file (`-C -`), stall detection (10 KB/s for 90s kills a hang), an 8 MB
-  size floor, and SHA256 verification before anything is swapped in
-- EACCES/EPERM on the swap (root-owned install dir) → the new binary is
-  installed to `~/.local/bin` (usually EARLIER on PATH — takes over on
-  the next launch, no sudo); worst case the one-line fix is printed
-- a crashed run's verified download is reused, not re-fetched; downloads
-  are async — the TUI no longer freezes during a 100 MB update
-- npm/bun installs fall back to the standalone binary instead of a
-  permanent 404; source installs surface `bun install` failures with the
-  recovery command instead of printing "updated" over a broken tree
+- PLAN investigates the request AND the repo before writing the steps
+  (PRD.md is the approved spec); BUILD implements step by step; TEST
+  verifies for real — "should work" is not a result
+- PASS means STOP: the final summary is delivered and the agent never
+  keeps iterating on finished work
+- hard cap: max 5 fix rounds, then escalation with the full story; real
+  blockers (credentials, product decisions) escalate immediately
 
-### switch_mode — PLAN → BUILD → TEST in one conversation
+### The structured finish — ✅ SELESAI
 
-- the agent flips its own mode mid-run, but every flip is permission-
-  gated: you see the target mode + reason, nothing changes until you
-  approve; deny → "Permission denied" fed back, nothing changes
-- approval swaps persona + toolset for the following turns, persists
-  session.mode, fires mode:change → TUI navbar chip, GUI, relay viewers
-- the loop it unlocks: plan approved → build; done → test; bugs → build
-- primary agent only — subagents' modes stay fixed at spawn
+Every finished task closes with the exact block (labels follow the
+user's language):
 
-### The operating prompt — elite-executor spec
+```
+✅ SELESAI
+📌 Yang dikerjakan: what was done — the short story
+📁 File yang diubah: every path touched + one-line why
+🧪 Verifikasi: what you actually ran and the result — commands, counts
+⚠️ Catatan: known gaps, follow-ups — or "-"
+```
 
-- identity: autonomous engineer in the Codex / Claude Code / OpenCode /
-  Aider league — end-to-end executor, not a chatbot
-- language: ALWAYS mirror the user's language; code stays English-
-  convention; to-the-point engineer tone
-- explicit work loop: understand → plan → build → test with evidence;
-  escalate after ~5 blind retries; switch_mode taught as the phase gate
-- hard rules: never claim an untested pass, never edit unread files, no
-  placeholders, no "should work"
-- structured finishing summary: done · files · verification · notes · next
-- additive rework — all protected prompt contracts survive
+- the ✅ is EARNED by verification — untested work must say so under ⚠️
+  instead of being claimed
+- caveman mode keeps the structure, one telegraphic line per field
+
+### TEST mode — same rigor on every stack
+
+- per-kind methods baked into the QA persona: web (serve + browser +
+  shots/vision) · CLI (real commands, exit codes, stdout/stderr, edge
+  cases) · API (curl, status codes, payloads, auth) · bot (real channel,
+  replies + side effects) · library (test suite, build, public API) ·
+  pipeline (real sample data, output verified end-to-end)
+- workflow restated stack-neutral: understand → start it → exercise →
+  report — the web path stays the fully-detailed reference
+- "reading the code is not testing" is now explicit
 
 ### Verification
 
-- new hermetic suites: test-updater.ts (31 checks — endpoint chain,
-  checksum refuse/corrupt/missing classes, EACCES rescue, swap),
-  test-switch-mode.ts (46 checks)
+- switch-mode suite extended to 52 checks (loop branches, numbered
+  contract, max-5 + escalation, hypothesis rule, stack-agnostic,
+  ✅ SELESAI block, caveman variant); testmode assertions restated (59)
 - full battery green: subagents 71 · async-subs 40 · testmode 59 ·
-  ask 41 · features 19 · context-loop 30 · v0190 71 · host · tui-app…
-- live E2E: a compiled 0.26.0 binary updated itself against a real
-  release — 101 MB asset downloaded, SHA256-verified, swapped in place,
-  `--version` flipped to the new version
+  ask 41 · features 19 · context-loop 30 · browser 32 · v0190 71 ·
+  v0220 25 · updater 31 · updater-source 33 · host · tui-app · cache
+- additive again — every protected prompt contract survives (mode
+  personas, MCP, ask_user, delegation, PRD/QA, switch_mode gate)
 EOF
 )
 
@@ -112,7 +108,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — the update that fixes updates; switch_mode; elite-executor prompt" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — operating loop v2: PLAN · BUILD · TEST, verified finishes" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")

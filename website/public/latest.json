@@ -1,6 +1,6 @@
 {
-  "version": "0.28.0",
+  "version": "0.29.0",
   "date": "2026-09-24",
-  "notes": "`tagent update` never dead-ends again. The version check walks a chain of four endpoints (raw GitHub → jsDelivr CDN → the GitHub API), binary downloads resume where they stopped and verify their SHA256 before swapping, a root-owned install directory is rescued into ~/.local/bin without sudo, and every failure prints the exact next command. Also: switch_mode — the agent moves PLAN → BUILD → TEST inside one conversation, each flip behind your approval — and the operating prompt is upgraded to the elite-executor spec (identity, language mirroring, the work loop, hard rules, structured finishing summary).",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.28.0"
+  "notes": "The agent’s operating contract is now a strict loop: PLAN → BUILD → TEST — PASS delivers the structured ✅ SELESAI summary, FAIL goes back to BUILD with the evidence, and the loop repeats until the verification passes. Retry discipline has teeth: every failed round must carry a concrete hypothesis, blind trial-and-error is forbidden, and after 5 fix rounds the agent stops and escalates with the full story. The same loop — and the same rigor — now applies to every project kind: web, CLI, bot, API, library, pipeline.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.29.0"
 }

@@ -177,15 +177,31 @@ async function main() {
     ok('section: Who you are', p.includes('## Who you are'))
     ok('section: Language (mirror the user)', p.includes('## Language') && p.includes('ALWAYS answer in the user\'s language'))
     ok('section: The work loop', p.includes('## The work loop') && p.includes('PLAN ──► BUILD ──► TEST'))
+    ok('work loop: PASS branch → summary, FAIL branch → fix loop',
+      p.includes('PASS ──► SUMMARY to the user') && p.includes('FAIL ──► BUILD (fix) ──► TEST ──► (loop)'))
+    ok('work loop: numbered PLAN/BUILD/TEST contract',
+      p.includes('1. PLAN —') && p.includes('2. BUILD —') && p.includes('3. TEST —') && p.includes('The BUILD → TEST loop repeats until the verification passes'))
+    ok('work loop: max 5 rounds + escalation contract',
+      p.includes('Max 5 fix rounds') && p.includes('escalate to the user') && p.includes('what you tried, the last error verbatim'))
+    ok('work loop: concrete hypothesis, no blind retries',
+      p.includes('concrete hypothesis') && p.includes('Blind trial-and-error is forbidden'))
+    ok('work loop: stack-agnostic (web, CLI, bot, API…)',
+      p.includes('EVERY project kind') && p.includes('CLI tool') && p.includes('bot') && p.includes('API'))
     ok('work loop teaches switch_mode + user approval', p.includes('switch_mode') && p.includes('approve or deny'))
     ok('section: Hard rules', p.includes('## Hard rules — never') && p.includes('Never edit a file you have not read'))
-    ok('section: Finishing (structured summary)', p.includes('## Finishing — the final summary') && p.includes('What was done'))
+    ok('section: Finishing (structured summary)',
+      p.includes('## Finishing — the final summary') && p.includes('✅ SELESAI') &&
+      p.includes('📌 Yang dikerjakan') && p.includes('📁 File yang diubah') &&
+      p.includes('🧪 Verifikasi') && p.includes('⚠️ Catatan'))
     ok('build persona intact', p.includes('Mode: BUILD') && p.includes('your job is WORKING CODE'))
     ok('ask_user contract intact', p.includes('## Asking the user — the ask_user tool, every time'))
     ok('build prompt still free of the QA deliverable literal', !p.includes('test_report'))
 
     const t = buildSystemPrompt({ workspaceRoot: root, mode: 'test', tools: buildToolset({ config: cfg, mode: 'test' }) })
     ok('test persona intact', t.includes('Mode: TEST') && t.includes('your job is VERIFICATION'))
+    ok('test persona stack-agnostic (per-kind methods)',
+      t.includes('EVERY project kind') && t.includes('CLI tool') && t.includes('API/service') &&
+      t.includes('reading the code is not testing'))
     ok('test closing line points at switch_mode', t.includes('back to build (switch_mode)'))
 
     const pl = buildSystemPrompt({ workspaceRoot: root, mode: 'plan', tools: buildToolset({ config: cfg, mode: 'plan' }) })
@@ -197,7 +213,8 @@ async function main() {
       !sub.includes('## Who you are') && !sub.includes('## Language') && !sub.includes('## The work loop') && !sub.includes('## Hard rules') && !sub.includes('## Finishing'))
 
     const cav = buildSystemPrompt({ workspaceRoot: root, mode: 'build', tools, caveman: true })
-    ok('caveman skips the summary ceremony', !cav.includes('## Finishing'))
+    ok('caveman keeps the structured summary (terse variant)',
+      cav.includes('## Finishing') && cav.includes('✅ SELESAI') && cav.includes('one line per field'))
     ok('caveman keeps the hard rules', cav.includes('## Hard rules'))
   }
 
