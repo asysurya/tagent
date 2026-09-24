@@ -5,6 +5,56 @@ packages/core/src/tools/worklog.ts). Append-only; every agent adds a
 section per task. Fresh agents: read top-down before working.
 
 ---
+
+Task ID: 12
+Agent: Super Z (main)
+Task: Operating loop v2 — the user's exact PLAN→BUILD→TEST contract
+baked into the prompt. Commit d16ff4f. Released as v0.29.0
+(id 395647372, 7/7 assets verified by-ID).
+
+Work Log:
+- system-prompt.ts, work loop section rewritten to the spec verbatim:
+  diagram PLAN ──► BUILD ──► TEST ─┬─ PASS ──► SUMMARY / └─ FAIL ──►
+  BUILD (fix) ──► TEST ──► (loop); numbered contract 1-6 (PLAN
+  investigates first, BUILD implements, TEST verifies for real, PASS
+  means STOP, FAIL goes back with evidence, loop repeats until pass);
+  retry discipline as HARD RULES (concrete hypothesis per failed round,
+  blind trial-and-error forbidden, MAX 5 fix rounds → escalate with
+  what-was-tried + last-error-verbatim + what-is-needed; blockers
+  escalate immediately); stack-agnostic line: ONE loop for EVERY
+  project kind. switch_mode paragraph kept intact.
+- Finishing section: the exact structured block (✅ SELESAI / 📌 Yang
+  dikerjakan / 📁 File yang diubah / 🧪 Verifikasi / ⚠️ Catatan), labels
+  follow the user's language (English: ✅ DONE / What was done / Files
+  changed / Verification / Notes), ✅ is EARNED by verification, no
+  vague lines. Now included for caveman too (one telegraphic line per
+  field) — guard changed from !subagent&&!caveman to !subagent.
+- TEST persona: per-kind methods block (web / CLI / API / bot /
+  library / pipeline — each with its real-runtime method), workflow
+  retitled stack-neutral (understand → start it → exercise → report),
+  "reading the code is not testing" explicit. BUILD persona point 5
+  closes the loop (implementation done → TEST time → only verified
+  work earns the summary).
+- Tests: test-switch-mode.ts 46→52 (loop branches, numbered contract,
+  max-5 + escalation, hypothesis rule, stack-agnostic, ✅ SELESAI
+  block, caveman keeps summary); test-testmode.ts 2 stale assertions
+  restated (START IT, VISUAL QA (web)). Battery green: 52·71·40·59·41
+  ·19·30·32·71·25·31·33 + host + tui-app + cache + fallback + version;
+  tsc identical to baseline (3 pre-existing).
+- Release v0.29.0: version.ts · releases.ts (4 sections) · LATEST ·
+  gh-release.sh BODY + name · latest.json synced · website build OK ·
+  6 binaries (102/102/74/79/103/106 MB) + SHA256SUMS uploaded; raw +
+  jsDelivr both serve 0.29.0; released binary --version 0.29.0,
+  --check-update "up to date: v0.29.0".
+
+Stage Summary:
+- v0.29.0 LIVE: https://github.com/asysurya/tagent/releases/tag/v0.29.0
+- The operating contract is now exactly the user's spec: loop shape,
+  max-5 escalation, hypothesis-per-retry, ✅ SELESAI finish, same rigor
+  on every stack. All protected prompt contracts survive (verified by
+  the suites).
+
+---
 Task ID: 11
 Agent: Super Z (main)
 Task: Fix `tagent update` (gagal mulu — clone & binary, user kept
