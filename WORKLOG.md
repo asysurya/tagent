@@ -5,6 +5,56 @@ packages/core/src/tools/worklog.ts). Append-only; every agent adds a
 section per task. Fresh agents: read top-down before working.
 
 ---
+Task ID: 10
+Agent: Super Z (main)
+Task: switch_mode (agent ganti mode dengan izin user) + system prompt
+rework (elite-executor spec, additive). Commit 7750e8d.
+
+Work Log:
+- tools/switch-mode.ts (NEW): switch_mode {mode, reason} — risk medium,
+  so the existing permission gate IS the user approval (TUI card / GUI /
+  relay all show target mode + reason). Returns the new persona summary.
+- tools/index.ts: registered in all 3 modes at depth 0; excluded at
+  depth > 0 (sub mode is fixed at spawn); TEST_MODE_TOOLS + plan allow
+  list updated.
+- loop.ts: tools mutable + buildToolsetFor(mode) (extraTools +
+  toolsFilter preserved); switchMode() flips opts.mode + session.mode,
+  swaps toolset, fires onModeChange + notify; runInner keeps
+  activeMode — on divergence rebuilds system prompt + nativeTools so the
+  NEXT turn runs under the new persona; READ_ONLY_TOOLS += switch_mode
+  (plan gate lets it through); ctx.switchMode injected at depth 0.
+- system-prompt.ts (additive rework): identity = elite autonomous
+  engineer (Codex/Claude Code/OpenCode/Aider league, not a chatbot);
+  new main-only sections — Who you are · Language (mirror user's
+  language, code English-conventions) · The work loop (PLAN→BUILD→TEST
+  with evidence-based retries, escalate after ~5, switch_mode taught) ·
+  Hard rules (never claim untested / edit unread / placeholders /
+  "seharusnya jalan") · Finishing (structured summary); TEST persona
+  closing line points at switching back to build; subagents + caveman
+  stay lean.
+- host.ts makeEvents: onModeChange → bus 'mode:change'; daemon forwards
+  to gui + relay viewers; tui-app updates the navbar mode chip.
+- scripts/test-switch-mode.ts (NEW, 46 checks): registration matrix,
+  approve path (turn-2 system prompt = TEST persona + QA toolset, no
+  write_file), deny path (nothing flips), loop guards (same-mode /
+  sub), prompt sections + protected strings.
+- README: 2 new rows (mid-run mode switch, operating prompt).
+- All suites green: switch-mode 46 + subagents 71 + testmode 59 +
+  async-subs 40 + ask 41 + features 19 + v0190 71 + v0220 25 +
+  context-loop 30 + browser 32 + host + menu-audit + chat-persistence +
+  tui-app + workspace-switch; tsc identical to baseline.
+
+Stage Summary:
+- The agent can now follow the work across modes: plan approved →
+  build → test to verify → back to build to fix — every switch behind
+  the user's approval card, persona + toolset rebuilt mid-run.
+- The operating prompt now carries the elite-executor identity,
+  language mirroring, the iterative work loop, hard rules, and the
+  structured final summary — without dropping any of the battle-tested
+  contracts (all protected strings verified by the suites).
+- Not released yet — candidate v0.27.1.
+
+---
 Task ID: 9
 Agent: Super Z (main)
 Task: Release v0.27.0 — ship the async-subagent stack (Task 8).
