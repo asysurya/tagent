@@ -21,8 +21,10 @@ export default function SourcePage() {
           <h1 className="text-3xl font-bold tracking-tight text-zinc-100">Source</h1>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-400">
             The whole Tagent codebase — browse it below, or fetch it: every file is served
-            raw (<code className="rounded bg-zinc-800 px-1 text-xs text-orange-300">/source/raw/&lt;path&gt;</code>)
-            and as JSON for agents. Same content as the{' '}
+            raw (<code className="rounded bg-zinc-800 px-1 text-xs text-orange-300">/source/raw/&lt;path&gt;</code>),
+            JSON-wrapped, and every directory lists its contents
+            (<code className="rounded bg-zinc-800 px-1 text-xs text-orange-300">/source/dir/&lt;path&gt;.json</code>).
+            Same content as the{' '}
             <a
               className="text-orange-400 hover:text-orange-300"
               href="https://github.com/asysurya/tagent"

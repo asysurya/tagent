@@ -14,6 +14,15 @@ const nextConfig: NextConfig = {
         source: "/source/json/:path*",
         headers: [{ key: "Content-Type", value: "application/json; charset=utf-8" }],
       },
+      {
+        // the dir listings (tree.json is plain .json — default MIME is fine)
+        source: "/source/dir.json",
+        headers: [{ key: "Content-Type", value: "application/json; charset=utf-8" }],
+      },
+      {
+        source: "/source/dir/:path*",
+        headers: [{ key: "Content-Type", value: "application/json; charset=utf-8" }],
+      },
     ]
   },
 }

@@ -6,6 +6,70 @@ section per task. Fresh agents: read top-down before working.
 
 ---
 
+Task ID: 14
+Agent: Super Z (main)
+Task: The dir API — list directories over HTTP on the /source snapshot.
+Website-only (no CLI change). Plus: unblinded the tsc checker.
+
+Work Log:
+- scripts/gen-source-snapshot.ts now also emits the directory API:
+  public/source/dir.json (root listing), public/source/dir/<path>.json
+  (one per directory — 44), and public/source/tree.json (whole tree in
+  one shot). Shape: { version, path, dirUrl, parent:{path,dirUrl}|null,
+  children[] } — file children carry bytes/lines/language/rawUrl/jsonUrl,
+  dir children carry files/dirs/lines aggregates + their own dirUrl, so
+  an agent can walk root → deeper → back up → read files with ZERO
+  client state. Aggregates verified against index.json (packages/core:
+  53 files / 12,594 lines, exact).
+- tests: test-source-site.ts 54 → 70 checks (dir.json shape, parent
+  chain, aggregates, tree.json, real-output spot checks). test-ask.ts
+  still 41/41, tsc clean for every file this task touched.
+- UI: the /source welcome panel now documents all 7 endpoints (tree.json
+  + dir.json + dir/<path>.json first) with copy chips, plus a
+  walk-the-tree curl example. page.tsx description mentions dir
+  listings. next.config.ts pins Content-Type on the dir endpoints.
+  website/README.md documents the walkable-FS design.
+- THE TSC BLINDNESS (found + fixed): commit 49c96ad introduced a parse
+  error in scripts/test-ask.ts — `=> ({...})` + newline + `{` block,
+  no semicolon. Valid ES (Node/Bun accept it) but tsc's parser rejects
+  it — and ONE parse error anywhere makes tsc report ONLY syntax errors,
+  skipping the entire semantic pass. Every "tsc clean" since that commit
+  (including Task 13's) was measured blind. Fix: the missing semicolon.
+  True state revealed: 358 semantic errors.
+- Cleanup of the revealed state, scoped to what this task owns:
+  · root tsconfig now excludes `website/` — the site is a self-contained
+    app with its own tsconfig/build; checking it under the root config
+    produced ~208 phantom errors (raw .ts snapshot copies + `@/*` paths
+    pointing at the GUI src). Matches the Task 13 rationale that raw
+    copies must never be type-checked; extends it to the root config.
+  · root tsconfig now loads `types: [node, react, react-dom, bun-types]`
+    — the repo RUNS on Bun and packages/{core,cli}/tsconfig.json
+    already did exactly this; the root config was the outlier (~38
+    `import.meta.dir` / `Bun` phantom errors gone).
+  · type fixes in files this task touched: buildTree `let cur: TreeNode`,
+    test-source-site annotation, test-ask res/seen narrowing.
+- HONEST BASELINE for the next session: `bunx tsc --noEmit` (clean
+  tsbuildinfo) = 107 errors, ALL pre-existing in agent-era code outside
+  website/ (test-paste-heuristic 26, smoke-discovery 7, tui tests,
+  mini-services/tagent-daemon 4, packages/cli tui.ts 3, loop.ts import
+  of PermissionManager 2, skills 2, settings-dialog 1, ...). None were
+  introduced by this task; all were hidden by the parse-error blindness.
+  Triage them as a separate task.
+- Verified: gen + 70/70 tests, ask 41/41, tsc (0 errors in website/ +
+  snapshot scripts), website build (9 routes), live server: dir.json
+  200 application/json, nested listing + parent chain, tree.json
+  matches index counts, 404 for missing dirs, raw still text/plain,
+  agent-browser: welcome panel shows the 7 endpoints, tree expands,
+  file loads, zero console errors.
+- website/package.json 0.11.0 → 0.12.0.
+
+Stage Summary:
+- The /source API is now a walkable file system: dir.json →
+  dirUrl/rawUrl/jsonUrl traversal, tree.json one-shot, 44 listings.
+- tsc can see again — do not reintroduce parse errors, and re-check the
+  107-error honest baseline before blaming new work.
+
+---
 Task ID: 13
 Agent: Super Z (main)
 Task: /source — a source-code browser page on the website + a static

@@ -27,7 +27,13 @@
       "@/*": [
         "./src/*"
       ]
-    }
+    },
+    "types": [
+      "node",
+      "react",
+      "react-dom",
+      "bun-types"
+    ]
   },
   "include": [
     "next-env.d.ts",
@@ -37,6 +43,7 @@
     ".next/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "website"
   ]
 }

@@ -75,7 +75,7 @@ ok('9 options capped to 8', parseAskInput({ fields: [{ label: 'q', type: 'option
 console.log('\n4) run() — headless + subagent fallbacks')
 const mkCtx = (events: AgentEvents, depth = 0): ToolContext => ({
   workspaceRoot: root, sessionId: 's', depth, config: cfg, events, todos: [],
-})
+}); // semicolon required: tsc's parser mis-parses `=> ({...})` + newline + `{` block (valid ES — Node/Bun accept it)
 {
   const out = await askUserTool.run(
     { fields: [{ label: 'q', type: 'input' }] },
@@ -186,8 +186,8 @@ console.log('\n6) host wiring — bus event + askRespond')
   const form: AskFormRequest = {
     id: 'ask-1', fields: [{ id: 'f1', label: 'db?', type: 'option', options: ['postgres'] }], allowNotes: true,
   }
-  const res: AskFormResponse | null = await events.onAskUser?.(form)
-  ok('bus got the form', seen?.id === 'ask-1')
+  const res: AskFormResponse | null | undefined = await events.onAskUser?.(form)
+  ok('bus got the form', (seen as AskFormRequest | null)?.id === 'ask-1')
   ok('askRespond resolves the promise', res?.answers?.f1 === 'postgres' && res?.notes === 'from the bus')
   ok('unknown id is a no-op', host.askRespond('nope', null) === false)
 }

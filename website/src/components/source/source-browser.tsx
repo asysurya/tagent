@@ -164,7 +164,10 @@ function LoadError({ onRetry, rawUrl }: { onRetry: () => void; rawUrl: string | 
 function Welcome({ snapshot, onSelect }: { snapshot: SourceSnapshot; onSelect: (p: string) => void }) {
   const c = snapshot.counts
   const endpoints: [string, string][] = [
-    ['GET /source/index.json', 'every file — path · size · lines · language · rawUrl · jsonUrl'],
+    ['GET /source/tree.json', 'the whole tree in one shot — dirs carry size + line aggregates'],
+    ['GET /source/dir.json', 'list the root directory — children with sizes + URLs'],
+    ['GET /source/dir/<path>.json', 'list one directory — files, subdirs, parent link'],
+    ['GET /source/index.json', 'flat file list — path · size · lines · language · rawUrl · jsonUrl'],
     ['GET /source/raw/<path>', 'the raw file contents (text/plain)'],
     ['GET /source/json/<path>.json', 'JSON-wrapped: { path, content, language, lines, bytes }'],
     ['GET /source/symbols.json', 'symbol index — name · file · line · kind'],
@@ -211,7 +214,8 @@ function Welcome({ snapshot, onSelect }: { snapshot: SourceSnapshot; onSelect: (
           Fetch the source — an API for agents
         </h3>
         <p className="mt-2 text-sm leading-relaxed text-zinc-400">
-          Every file is served statically — no auth, no rate-limit games. Point any agent (or curl)
+          Every file and directory is served statically — no auth, no rate-limit games. Walk the
+          tree with the dir listings, then read files raw or as JSON. Point any agent (or curl)
           at these endpoints:
         </p>
         <div className="mt-3 space-y-1.5">
@@ -226,9 +230,12 @@ function Welcome({ snapshot, onSelect }: { snapshot: SourceSnapshot; onSelect: (
         <div className="relative mt-3">
           <CopyChip text={`curl -s ${SITE}/source/raw/packages/core/src/version.ts`} />
           <pre className="mono pretty-scroll overflow-x-auto rounded-lg border border-zinc-800 bg-zinc-900/70 p-4 pr-16 text-[12px] leading-relaxed text-zinc-300">
-            <code>{`curl -s ${SITE}/source/index.json | head -c 400
+            <code>{`# walk: root → a directory → its files
+curl -s ${SITE}/source/dir.json | jq -r '.children[] | select(.type=="dir") | .name'
+curl -s ${SITE}/source/dir/packages/core/src.json | jq -r '.children[].name'
+# read: raw text, or the whole tree at once
 curl -s ${SITE}/source/raw/packages/core/src/version.ts
-curl -s ${SITE}/source/json/README.md.json | jq -r .content | head -20`}</code>
+curl -s ${SITE}/source/tree.json | jq -r '.tree.children[] | "\(.name) — \(.lines // 0) lines"'`}</code>
           </pre>
         </div>
         <p className="mt-3 text-xs leading-relaxed text-zinc-500">

@@ -3,14 +3,20 @@
  *
  * Produces (under website/):
  *   public/source/index.json        manifest: file list + metadata + URLs
+ *   public/source/tree.json         the whole tree in one shot — dir nodes
+ *                                    carry files/dirs/lines aggregates
+ *   public/source/dir.json          root directory listing (the dir API)
+ *   public/source/dir/<path>.json   one directory's listing — files carry
+ *                                    rawUrl/jsonUrl, dirs carry aggregates
+ *                                    + their own dirUrl, plus a parent link
  *   public/source/symbols.json      lightweight symbol index (search)
  *   public/source/raw/<path>        raw file contents — humans AND agents
  *   public/source/json/<path>.json  { path, content, language, lines, bytes }
  *   src/data/source-snapshot.ts     TS module for the /source page (tree + stats)
  *
- * Everything is committed: the website is statically deployed (Vercel builds
- * `website/` and serves public/ as-is), and agents can fetch the raw files
- * from the site — or via raw.githubusercontent.com, same paths.
+ * The dir listings are fully navigable with zero state: an agent fetches
+ * dir.json, follows any child's dirUrl deeper (or parent back up), then
+ * rawUrl/jsonUrl to read a file — a walkable file system over plain HTTP.
  *
  * Usage: bun scripts/gen-source-snapshot.ts
  * Test hooks (hermetic): TAGENT_SNAPSHOT_ROOT (repo root), TAGENT_SNAPSHOT_OUT
@@ -287,7 +293,7 @@ function buildTree(files: SnapFile[]): TreeNode {
   const root: TreeNode = { type: 'dir', name: '', path: '', children: [] }
   for (const f of files) {
     const parts = f.path.split('/')
-    let cur = root
+    let cur: TreeNode = root
     for (let i = 0; i < parts.length - 1; i++) {
       const seg = parts[i]
       const curPath = parts.slice(0, i + 1).join('/')
@@ -324,6 +330,72 @@ function buildTree(files: SnapFile[]): TreeNode {
 function countDirs(node: TreeNode): number {
   if (node.type !== 'dir') return 0
   return 1 + node.children.reduce((acc, c) => acc + countDirs(c), 0)
+}
+
+/* -------------------------------------------------------------- dir API -- */
+
+type FileNode = Extract<TreeNode, { type: 'file' }>
+
+const dirUrlOf = (p: string) => (p ? `/source/dir/${encPath(p)}.json` : '/source/dir.json')
+
+/** files/dirs/lines totals for a subtree (a dir counts itself in `dirs`) */
+function statsOf(node: TreeNode): { files: number; dirs: number; lines: number } {
+  if (node.type === 'file') return { files: 1, dirs: 0, lines: node.lines }
+  return node.children.reduce(
+    (acc, c) => {
+      const s = statsOf(c)
+      return { files: acc.files + s.files, dirs: acc.dirs + s.dirs, lines: acc.lines + s.lines }
+    },
+    { files: 0, dirs: 1, lines: 0 },
+  )
+}
+
+function fileEntry(f: FileNode) {
+  return {
+    type: 'file' as const,
+    name: f.name,
+    path: f.path,
+    bytes: f.bytes,
+    lines: f.lines,
+    language: f.language,
+    rawUrl: `/source/raw/${encPath(f.path)}`,
+    jsonUrl: `/source/json/${encPath(f.path)}.json`,
+  }
+}
+
+/** one listing per directory: dir.json for the root, dir/<path>.json below */
+function emitDirListing(dir: TreeNode, parentPath: string | null, version: string) {
+  if (dir.type !== 'dir') return
+  const listing = {
+    version,
+    path: dir.path,
+    dirUrl: dirUrlOf(dir.path),
+    parent: parentPath === null ? null : { path: parentPath, dirUrl: dirUrlOf(parentPath) },
+    children: dir.children.map((c) =>
+      c.type === 'file'
+        ? fileEntry(c)
+        : { type: 'dir' as const, name: c.name, path: c.path, ...statsOf(c), dirUrl: dirUrlOf(c.path) },
+    ),
+  }
+  const abs = dir.path
+    ? path.join(SRC_DIR, 'dir', `${dir.path}.json`)
+    : path.join(SRC_DIR, 'dir.json')
+  fs.mkdirSync(path.dirname(abs), { recursive: true })
+  fs.writeFileSync(abs, JSON.stringify(listing))
+  for (const c of dir.children) if (c.type === 'dir') emitDirListing(c, dir.path, version)
+}
+
+/** tree.json — the full structure in ONE fetch, every node self-describing */
+function augNode(node: TreeNode): unknown {
+  if (node.type === 'file') return fileEntry(node)
+  return {
+    type: 'dir' as const,
+    name: node.name,
+    path: node.path,
+    ...statsOf(node),
+    dirUrl: dirUrlOf(node.path),
+    children: node.children.map(augNode),
+  }
 }
 
 /* ----------------------------------------------------------------- main -- */
@@ -378,6 +450,13 @@ function main() {
       }),
     )
   }
+
+  // the dir API: root listing → per-dir listings → tree.json
+  emitDirListing(tree, null, version)
+  fs.writeFileSync(
+    path.join(SRC_DIR, 'tree.json'),
+    JSON.stringify({ version, counts, tree: augNode(tree) }),
+  )
 
   const manifest = {
     version,
@@ -458,6 +537,7 @@ export const SOURCE_SNAPSHOT: SourceSnapshot = ${JSON.stringify(manifest)} as co
   const kb = (n: number) => `${Math.round(n / 1024)} KB`
   console.log(`[snapshot] v${version} · ${counts.files} files · ${counts.dirs} dirs · ${counts.lines} lines · ${kb(counts.bytes)} source`)
   console.log(`[snapshot] ${symbols.length} symbols · ${excluded.length} excluded entries`)
+  console.log(`[snapshot] dir listings   → ${counts.dirs} files under public/source/dir/ (+ dir.json root + tree.json)`)
   console.log(`[snapshot] raw+json+index → ${path.relative(ROOT, SRC_DIR)}`)
   console.log(`[snapshot] page module    → ${path.relative(ROOT, modPath)}`)
 }

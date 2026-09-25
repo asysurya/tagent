@@ -48,6 +48,12 @@ The whole repo source is snapshotted into static files that both humans
 and agents can fetch (no auth, no rate limits — it's just static hosting):
 
 ```
+GET /source/tree.json           the whole tree in ONE fetch — dir nodes carry
+                                files/dirs/lines aggregates + dirUrl
+GET /source/dir.json            root directory listing (children + sizes)
+GET /source/dir/<path>.json     one directory's listing — files carry
+                                rawUrl/jsonUrl, dirs carry aggregates +
+                                their own dirUrl, plus a parent link
 GET /source/index.json          file list + metadata (path · bytes · lines ·
                                 language · rawUrl · jsonUrl) + the tree
 GET /source/raw/<path>          the raw file contents (text/plain)
@@ -55,6 +61,10 @@ GET /source/json/<path>.json    JSON-wrapped: { path, content, language,
                                 lines, bytes, rawUrl }
 GET /source/symbols.json        symbol index (name · file · line · kind)
 ```
+
+The dir API is walkable with zero state: fetch `dir.json`, follow any
+child's `dirUrl` deeper (or `parent` back up), then `rawUrl`/`jsonUrl` to
+read a file — a small file system over plain static HTTP.
 
 Regenerate after changing source code (it is committed, like
 `public/latest.json`):

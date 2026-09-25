@@ -110,8 +110,38 @@ async function main() {
     ok('symbols carry file + line', fooSym?.f === 'packages/core/src/a.ts' && fooSym?.l === 1 && fooSym?.k === 'func')
 
     const tree = idx.tree
-    ok('tree: nested dirs + files', tree.children.some((c: { name: string }) => c.name === 'packages') &&
-      tree.children.some((c: { name: string }) => c.name === 'README.md' && c.type === 'file'))
+    ok('tree: nested dirs + files', tree.children.some((c: { name: string; type: string }) => c.name === 'packages') &&
+      tree.children.some((c: { name: string; type: string }) => c.name === 'README.md' && c.type === 'file'))
+
+    // ---- the dir API: listings + tree.json ----
+    const rootListing = JSON.parse(fs.readFileSync(path.join(out, 'public/source/dir.json'), 'utf8'))
+    const rootNames = rootListing.children.map((c: { name: string }) => c.name).sort()
+    ok('dir.json: root lists the top level',
+      JSON.stringify(rootNames) === JSON.stringify(['README.md', 'docs', 'packages', 'scripts']), rootNames.join(','))
+    ok('dir.json: root has no parent, self dirUrl',
+      rootListing.parent === null && rootListing.dirUrl === '/source/dir.json' && rootListing.version === '9.9.9')
+    const aTsLines = fs.readFileSync(path.join(root, 'packages/core/src/a.ts'), 'utf8').split('\n').length
+    const pkgEntry = rootListing.children.find((c: { name: string }) => c.name === 'packages')
+    ok('dir.json: dir child carries aggregates + dirUrl',
+      pkgEntry?.type === 'dir' && pkgEntry.files === 1 && pkgEntry.dirs === 3 && pkgEntry.lines === aTsLines &&
+      pkgEntry.dirUrl === '/source/dir/packages.json')
+
+    const coreSrcListing = JSON.parse(fs.readFileSync(path.join(out, 'public/source/dir/packages/core/src.json'), 'utf8'))
+    ok('dir listing: parent chain points back up',
+      coreSrcListing.parent?.path === 'packages/core' && coreSrcListing.parent?.dirUrl === '/source/dir/packages/core.json')
+    const aEntry = coreSrcListing.children.find((c: { name: string }) => c.name === 'a.ts')
+    ok('dir listing: file child carries rawUrl + jsonUrl',
+      aEntry?.type === 'file' && aEntry.bytes > 0 && aEntry.language === 'ts' &&
+      aEntry.rawUrl === '/source/raw/packages/core/src/a.ts' && aEntry.jsonUrl === '/source/json/packages/core/src/a.ts.json')
+
+    const treeJson = JSON.parse(fs.readFileSync(path.join(out, 'public/source/tree.json'), 'utf8'))
+    ok('tree.json: version + counts', treeJson.version === '9.9.9' && treeJson.counts.files === 4 && treeJson.counts.dirs === idx.counts.dirs)
+    const pkgTree = treeJson.tree.children.find((c: { name: string }) => c.name === 'packages')
+    ok('tree.json: dir nodes carry aggregates + dirUrl',
+      pkgTree?.files === 1 && pkgTree?.dirs === 3 && pkgTree?.dirUrl === '/source/dir/packages.json')
+    const readmeTree = treeJson.tree.children.find((c: { name: string }) => c.name === 'README.md')
+    ok('tree.json: file nodes carry rawUrl + jsonUrl',
+      readmeTree?.rawUrl === '/source/raw/README.md' && readmeTree?.jsonUrl === '/source/json/README.md.json')
 
     const mod = fs.readFileSync(path.join(out, 'src/data/source-snapshot.ts'), 'utf8')
     ok('page module exports SOURCE_SNAPSHOT + types', mod.includes('export const SOURCE_SNAPSHOT') && mod.includes('export interface SourceSnapshot'))
@@ -156,6 +186,31 @@ async function main() {
     const idxAll = JSON.stringify(idx.files.map((f: { path: string }) => f.path))
     ok('security: no .env / secrets in the snapshot', !idxAll.includes('.env'))
 
+    // ---- the dir API on the real snapshot ----
+    const dirRoot = JSON.parse(fs.readFileSync(path.join(REPO, 'website/public/source/dir.json'), 'utf8'))
+    ok('public: dir.json root listing populated', Array.isArray(dirRoot.children) && dirRoot.children.length > 5)
+    const pkgReal = dirRoot.children.find((c: { name: string }) => c.name === 'packages')
+    ok('public: dir.json aggregates sane',
+      pkgReal?.files > 50 && pkgReal?.dirs > 5 && pkgReal?.lines > 20000 &&
+      pkgReal?.dirUrl === '/source/dir/packages.json')
+    const coreSrcReal = JSON.parse(fs.readFileSync(path.join(REPO, 'website/public/source/dir/packages/core/src.json'), 'utf8'))
+    const loopEntry = coreSrcReal.children.find((c: { name: string }) => c.name === 'loop.ts')
+    ok('public: per-dir listing exposes loop.ts with URLs',
+      loopEntry?.rawUrl === '/source/raw/packages/core/src/loop.ts' &&
+      loopEntry?.jsonUrl === '/source/json/packages/core/src/loop.ts.json')
+    ok('public: listing children match the index tree (packages/core/src)',
+      coreSrcReal.children.length === idx.tree.children
+        .find((c: { name: string }) => c.name === 'packages')?.children
+        .find((c: { name: string }) => c.name === 'core')?.children
+        .find((c: { name: string }) => c.name === 'src')?.children?.length)
+    const treeReal = JSON.parse(fs.readFileSync(path.join(REPO, 'website/public/source/tree.json'), 'utf8'))
+    ok('public: tree.json matches index counts + version',
+      treeReal.counts.files === idx.counts.files && treeReal.version === idx.version)
+    ok('public: tree.json root is navigable', treeReal.tree.dirUrl === '/source/dir.json' && Array.isArray(treeReal.tree.children))
+    const coreTree = treeReal.tree.children.find((c: { name: string }) => c.name === 'packages')?.children
+      .find((c: { name: string }) => c.name === 'core')
+    ok('public: tree.json nested dir carries dirUrl', coreTree?.dirUrl === '/source/dir/packages/core.json')
+
     const tscfg = fs.readFileSync(path.join(REPO, 'website/tsconfig.json'), 'utf8')
     ok('website tsconfig excludes public/ (raw .ts copies)', tscfg.includes('"public"'))
 
@@ -173,6 +228,8 @@ async function main() {
 
     const browser = fs.readFileSync(path.join(REPO, 'website/src/components/source/source-browser.tsx'), 'utf8')
     ok('browser: agent API docs on the welcome panel', browser.includes('/source/index.json') && browser.includes('/source/symbols.json'))
+    ok('browser: dir API documented on the welcome panel',
+      browser.includes('/source/dir/') && browser.includes('/source/tree.json'))
     ok('browser: deep links (?file=) + hash lines (#L)', browser.includes('get(\'file\')') || browser.includes('window.location.search'))
     ok('browser: error + notfound + loading states', browser.includes("'notfound'") && browser.includes("'error'") && browser.includes('aria-busy'))
   }
