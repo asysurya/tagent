@@ -5,7 +5,7 @@ import { SourceBrowser } from '@/components/source/source-browser'
 export const metadata: Metadata = {
   title: 'Source — Tagent',
   description:
-    'Browse the full Tagent source code — file tree, syntax highlighting, search. Raw + JSON endpoints let agents fetch any file directly.',
+    'Browse the full Tagent source code — file tree, syntax highlighting, search. Agents fetch it via /source/ls (queryable directory listings), raw + JSON file endpoints.',
 }
 
 function fmtBytes(b: number) {

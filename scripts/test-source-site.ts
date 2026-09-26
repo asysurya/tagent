@@ -1,11 +1,12 @@
 /**
  * test-source-site.ts — the /source page: snapshot generator, static API
- * files, the generated page module, the highlighter, and the nav wiring.
+ * files, the /ls query API (engine + routes), the generated page module,
+ * the highlighter, and the nav wiring.
  *
  * Part A runs the generator against a hermetic fixture tree (binary files,
  * lockfiles, .env, oversized files, excluded dirs must all be filtered).
  * Part B validates the REAL committed outputs (index/raw/json/symbols +
- * the page + nav links). Part C sanity-checks the tokenizer.
+ * the /ls engine + the page + nav links). Part C sanity-checks the tokenizer.
  *
  * Run: bun scripts/test-source-site.ts
  */
@@ -38,7 +39,7 @@ async function main() {
     fs.mkdirSync(path.join(root, 'packages/core/src'), { recursive: true })
     fs.writeFileSync(
       path.join(root, 'packages/core/src/a.ts'),
-      `export function foo() { return 1 }\nclass Bar {}\nconst baz = 42\n// trailing note\n`,
+      `/** The fixture's core engine — exercises the walker. */\nexport function foo() { return 1 }\nclass Bar {}\nconst baz = 42\n// trailing note\n`,
     )
     fs.writeFileSync(path.join(root, 'README.md'), `# Title\n\n## Sub section\n\nbody text\n`)
     fs.mkdirSync(path.join(root, 'scripts'), { recursive: true })
@@ -83,14 +84,21 @@ async function main() {
     const raw = fs.readFileSync(path.join(out, 'public/source/raw/packages/core/src/a.ts'), 'utf8')
     ok('raw copy is byte-identical', raw.includes('export function foo() { return 1 }') && raw.includes('// trailing note'))
 
-    const json = JSON.parse(fs.readFileSync(path.join(out, 'public/source/json/packages/core/src/a.ts.json'), 'utf8'))
-    ok('json wrapper: content + meta', json.path === 'packages/core/src/a.ts' && json.content === raw && json.language === 'ts' && json.lines === raw.split('\n').length)
-    ok('json wrapper: rawUrl points back', json.rawUrl === '/source/raw/packages/core/src/a.ts')
-
     const aMeta = idx.files.find((f: { path: string }) => f.path === 'packages/core/src/a.ts')
     ok('meta in index: rawUrl + jsonUrl',
       aMeta?.rawUrl === '/source/raw/packages/core/src/a.ts' &&
       aMeta?.jsonUrl === '/source/json/packages/core/src/a.ts.json')
+    ok('meta in index: JSDoc summary extracted',
+      aMeta?.summary === "The fixture's core engine — exercises the walker.", aMeta?.summary)
+    ok('meta in index: lastModified is a date (mtime fallback — no git here)',
+      typeof aMeta?.lastModified === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(aMeta.lastModified), aMeta?.lastModified)
+    const readmeMeta = idx.files.find((f: { path: string }) => f.path === 'README.md')
+    ok('meta in index: md summary = first heading', readmeMeta?.summary === 'Title', readmeMeta?.summary)
+
+    const json = JSON.parse(fs.readFileSync(path.join(out, 'public/source/json/packages/core/src/a.ts.json'), 'utf8'))
+    ok('json wrapper: content + meta', json.path === 'packages/core/src/a.ts' && json.content === raw && json.language === 'ts' && json.lines === raw.split('\n').length)
+    ok('json wrapper: rawUrl points back', json.rawUrl === '/source/raw/packages/core/src/a.ts')
+    ok('json wrapper: lastModified + summary carried', json.summary === aMeta.summary && json.lastModified === aMeta.lastModified)
 
     const excl = idx.excluded.join('\n')
     ok('excluded: binary', excl.includes('bin.dat') && excl.includes('binary'))
@@ -107,7 +115,7 @@ async function main() {
     ok('symbols: md headings', names.has('Title') && names.has('Sub section'))
     ok('symbols: sh function', names.has('run'))
     const fooSym = syms.find((s: { n: string }) => s.n === 'foo')
-    ok('symbols carry file + line', fooSym?.f === 'packages/core/src/a.ts' && fooSym?.l === 1 && fooSym?.k === 'func')
+    ok('symbols carry file + line', fooSym?.f === 'packages/core/src/a.ts' && fooSym?.l === 2 && fooSym?.k === 'func')
 
     const tree = idx.tree
     ok('tree: nested dirs + files', tree.children.some((c: { name: string; type: string }) => c.name === 'packages') &&
@@ -230,12 +238,244 @@ async function main() {
     ok('browser: agent API docs on the welcome panel', browser.includes('/source/index.json') && browser.includes('/source/symbols.json'))
     ok('browser: dir API documented on the welcome panel',
       browser.includes('/source/dir/') && browser.includes('/source/tree.json'))
+    ok('browser: /ls API documented on the welcome panel',
+      browser.includes('/source/ls?path=') && browser.includes('/source/ls/find') && browser.includes('/source/ls/quickref'))
     ok('browser: deep links (?file=) + hash lines (#L)', browser.includes('get(\'file\')') || browser.includes('window.location.search'))
     ok('browser: error + notfound + loading states', browser.includes("'notfound'") && browser.includes("'error'") && browser.includes('aria-busy'))
+
+    const readme = fs.readFileSync(path.join(REPO, 'website/README.md'), 'utf8')
+    ok('readme: /ls endpoints + params documented',
+      readme.includes('GET /source/ls?path=') && readme.includes('GET /source/ls/find') &&
+      readme.includes('GET /source/ls/stat') && readme.includes('GET /source/ls/quickref'))
+  }
+
+  /* -------------------------------------------------- part B2 — the ls API */
+  console.log('\n3) the /ls API — engine, routes, HTTP')
+  {
+    const { SOURCE_SNAPSHOT } = await import(path.join(REPO, 'website/src/data/source-snapshot.ts'))
+    const { ls, find, stat, quickref, renderLsText, handleLsApi, LsError, MAX_DEPTH } =
+      await import(path.join(REPO, 'website/src/lib/source-ls.ts'))
+
+    // the engine imports are `any` (dynamic non-literal specifier) — a structural
+    // guard keeps the catch blocks type-safe without depending on the module type
+    const isLsError = (e: unknown): e is { status: number; code: string; extra?: { layers?: string[] } } =>
+      typeof e === 'object' && e !== null && 'status' in e && 'code' in e
+    void LsError
+
+    /* the flat listing — the user's example shape */
+    const root = ls({ path: '/' })
+    ok('ls: root — parent null + full-tree totals',
+      root.parent === null && root.path === '/' && root.totalFiles === SOURCE_SNAPSHOT.counts.files && root.totalLines === SOURCE_SNAPSHOT.counts.lines)
+    const pkgEntry = root.entries.find((e) => e.name === 'packages')
+    ok('ls: root — dirs first, then files',
+      pkgEntry?.type === 'directory' && root.entries.some((e) => e.name === 'README.md' && e.type === 'file') &&
+      root.entries.every((e, i) => i === 0 ||
+        (root.entries[i - 1].type === e.type ? root.entries[i - 1].name.localeCompare(e.name) <= 0 : root.entries[i - 1].type === 'directory')))
+    ok('ls: dir entry = { name, type, children } exactly',
+      pkgEntry?.type === 'directory' && typeof pkgEntry.children === 'number' &&
+      !('files' in pkgEntry) && !('path' in pkgEntry))
+
+    const coreSrc = ls({ path: '/packages/core/src' })
+    const loopMeta = SOURCE_SNAPSHOT.files.find((f) => f.path === 'packages/core/src/loop.ts')
+    const loopEntry = coreSrc.entries.find((e) => e.name === 'loop.ts')
+    ok('ls: file entry = { name, type: file, size, lines, language }',
+      loopEntry?.type === 'file' && loopEntry.size === loopMeta.bytes && loopEntry.lines === loopMeta.lines && loopEntry.language === 'typescript')
+    const coreSrcFiles = SOURCE_SNAPSHOT.files.filter((f) => f.path.startsWith('packages/core/src/'))
+    ok('ls: parent chain + subtree totals',
+      coreSrc.parent === '/packages/core' &&
+      coreSrc.totalFiles === coreSrcFiles.length && coreSrc.totalLines === coreSrcFiles.reduce((a, f) => a + f.lines, 0))
+    ok('ls: matches the static dir listing (children count)',
+      coreSrc.entries.length ===
+      JSON.parse(fs.readFileSync(path.join(REPO, 'website/public/source/dir/packages/core/src.json'), 'utf8')).children.length)
+
+    /* detail mode */
+    const det = ls({ path: '/packages/core/src', detail: true })
+    const detLoop = det.entries.find((e) => e.name === 'loop.ts')
+    const detTools = det.entries.find((e) => e.name === 'tools')
+    ok('ls: detail adds path · lastModified · rawUrl · jsonUrl (files)',
+      detLoop?.path === '/packages/core/src/loop.ts' && detLoop.lastModified === loopMeta.lastModified &&
+      detLoop.rawUrl === '/source/raw/packages/core/src/loop.ts' && detLoop.jsonUrl === '/source/json/packages/core/src/loop.ts.json')
+    const toolsFiles = SOURCE_SNAPSHOT.files.filter((f) => f.path.startsWith('packages/core/src/tools/'))
+    ok('ls: detail adds aggregates + dirUrl (dirs)',
+      detTools?.path === '/packages/core/src/tools' && detTools.files === toolsFiles.length &&
+      detTools.dirUrl === '/source/dir/packages/core/src/tools.json')
+
+    /* recursive mode — depth = levels of entries visible below path:
+       depth=2 from /packages/core/src: level 1 dirs of src, level 2 entries
+       inside them (fs.ts); the level-2 dirs show a children COUNT instead */
+    const rec = ls({ path: '/packages/core/src', recursive: true, depth: 2 })
+    ok('ls: recursive — nested tree with aggregates',
+      rec.tree.type === 'directory' && rec.tree.name === 'src' && Array.isArray(rec.tree.children))
+    const recTools = rec.tree.children.find((c: { name: string }) => c.name === 'tools')
+    ok('ls: recursive depth=2 — grandchildren expanded (fs.ts visible)',
+      Array.isArray(recTools?.children) && recTools.children.some((c: { name: string }) => c.name === 'fs.ts'))
+    const rec1 = ls({ path: '/packages/core/src', recursive: true, depth: 1 })
+    const rec1Tools = rec1.tree.children.find((c: { name: string }) => c.name === 'tools')
+    ok('ls: recursive depth=1 — children = count at the cut',
+      typeof rec1Tools?.children === 'number' && rec1Tools.children === toolsFiles.length)
+
+    /* layers */
+    const layerRoot = ls({ path: '/', layer: 'cli' })
+    ok('ls: layer=cli prunes the root to the layer chain',
+      layerRoot.entries.length === 1 && layerRoot.entries[0].name === 'packages' && layerRoot.layer === 'cli')
+    const layerPkgs = ls({ path: '/packages', layer: 'cli' })
+    ok('ls: layer=cli — packages lists only cli',
+      JSON.stringify(layerPkgs.entries.map((e) => e.name)) === JSON.stringify(['cli']))
+    ok('ls: layer=core totals = the core subtree only',
+      ls({ path: '/', layer: 'core' }).totalFiles === SOURCE_SNAPSHOT.files.filter((f) => f.path.startsWith('packages/core/')).length)
+    try {
+      ls({ path: '/', layer: 'nope' })
+      ok('ls: unknown layer rejected', false)
+    } catch (e) {
+      ok('ls: unknown layer rejected with the valid list',
+        isLsError(e) && e.status === 400 &&
+        JSON.stringify((e.extra as { layers: string[] }).layers) === JSON.stringify(['core', 'cli', 'gui', 'website', 'native', 'scripts']))
+    }
+
+    /* find */
+    const f1 = find({ q: 'loop' })
+    const f1Paths = f1.results.map((r) => r.path)
+    ok('find: loop — name matches ranked first, all found',
+      f1.total >= 3 && f1Paths.includes('/packages/core/src/loop.ts') && f1Paths.includes('/scripts/test-context-loop.ts') &&
+      f1Paths.indexOf('/packages/core/src/loop.ts') < f1Paths.indexOf('/scripts/test-context-loop.ts'))
+    let emptyQ = false
+    try {
+      find({ q: '' })
+    } catch (e) {
+      emptyQ = isLsError(e) && e.status === 400
+    }
+    ok('find: empty q rejected', emptyQ)
+    const f2 = find({ q: 'loop', limit: 2 })
+    ok('find: limit + truncated flag', f2.count === 2 && f2.truncated && f2.total === f1.total)
+    const f3 = find({ q: 'loop', layer: 'gui' })
+    ok('find: layer filter applies (gui = the src/ app)',
+      f3.results.every((r) => r.path.startsWith('/src')))
+    ok('find: no match → zero results, not an error', find({ q: 'zzz-no-such-thing' }).total === 0)
+
+    /* stat */
+    const st = stat('/packages/core/src/loop.ts')
+    ok('stat: loop.ts — size/lines/urls from the snapshot',
+      st.type === 'file' && st.size === loopMeta.bytes && st.lines === loopMeta.lines &&
+      st.rawUrl === '/source/raw/packages/core/src/loop.ts' && st.dirUrl === '/source/dir/packages/core/src.json' &&
+      st.lastModified === loopMeta.lastModified)
+    const stReadme = stat('README.md')
+    ok('stat: README.md — md summary surfaced',
+      stReadme.language === 'markdown' && typeof stReadme.summary === 'string' && stReadme.summary.length > 0)
+    let statDir = false
+    try {
+      stat('/packages/core')
+    } catch (e) {
+      statDir = isLsError(e) && e.status === 400 && e.code === 'not_a_file'
+    }
+    ok('stat: directory rejected with a hint', statDir)
+    let statMiss = false
+    try {
+      stat('/nope/nope.ts')
+    } catch (e) {
+      statMiss = isLsError(e) && e.status === 404
+    }
+    ok('stat: missing file → 404', statMiss)
+
+    /* quickref */
+    const qr = quickref()
+    ok('quickref: curated, validated, all fresh',
+      qr.count >= 20 && qr.map['agentic loop'] === '/packages/core/src/loop.ts' &&
+      qr.map['system prompt'] === '/packages/core/src/system-prompt.ts' && qr.stale.length === 0,
+      JSON.stringify(qr.stale))
+
+    /* path safety */
+    const rejects: Array<[string, string]> = [
+      ['../../etc', 'path_traversal'],
+      ['/..', 'path_traversal'],
+      ['../etc', 'path_traversal'],
+      ['/a//b', 'bad_path'],
+      ['\\etc', 'bad_path'],
+      ['a\u0000b', 'bad_path'],
+    ]
+    for (const [bad, code] of rejects) {
+      try {
+        ls({ path: bad })
+        ok(`security: ${JSON.stringify(bad)} rejected`, false)
+      } catch (e) {
+        ok(`security: ${JSON.stringify(bad)} rejected (${code})`,
+          isLsError(e) && e.status === 400 && e.code === code)
+      }
+    }
+    let escaped = false
+    try {
+      ls({ path: '/etc/passwd' })
+    } catch (e) {
+      escaped = isLsError(e) && e.status === 404
+    }
+    ok('security: /etc/passwd is a 404, not a leak', escaped)
+    const engineSrc = fs.readFileSync(path.join(REPO, 'website/src/lib/source-ls.ts'), 'utf8')
+    ok('security: the engine never touches the filesystem',
+      !engineSrc.includes('node:fs') && !engineSrc.includes('readFileSync'))
+
+    /* depth guard */
+    let deepBad = false
+    try {
+      ls({ path: '/', recursive: true, depth: MAX_DEPTH + 1 })
+    } catch (e) {
+      deepBad = isLsError(e) && e.status === 400
+    }
+    ok('ls: depth capped (1..8) — rejects 9', deepBad)
+
+    /* plain text */
+    const text = renderLsText(ls({ path: '/packages/core/src' }))
+    ok('text: ls — tree glyphs + line counts',
+      text.includes('├──') && text.includes('└──') && /loop\.ts\s+951 lines/.test(text))
+    const textRec = renderLsText(ls({ path: '/packages/core/src', recursive: true, depth: 2 }))
+    ok('text: recursive — nested glyphs + aggregates',
+      textRec.includes('│   ') && textRec.includes('tools/') && textRec.includes(`${toolsFiles.length} files`))
+    const textAll = renderLsText(ls({ path: '/', all: true }))
+    ok('text: all=true — hidden dirs noted',
+      textAll.includes('never in the snapshot') && textAll.includes('node_modules'))
+
+    /* the HTTP layer — end to end through the routes' shared handler */
+    const h1 = handleLsApi(new Request('http://x/source/ls?path=/packages/core/src'), 'ls')
+    ok('http: ls — 200 JSON, pretty, cacheable',
+      h1.status === 200 && h1.headers.get('content-type') === 'application/json; charset=utf-8' &&
+      (h1.headers.get('cache-control') ?? '').includes('max-age') && h1.headers.get('vary') === 'Accept')
+    const h1body = JSON.parse(await h1.text())
+    ok('http: ls body — the example shape',
+      h1body.path === '/packages/core/src' && h1body.parent === '/packages/core' &&
+      Array.isArray(h1body.entries) && h1body.entries.some((e: { name: string }) => e.name === 'loop.ts'))
+    const h2 = handleLsApi(new Request('http://x/source/ls?path=/packages/core&recursive=true&depth=2'), 'ls')
+    const h2body = JSON.parse(await h2.text())
+    ok('http: recursive tree shape', h2body.tree?.type === 'directory' && Array.isArray(h2body.tree?.children))
+    const h3 = handleLsApi(new Request('http://x/source/ls?path=/', { headers: { accept: 'text/plain' } }), 'ls')
+    const h3text = await h3.text()
+    ok('http: Accept: text/plain — text body + content-type',
+      h3.status === 200 && h3.headers.get('content-type') === 'text/plain; charset=utf-8' &&
+      h3text.includes('├──') && h3text.includes('files'))
+    const h4 = handleLsApi(new Request('http://x/source/ls?path=/packages/core/src&format=text'), 'ls')
+    ok('http: ?format=text works too', (h4.headers.get('content-type') ?? '').startsWith('text/plain'))
+    const h5 = handleLsApi(new Request('http://x/source/ls?path=../../etc'), 'ls')
+    ok('http: traversal rejected at the HTTP layer',
+      h5.status === 400 && JSON.parse(await h5.text()).code === 'path_traversal')
+    const h6 = handleLsApi(new Request('http://x/source/ls/find?q=loop'), 'find')
+    ok('http: find — 200 + results', (JSON.parse(await h6.text()).total ?? 0) >= 3)
+    const h7 = handleLsApi(new Request('http://x/source/ls/stat?path=packages/core/src/loop.ts'), 'stat')
+    ok('http: stat — works without the leading slash too',
+      JSON.parse(await h7.text()).path === '/packages/core/src/loop.ts')
+    const h8 = handleLsApi(new Request('http://x/source/ls/quickref'), 'quickref')
+    ok('http: quickref — 200 + map', (JSON.parse(await h8.text()).count ?? 0) >= 20)
+    const h9 = handleLsApi(new Request('http://x/source/ls?recursive=maybe'), 'ls')
+    ok('http: bad boolean rejected with 400', h9.status === 400 && JSON.parse(await h9.text()).code === 'bad_param')
+
+    /* route files are thin, force-dynamic adapters */
+    for (const [route, kind] of [
+      ['route.ts', 'ls'], ['find/route.ts', 'find'], ['stat/route.ts', 'stat'], ['quickref/route.ts', 'quickref'],
+    ] as const) {
+      const src = fs.readFileSync(path.join(REPO, 'website/src/app/source/ls', route), 'utf8')
+      ok(`route: ls/${route} — force-dynamic + handleLsApi('${kind}')`,
+        src.includes("export const dynamic = 'force-dynamic'") && src.includes(`handleLsApi(request, '${kind}')`))
+    }
   }
 
   /* ------------------------------------------------------------- part C */
-  console.log('\n3) highlighter — tokenizer sanity')
+  console.log('\n4) highlighter — tokenizer sanity')
   {
     const { tokenizeLines, familyOf } = await import(path.join(REPO, 'website/src/lib/highlight.ts'))
 

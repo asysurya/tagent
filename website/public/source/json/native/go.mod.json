@@ -1,1 +1,1 @@
-{"path":"native/go.mod","content":"module tagent-native\n\ngo 1.21\n","language":"go","lines":4,"bytes":30,"rawUrl":"/source/raw/native/go.mod"}
+{"path":"native/go.mod","content":"module tagent-native\n\ngo 1.21\n","language":"go","lines":4,"bytes":30,"lastModified":"2026-09-23","summary":null,"rawUrl":"/source/raw/native/go.mod"}

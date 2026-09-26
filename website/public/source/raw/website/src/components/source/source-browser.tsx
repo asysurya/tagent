@@ -164,6 +164,10 @@ function LoadError({ onRetry, rawUrl }: { onRetry: () => void; rawUrl: string | 
 function Welcome({ snapshot, onSelect }: { snapshot: SourceSnapshot; onSelect: (p: string) => void }) {
   const c = snapshot.counts
   const endpoints: [string, string][] = [
+    ['GET /source/ls?path=/', 'ls one folder — recursive · depth · detail · layer · all'],
+    ['GET /source/ls/find?q=loop', 'find files & folders by name (layer + limit filters)'],
+    ['GET /source/ls/stat?path=<file>', 'one file: size · lines · summary · lastModified · URLs'],
+    ['GET /source/ls/quickref', 'the curated where-is-what map (system prompt, loop, updater…)'],
     ['GET /source/tree.json', 'the whole tree in one shot — dirs carry size + line aggregates'],
     ['GET /source/dir.json', 'list the root directory — children with sizes + URLs'],
     ['GET /source/dir/<path>.json', 'list one directory — files, subdirs, parent link'],
@@ -214,9 +218,11 @@ function Welcome({ snapshot, onSelect }: { snapshot: SourceSnapshot; onSelect: (
           Fetch the source — an API for agents
         </h3>
         <p className="mt-2 text-sm leading-relaxed text-zinc-400">
-          Every file and directory is served statically — no auth, no rate-limit games. Walk the
-          tree with the dir listings, then read files raw or as JSON. Point any agent (or curl)
-          at these endpoints:
+          Every file and directory is fetchable — no auth, no rate-limit games. List folders with
+          the <code className="rounded bg-zinc-800 px-1 text-xs text-orange-300">/source/ls</code> query
+          API (like <code className="rounded bg-zinc-800 px-1 text-xs text-orange-300">ls</code> in a terminal —
+          flat, recursive, plain-text), walk the static dir listings, then read files raw or as JSON. Point any
+          agent (or curl) at these endpoints:
         </p>
         <div className="mt-3 space-y-1.5">
           {endpoints.map(([ep, desc]) => (
@@ -226,6 +232,18 @@ function Welcome({ snapshot, onSelect }: { snapshot: SourceSnapshot; onSelect: (
               <CopyChip text={ep.replace('GET ', '')} />
             </div>
           ))}
+        </div>
+        <div className="relative mt-3">
+          <CopyChip text={`curl -s "${SITE}/source/ls?path=/packages/core&recursive=true&depth=2"`} />
+          <pre className="mono pretty-scroll overflow-x-auto rounded-lg border border-zinc-800 bg-zinc-900/70 p-4 pr-16 text-[12px] leading-relaxed text-zinc-300">
+            <code>{`# ls: one folder, a recursive tree, or plain text
+
+curl -s "${SITE}/source/ls?path=/packages/core/src"
+curl -s "${SITE}/source/ls?path=/packages/core&recursive=true&depth=2"
+curl -H 'Accept: text/plain' -s "${SITE}/source/ls?path=/"           # tree, readable
+curl -s "${SITE}/source/ls/find?q=updater"                        # locate files
+curl -s "${SITE}/source/ls/quickref" | jq -r '.map["agentic loop"]'  # where things live`}</code>
+          </pre>
         </div>
         <div className="relative mt-3">
           <CopyChip text={`curl -s ${SITE}/source/raw/packages/core/src/version.ts`} />

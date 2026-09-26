@@ -6,6 +6,73 @@ section per task. Fresh agents: read top-down before working.
 
 ---
 
+Task ID: 15
+Agent: Super Z (main)
+Task: The /source/ls API — queryable per-folder listings over the snapshot
+(`ls` for the codebase over HTTP). Website-only (no CLI change).
+
+Work Log:
+- Endpoints (Next.js App Router, `src/app/source/ls/**`, all thin
+  force-dynamic adapters over one shared handler):
+  · GET /source/ls?path=&recursive=&depth=&all=&detail=&layer= — list one
+    folder flat, or a nested tree when recursive=true (depth = levels of
+    entries visible below path, default 1, max 8; at the cut, dir nodes
+    carry a children COUNT instead of the array).
+  · GET /source/ls/find?q=&layer=&limit= — name-first ranked search over
+    files AND folders (limit default 50, max 200, truncated flag).
+  · GET /source/ls/stat?path=<file> — one file: size, lines, language,
+    lastModified, the JSDoc-header summary, raw/json/dir URLs. Dirs are
+    rejected with a 400 pointing at /ls.
+  · GET /source/ls/quickref — the curated where-is-what map (25 entries:
+    system prompt, agentic loop, updater, model roles, …), validated
+    against the snapshot at request time; stale entries are reported,
+    never silently dropped.
+- Every endpoint speaks JSON by default and plain text (`tree`-style
+  glyphs, `ls`-readable) with `Accept: text/plain` or `?format=text`.
+  Headers: content-type, `cache-control: public, max-age=600,
+  s-maxage=3600`, `vary: Accept`.
+- The engine: website/src/lib/source-ls.ts — framework-free, imports the
+  generated SOURCE_SNAPSHOT module (byte-identical to index.json), builds
+  ONE in-memory index per instance: no filesystem access, no per-request
+  rescans, `snapshot: { version, generatedAt }` in every response is the
+  build stamp. Layer filter (core/cli/gui/website/native/scripts) prunes
+  listings AND aggregates. `all=true` surfaces the never-included dir
+  list (node_modules, .git, dist, build, .next, gui-dist, …).
+- Security: paths are only ever looked up in the in-memory tree — there
+  is no filesystem to traverse. `.`/`..` segments, backslashes, NUL and
+  control chars are rejected 400 outright; unknown paths are 404.
+- Generator extended (gen-source-snapshot.ts): every file's metadata now
+  carries `lastModified` (one-pass `git log --no-merges --name-only
+  --date=short` map, mtime fallback for uncommitted/fixture files) and
+  `summary` (first meaningful line of the leading block/line comment,
+  first md heading, sh/py `#` comment, py docstring). Added to
+  index.json files[], json/<path>.json wrappers, and the page module
+  (SourceFileMeta grew lastModified?/summary?).
+- Docs: the /source welcome panel lists all 11 endpoints (the 4 /ls ones
+  first) with a new /ls curl block (flat, recursive, plain-text, find,
+  quickref via jq); website/README.md documents params + examples and
+  the no-fs/no-rescan design. docs/ has no API doc (USERLAND.md is an
+  Android how-to), so website/README.md is the canonical reference.
+- Tests: test-source-site.ts 70 → 127 checks (generator: summary +
+  lastModified on the fixture; engine: flat/recursive/depth-cut shape,
+  detail, layers, find ranking/limit/layer, stat, quickref freshness,
+  6 traversal rejections + /etc/passwd 404 + "engine never touches fs"
+  source check, depth cap, plain text, 9 end-to-end HTTP cases, route
+  adapters). All green.
+- Verified live (next start :3100): all 5 user verification cases plus
+  detail/layer/all/quickref/stat/find, text formats, headers; tsc: website
+  clean, root = 107-error pre-existing baseline exactly (no new errors);
+  next build 12 routes (4 new ƒ dynamic); agent-browser: welcome panel
+  shows the /ls API + curl examples, zero console errors.
+- website/package.json 0.12.0 → 0.13.0. Snapshot regenerated (330 files
+  · 7,204 symbols · 48 dir listings).
+
+Stage Summary:
+- /source/ls is live: `ls`, `find`, `stat`, and `quickref` over the
+  codebase — JSON for agents, plain-text trees for humans, one in-memory
+  index, zero filesystem access, traversal-proof by construction.
+
+---
 Task ID: 14
 Agent: Super Z (main)
 Task: The dir API — list directories over HTTP on the /source snapshot.

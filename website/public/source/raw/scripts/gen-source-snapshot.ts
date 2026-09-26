@@ -11,8 +11,14 @@
  *                                    + their own dirUrl, plus a parent link
  *   public/source/symbols.json      lightweight symbol index (search)
  *   public/source/raw/<path>        raw file contents — humans AND agents
- *   public/source/json/<path>.json  { path, content, language, lines, bytes }
+ *   public/source/json/<path>.json  { path, content, language, lines, bytes,
+ *                                    lastModified, summary }
  *   src/data/source-snapshot.ts     TS module for the /source page (tree + stats)
+ *
+ * Every file's metadata also carries `lastModified` (the last git commit
+ * date that touched it — mtime fallback for uncommitted files) and
+ * `summary` (the first meaningful line of its header comment / first md
+ * heading), which the /source/ls API serves without reading contents.
  *
  * The dir listings are fully navigable with zero state: an agent fetches
  * dir.json, follows any child's dirUrl deeper (or parent back up), then
@@ -24,6 +30,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import { execFileSync } from 'node:child_process'
 
 const ROOT = path.resolve(process.env.TAGENT_SNAPSHOT_ROOT ?? path.join(import.meta.dir, '..'))
 const OUT = path.resolve(process.env.TAGENT_SNAPSHOT_OUT ?? path.join(ROOT, 'website'))
@@ -152,6 +159,108 @@ function readVersion(): string {
   return 'dev'
 }
 
+/* ------------------------------------------------- lastModified + summary */
+
+/**
+ * One `git log` pass → map of repo path → last commit date (YYYY-MM-DD).
+ * Newer commits come first, so the first time a path is seen wins. When git
+ * is unavailable (hermetic fixtures) the map is empty and collectFile falls
+ * back to the filesystem mtime.
+ */
+function gitLastModified(): Map<string, string> {
+  const map = new Map<string, string>()
+  try {
+    const out = execFileSync(
+      'git',
+      ['log', '--no-merges', '--name-only', '--date=short', '--format=%x00%ad'],
+      { cwd: ROOT, maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' },
+    )
+    for (const chunk of (out as string).split('\0')) {
+      const lines = chunk.split('\n').filter(Boolean)
+      if (lines.length < 2) continue
+      const date = lines[0]
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue
+      for (const f of lines.slice(1)) if (!map.has(f)) map.set(f, date)
+    }
+  } catch {
+    /* no git / no history — the mtime fallback in collectFile applies */
+  }
+  return map
+}
+
+const GIT_DATES = gitLastModified()
+
+/** collapse + de-decorate a candidate summary line */
+function cleanSummary(s: string): string | null {
+  const t = s.replace(/\s+/g, ' ').replace(/^[-\u2013\u2014:]+\s*/, '').trim()
+  return t ? t.slice(0, 160) : null
+}
+
+/**
+ * The file's one-line "what is this": the first meaningful line of its
+ * leading block/line comment (JSDoc header), its first md heading, or the
+ * first comment line of a shell script / python docstring. null when the
+ * file starts straight into code.
+ */
+function summaryOf(content: string, language: string): string | null {
+  const lines = content.split('\n')
+  if (language === 'md') {
+    for (const line of lines) {
+      const m = line.match(/^#{1,3}\s+(.+)/)
+      if (m) return cleanSummary(m[1])
+    }
+    return null
+  }
+  let i = 0
+  while (i < lines.length) {
+    const t = lines[i].trim()
+    if (t === '' || t.startsWith('#!')) {
+      i++
+      continue
+    }
+    break
+  }
+  const first = (lines[i] ?? '').trim()
+  if (!first) return null
+  let m: RegExpMatchArray | null
+  if ((m = first.match(/^\/\*\*?\s*(.*)$/))) {
+    // block comment (JSDoc) — m[1] is the rest of the opening line, then the
+    // comment body lines follow until the closing */
+    const out: string[] = []
+    const closedOnOpening = /\*\//.test(m[1])
+    const opening = m[1].replace(/\*\/.*$/, '').trim()
+    if (opening && !opening.startsWith('@')) out.push(opening)
+    if (!closedOnOpening) {
+      for (let j = i + 1; j < lines.length && out.length < 2; j++) {
+        const endedHere = lines[j].includes('*/')
+        const b = lines[j].replace(/^\s*\*+\s?/, '').replace(/\*\/.*$/, '').trim()
+        if (!b || b.startsWith('@')) {
+          if (out.length) break
+          else continue
+        }
+        out.push(b)
+        if (endedHere) break
+      }
+    }
+    return out.length ? cleanSummary(out.join(' ')) : null
+  }
+  if ((m = first.match(/^\/\/\s?(.*)$/))) return cleanSummary(m[1])
+  if ((m = first.match(/^#\s?(.*)$/)) && (language === 'sh' || language === 'py')) return cleanSummary(m[1])
+  if (language === 'py' && (m = first.match(/^"""(.*)$/))) {
+    const out: string[] = []
+    for (let j = i; j < lines.length && out.length < 2; j++) {
+      let l = lines[j].replace(/^"""/, '').replace(/""".*$/, '').trim()
+      if (!l) {
+        if (out.length) break
+        continue
+      }
+      out.push(l)
+    }
+    return out.length ? cleanSummary(out.join(' ')) : null
+  }
+  return null
+}
+
 /* ------------------------------------------------------------- walking -- */
 
 interface SnapFile {
@@ -160,6 +269,8 @@ interface SnapFile {
   lines: number
   language: string
   content: string
+  lastModified: string | null
+  summary: string | null
 }
 
 const excluded: string[] = []
@@ -222,12 +333,15 @@ function collectFile(abs: string, rel: string, out: SnapFile[]) {
     excludedBecause(rel, 'binary')
     return
   }
+  const language = languageOf(rel)
   out.push({
     path: rel,
     bytes: stat.size,
     lines: content.split('\n').length,
-    language: languageOf(rel),
+    language,
     content,
+    lastModified: GIT_DATES.get(rel) ?? stat.mtime.toISOString().slice(0, 10),
+    summary: summaryOf(content, language),
   })
 }
 
@@ -446,6 +560,8 @@ function main() {
         language: f.language,
         lines: f.lines,
         bytes: f.bytes,
+        lastModified: f.lastModified,
+        summary: f.summary,
         rawUrl: `/source/raw/${encPath(f.path)}`,
       }),
     )
@@ -477,6 +593,8 @@ function main() {
       bytes: f.bytes,
       lines: f.lines,
       language: f.language,
+      ...(f.lastModified ? { lastModified: f.lastModified } : {}),
+      ...(f.summary ? { summary: f.summary } : {}),
       rawUrl: `/source/raw/${encPath(f.path)}`,
       jsonUrl: `/source/json/${encPath(f.path)}.json`,
     })),
@@ -497,6 +615,10 @@ export interface SourceFileMeta {
   bytes: number
   lines: number
   language: string
+  /** last git commit that touched the file (YYYY-MM-DD; mtime fallback) */
+  lastModified?: string
+  /** first meaningful line of the file's header comment / first md heading */
+  summary?: string
   rawUrl: string
   jsonUrl: string
 }

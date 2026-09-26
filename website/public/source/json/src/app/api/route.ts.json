@@ -1,1 +1,1 @@
-{"path":"src/app/api/route.ts","content":"import { NextResponse } from \"next/server\";\n\nexport async function GET() {\n  return NextResponse.json({ message: \"Hello, world!\" });\n}","language":"ts","lines":5,"bytes":134,"rawUrl":"/source/raw/src/app/api/route.ts"}
+{"path":"src/app/api/route.ts","content":"import { NextResponse } from \"next/server\";\n\nexport async function GET() {\n  return NextResponse.json({ message: \"Hello, world!\" });\n}","language":"ts","lines":5,"bytes":134,"lastModified":"2026-09-23","summary":null,"rawUrl":"/source/raw/src/app/api/route.ts"}

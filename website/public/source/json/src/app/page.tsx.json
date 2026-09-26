@@ -1,1 +1,1 @@
-{"path":"src/app/page.tsx","content":"import { TagentApp } from '@/components/tagent/tagent-app'\n\nexport default function Home() {\n  return <TagentApp />\n}\n","language":"tsx","lines":6,"bytes":118,"rawUrl":"/source/raw/src/app/page.tsx"}
+{"path":"src/app/page.tsx","content":"import { TagentApp } from '@/components/tagent/tagent-app'\n\nexport default function Home() {\n  return <TagentApp />\n}\n","language":"tsx","lines":6,"bytes":118,"lastModified":"2026-09-16","summary":null,"rawUrl":"/source/raw/src/app/page.tsx"}

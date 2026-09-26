@@ -1,1 +1,1 @@
-{"path":"website/postcss.config.mjs","content":"const config = {\n  plugins: [\"@tailwindcss/postcss\"],\n};\n\nexport default config;\n","language":"js","lines":6,"bytes":81,"rawUrl":"/source/raw/website/postcss.config.mjs"}
+{"path":"website/postcss.config.mjs","content":"const config = {\n  plugins: [\"@tailwindcss/postcss\"],\n};\n\nexport default config;\n","language":"js","lines":6,"bytes":81,"lastModified":"2026-09-17","summary":null,"rawUrl":"/source/raw/website/postcss.config.mjs"}
