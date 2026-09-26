@@ -64,8 +64,9 @@ Work Log:
   clean, root = 107-error pre-existing baseline exactly (no new errors);
   next build 12 routes (4 new ƒ dynamic); agent-browser: welcome panel
   shows the /ls API + curl examples, zero console errors.
-- website/package.json 0.12.0 → 0.13.0. Snapshot regenerated (330 files
-  · 7,204 symbols · 48 dir listings).
+- website/package.json 0.12.0 → 0.13.0. Snapshot regenerated (329 files
+  · 7,197 symbols · 48 dir listings). Live on Vercel (commit 2952386):
+  all 5 verification cases + quickref/stat confirmed against production.
 
 Stage Summary:
 - /source/ls is live: `ls`, `find`, `stat`, and `quickref` over the
