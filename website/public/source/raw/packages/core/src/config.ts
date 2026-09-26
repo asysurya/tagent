@@ -49,7 +49,7 @@ export function defaultConfig(): TagentConfig {
     maxTurns: 40,
     nativeTools: true,
     worklog: { enabled: true },
-    skills: { autoRoute: true, autoRouteMax: 3, autoRouteThreshold: 0.5 },
+    skills: { autoRoute: true, autoRouteMax: 3, autoRouteThreshold: 0.5, autoRouteMaxTokens: 15_000 },
     caveman: false,
     theme: 'dark',
     compact: { threshold: 80, keepTokens: 10_000 },

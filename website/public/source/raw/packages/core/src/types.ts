@@ -462,6 +462,11 @@ export interface TagentConfig {
     autoRouteMax?: number
     /** min match score 0..1 for auto-load (default 0.5) */
     autoRouteThreshold?: number
+    /** v0.30.1: total token budget (≈ chars/4) for the session's
+     *  auto-loaded skill bodies (default 15000) — when exceeded, the
+     *  lowest-score skills are truncated first. Manual load_skill is
+     *  not affected. */
+    autoRouteMaxTokens?: number
   }
 }
 

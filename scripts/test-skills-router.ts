@@ -10,10 +10,19 @@
  * transparency notice + WORKLOG entry, system-prompt rendering.
  *
  * Run: bun scripts/test-skills-router.ts
+ *
+ * v0.30.1 regression (sections 14–19): BUG-1 topic-shift re-route,
+ * BUG-3 keyword word-boundary, BUG-2 total token cap
+ * (skills.autoRouteMaxTokens), short-follow-up duplicate guard, manual
+ * load_skill cap exemption, search_skills word-boundary.
  */
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+// type-only imports (erased at runtime — no effect on the TAGENT_SKILLS_DIR
+// setup or the dynamic imports below); real types for the section-13 fixtures
+import type { SessionData } from '../packages/core/src/types'
+import type { CompletionRequest, ProviderAdapter } from '../packages/core/src/providers'
 
 let pass = 0
 let fail = 0
@@ -37,6 +46,9 @@ mkSkill(BUILTIN, 'fake-cli', 'Scaffold a command-line parser.', 'cli, terminal',
 mkSkill(BUILTIN, 'fake-api', 'Design a REST API server with tests.', 'backend, api, test')
 mkSkill(BUILTIN, 'fake-review', 'Review code for correctness.', 'review, quality')
 mkSkill(BUILTIN, 'fake-bug', 'Hunt down and fix a bug.', 'debug, bug')
+// v0.30.1 regression fixture (BUG-3): a devops-tagged skill so substring
+// false positives ('ci' ⊂ "decide", 'pip' ⊂ "pipelines") are observable
+mkSkill(BUILTIN, 'fake-devops', 'Deploy with docker and CI pipelines.', 'devops, docker')
 process.env.TAGENT_SKILLS_DIR = BUILTIN
 
 const { listSkills, loadSkill, searchSkillsTool, loadSkillTool, skillState, sessionAutoSkills, recordManualSkillLoad, unloadSessionSkill, disableSessionSkillRouting, clearSkillState } =
@@ -48,8 +60,8 @@ const { buildSystemPrompt, renderAutoLoadedSkillsBlock } = await import('../pack
 const { loadConfig } = await import('../packages/core/src/config')
 
 const CFG = loadConfig('/nonexistent-root') // defaults: autoRoute true, max 3, threshold 0.5
-function ctx(root: string, sessionId = 'test-sess') {
-  return { workspaceRoot: root, sessionId, depth: 0, config: CFG, events: {}, todos: [] } as never
+function ctx(root: string, sessionId = 'test-sess', config = CFG) {
+  return { workspaceRoot: root, sessionId, depth: 0, config, events: {}, todos: [] } as never
 }
 function freshRoot(name: string): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `tagent-sr-${name}-`))
@@ -72,8 +84,8 @@ console.log('2) search_skills output shape (A):')
   const root = freshRoot('search')
   const raw = await searchSkillsTool.run({}, ctx(root))
   const out = JSON.parse(raw)
-  ok(Array.isArray(out.skills) && out.skills.length === 6, `skills array (${out.skills?.length})`)
-  ok(out.total === 6 && out.shown === 6 && out.truncated === false, 'total/shown/truncated correct')
+  ok(Array.isArray(out.skills) && out.skills.length === 7, `skills array (${out.skills?.length})`)
+  ok(out.total === 7 && out.shown === 7 && out.truncated === false, 'total/shown/truncated correct')
   ok(typeof out.hint === 'string' && out.hint.includes('load_skill'), 'hint points at load_skill')
   const s = out.skills[0]
   ok(typeof s.name === 'string' && typeof s.description === 'string' && Array.isArray(s.tags), 'entry shape: name/description/tags')
@@ -85,13 +97,13 @@ console.log('3) query / tags / limit filters (B, C, D):')
   const root = freshRoot('filter')
   const q = JSON.parse(await searchSkillsTool.run({ query: 'WEB' }, ctx(root)))
   ok(q.total >= 1 && q.skills.every((s: { name: string; description: string; tags?: string[] }) => /web|frontend/i.test(s.name + s.description) || (s.tags ?? []).some((t: string) => /web/.test(t))), 'query "WEB" (case-insensitive) matches web skills')
-  ok(q.total < 6, 'query filters (subset of all)')
+  ok(q.total < 7, 'query filters (subset of all)')
   const t = JSON.parse(await searchSkillsTool.run({ tags: ['bot'] }, ctx(root)))
   ok(t.skills.every((s: { tags?: string[] }) => (s.tags ?? []).includes('bot')), 'tags [bot] only bot skills')
   const t2 = JSON.parse(await searchSkillsTool.run({ tags: ['bot', 'discord'] }, ctx(root)))
   ok(t2.skills.every((s: { tags?: string[] }) => ['bot', 'discord'].every((x) => (s.tags ?? []).includes(x))), 'tags are AND-ed')
   const l = JSON.parse(await searchSkillsTool.run({ limit: 1 }, ctx(root)))
-  ok(l.shown === 1 && l.total === 6 && l.truncated === true, 'limit 1 → shown 1, truncated true')
+  ok(l.shown === 1 && l.total === 7 && l.truncated === true, 'limit 1 → shown 1, truncated true')
 }
 
 console.log('4) two-stage flow: search → load (E, H):')
@@ -287,20 +299,20 @@ console.log('13) end-to-end through the real AgentLoop:')
   const notices: string[] = []
   const wireCalls: { messages: { role: string; content: string }[] }[] = []
   let turn = 0
-  const fake = {
+  const fake: ProviderAdapter = {
     id: 'zai', label: 'fake', supportsNativeTools: false, models: [],
     complete: async () => '',
-    completeStream: async (_req: never) => {
+    completeStream: async (_req: CompletionRequest) => {
       turn++
-      wireCalls.push({ messages: _req.messages as { role: string; content: string }[] })
+      wireCalls.push({ messages: _req.messages })
       if (turn === 1) {
         // stage 1 of the two-stage flow: search before loading
         return { text: 'looking up skills first.\n```tagent:action\n{"tool": "search_skills", "input": {"query": "web"}}\n```' }
       }
       return { text: 'done — used the auto-loaded playbook.' }
     },
-  } as never
-  const session = {
+  }
+  const session: SessionData = {
     id: 'e2e-1', workspaceId: root, title: 't', model: 'glm-4.7', mode: 'build',
     createdAt: Date.now(), updatedAt: Date.now(), messageCount: 0, messages: [], todos: [],
   }
@@ -321,6 +333,175 @@ console.log('13) end-to-end through the real AgentLoop:')
   ok(String(toolResult?.content).includes('"skills"') && String(toolResult?.content).includes('fake-web'), 'loop: search returned JSON with fake-web')
   const wl = fs.readFileSync(path.join(root, 'WORKLOG.md'), 'utf8')
   ok(wl.includes('[auto-router] Auto-loaded: fake-web'), 'loop: WORKLOG.md journaled the auto-load')
+}
+
+console.log('14) BUG-1 regression — topic-shift re-route after v0.30.1:')
+{
+  // direct: existingLoaded must filter BEFORE the top-max slice
+  const root = freshRoot('bug1')
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ dependencies: { next: '^14' } }))
+  const t1 = routeSkills({ userMessage: 'bikin web blog', workspaceRoot: root })
+  ok(t1.some((r) => r.name === 'fake-web'), 'A: task1 "bikin web blog" → fake-web routed')
+  const t2 = routeSkills({ userMessage: 'bikin CLI parser', workspaceRoot: root, existingLoaded: ['fake-web'] })
+  ok(t2.length > 0, `A: task2 re-route is not a no-op (${t2.map((r) => r.name).join(', ') || '[]'})`)
+  ok(t2.some((r) => r.name === 'fake-cli'), 'A: task2 "bikin CLI parser" + existingLoaded [fake-web] → fake-cli')
+  ok(!t2.some((r) => r.name === 'fake-web'), 'A: already-loaded fake-web NOT re-routed')
+
+  // stronger e2e — the audit's FINDING X setup: three 0.9 rule hits (next +
+  // discord.js + express) fill the top-max slice, then the topic shifts
+  const root2 = freshRoot('bug1x')
+  fs.writeFileSync(path.join(root2, 'package.json'), JSON.stringify({ dependencies: { next: '^14', 'discord.js': '^14', express: '^4' } }))
+  fs.writeFileSync(path.join(root2, 'WORKLOG.md'), '# Worklog\n')
+  const sid = 'bug1-e2e'
+  const n1 = maybeAutoRouteSkills({ sessionId: sid, workspaceRoot: root2, userText: 'bikin web blog', priorUserMessages: [], config: CFG })
+  const s1 = sessionAutoSkills(sid)
+  ok(s1.length === 3 && s1.every((s) => s.matchScore === 0.9 && !!s.matchReason?.startsWith('rule:')), `A: e2e initial route loads the three 0.9 rule skills (${s1.map((s) => s.name).join(', ')})`)
+  ok(n1 !== null && n1.includes('fake-web') && n1.includes('fake-bot') && n1.includes('fake-api'), 'A: e2e initial notice names all three rule skills')
+  const n2 = maybeAutoRouteSkills({ sessionId: sid, workspaceRoot: root2, userText: 'sekarang bikin CLI parser untuk parse log', priorUserMessages: ['bikin web blog'], config: CFG })
+  ok(n2 !== null && n2.includes('fake-cli'), `A: e2e topic shift re-routes — notice includes fake-cli (${n2 === null ? 'null (BUG-1 regression!)' : n2.split('\n')[0]})`)
+  const s2 = sessionAutoSkills(sid)
+  ok(s2.length === 4 && s2.some((s) => s.name === 'fake-cli'), `A: e2e sessionAutoSkills gains fake-cli (${s2.map((s) => s.name).join(', ')})`)
+  ok(s2.filter((s) => s.name === 'fake-web').length === 1, 'A: e2e fake-web still in context exactly once (no duplicate)')
+}
+
+console.log('15) BUG-3 regression — keyword word-boundary after v0.30.1:')
+{
+  const root = freshRoot('bug3') // no package.json → keyword-only workspace
+  const a = routeSkills({ userMessage: 'help me decide the color scheme', workspaceRoot: root })
+  ok(a.length === 0, `B: "decide the color scheme" → no skill at all — 'ci' ⊂ "decide" must not fire (${a.map((r) => r.name).join(', ') || '(none)'})`)
+  ok(!a.some((r) => r.name === 'fake-devops'), 'B: no fake-devops from "decide"')
+  const b = routeSkills({ userMessage: 'apa kabar latest version', workspaceRoot: root })
+  ok(b.length === 0 && !b.some((r) => r.name === 'fake-api'), `B: "latest version" → no fake-api — 'test' ⊂ "latest" must not fire (${b.map((r) => r.name).join(', ') || '(none)'})`)
+  const c = routeSkills({ userMessage: 'bikin CI pipeline', workspaceRoot: root })
+  ok(c.some((r) => r.name === 'fake-devops'), `B: "bikin CI pipeline" → fake-devops DOES match (genuine whole-word 'ci') (${c.map((r) => r.name).join(', ')})`)
+  const d = routeSkills({ userMessage: 'latest test result', workspaceRoot: root })
+  ok(d.some((r) => r.name === 'fake-api'), `B: "latest test result" → fake-api DOES match (genuine whole-word 'test') (${d.map((r) => r.name).join(', ')})`)
+}
+
+console.log('16) BUG-2 regression — total token cap after v0.30.1:')
+{
+  // fixture: 6 skills with ~8k-char bodies (≈2018 tokens each after the 8k cap)
+  const root = freshRoot('bug2')
+  fs.writeFileSync(path.join(root, 'WORKLOG.md'), '# Worklog\n')
+  const capDir = path.join(root, '.tagent', 'skills')
+  const capBody = (name: string): string => `# ${name}\n\n${name} playbook. ` + 'lorem ipsum dolor sit amet '.repeat(320)
+  mkSkill(capDir, 'cap-w1', 'Web playbook one, plus api.', 'web, frontend, backend, api', capBody('cap-w1'))
+  mkSkill(capDir, 'cap-w2', 'Web playbook two.', 'web, frontend', capBody('cap-w2'))
+  mkSkill(capDir, 'cap-w3', 'Web playbook three.', 'web, frontend', capBody('cap-w3'))
+  mkSkill(capDir, 'cap-c1', 'CLI playbook one.', 'cli, terminal', capBody('cap-c1'))
+  mkSkill(capDir, 'cap-c2', 'CLI playbook two.', 'cli, terminal', capBody('cap-c2'))
+  mkSkill(capDir, 'cap-c3', 'CLI playbook three.', 'cli, terminal', capBody('cap-c3'))
+  const estTokens = (s: string): number => Math.ceil(s.length / 4)
+  const truncLines = (logs: string[]): string[] => logs.filter((l) => l.includes('[auto-router] Truncated:'))
+  // fires web + api + review groups → cap-w1 0.6 (two tag groups), cap-w2/w3 0.5
+  const MSG = 'tulis blog api endpoint untuk review'
+  // topic-shift text that fires only the cli group → routes cap-c1..c3 at 0.5
+  const SHIFT = 'sekarang bikin command-line tool untuk parse log'
+
+  // (1) default cap (skills.autoRouteMaxTokens = 15000) → all 3 candidates load
+  {
+    const sid = 'cap-default'
+    const logs: string[] = []
+    const orig = console.log
+    console.log = (...args: unknown[]) => { logs.push(args.map(String).join(' ')) }
+    let note: string | null = null
+    try {
+      note = maybeAutoRouteSkills({ sessionId: sid, workspaceRoot: root, userText: MSG, priorUserMessages: [], config: CFG })
+    } finally { console.log = orig }
+    const loaded = sessionAutoSkills(sid)
+    const total = loaded.reduce((n, s) => n + estTokens(s.body), 0)
+    ok(loaded.length === 3, `C1: default cap 15000 → all 3 candidates load (${loaded.length})`)
+    ok(loaded.map((s) => s.name).join(',') === 'cap-w1,cap-w2,cap-w3', `C1: loaded = the top-3 by score (${loaded.map((s) => s.name).join(', ')})`)
+    ok(total <= 15_000, `C1: estimated total (chars/4) ≤ 15000 (${total})`)
+    ok(truncLines(logs).length === 0, `C1: no truncation under the default cap (${truncLines(logs).length} lines)`)
+    ok(note !== null && note.includes('cap-w1'), 'C1: notice rendered under the default cap')
+  }
+
+  // (2) low cap (3000) → keep-at-least-1: exactly 1 survivor + 2 truncation logs
+  {
+    const sid = 'cap-low'
+    const lowCfg = { ...CFG, skills: { autoRoute: true, autoRouteMax: 3, autoRouteThreshold: 0.5, autoRouteMaxTokens: 3_000 } }
+    const logs: string[] = []
+    const orig = console.log
+    console.log = (...args: unknown[]) => { logs.push(args.map(String).join(' ')) }
+    try {
+      maybeAutoRouteSkills({ sessionId: sid, workspaceRoot: root, userText: MSG, priorUserMessages: [], config: lowCfg })
+    } finally { console.log = orig }
+    const loaded = sessionAutoSkills(sid)
+    const total = loaded.reduce((n, s) => n + estTokens(s.body), 0)
+    const tl = truncLines(logs)
+    ok(tl.length === 2, `C2: exactly 2 truncation log lines (${tl.length})`)
+    ok(tl.every((l) => /^\[auto-router\] Truncated: [\w-]+ \(score 0\.5\) — total cap hit$/.test(l.trim())), `C2: log format "[auto-router] Truncated: <name> (score <score>) — total cap hit" (${tl.join(' | ')})`)
+    ok(tl.some((l) => l.includes('cap-w3')) && tl.some((l) => l.includes('cap-w2')), 'C2: truncated = the two lowest-score candidates (cap-w3, cap-w2)')
+    ok(loaded.length === 1 && loaded[0].name === 'cap-w1' && loaded[0].matchScore === 0.6, `C2: survivor is the highest-score skill (${loaded.map((s) => `${s.name} (${s.matchScore})`).join(', ')})`)
+    ok(total <= 3_000, `C2: surviving total tokens ≤ 3000 (${total})`)
+  }
+
+  // (3) accumulation: bodies already in the session count toward the budget
+  {
+    const sid = 'cap-accum'
+    const cfg10k = { ...CFG, skills: { autoRoute: true, autoRouteMax: 3, autoRouteThreshold: 0.5, autoRouteMaxTokens: 10_000 } }
+    maybeAutoRouteSkills({ sessionId: sid, workspaceRoot: root, userText: MSG, priorUserMessages: [], config: cfg10k }) // 3 skills ≈ 6054 tokens
+    ok(sessionAutoSkills(sid).length === 3, `C3: initial route loads 3 skills (${sessionAutoSkills(sid).length})`)
+    const logs: string[] = []
+    const orig = console.log
+    console.log = (...args: unknown[]) => { logs.push(args.map(String).join(' ')) }
+    let note2: string | null = null
+    try {
+      note2 = maybeAutoRouteSkills({ sessionId: sid, workspaceRoot: root, userText: SHIFT, priorUserMessages: [MSG], config: cfg10k })
+    } finally { console.log = orig }
+    const finalSkills = sessionAutoSkills(sid)
+    const total = finalSkills.reduce((n, s) => n + estTokens(s.body), 0)
+    ok(note2 !== null && note2.includes('cap-c1'), `C3: re-route loads only the new skill that fits (${note2 === null ? 'null' : note2.split('\n')[0]})`)
+    ok(truncLines(logs).length === 2, `C3: 2 of the 3 new candidates truncated — accumulation counted (${truncLines(logs).length})`)
+    ok(finalSkills.length === 4, `C3: session holds the 3 existing + 1 new skill (${finalSkills.length})`)
+    ok(total <= 10_000, `C3: final session total ≤ 10000 cap (${total})`)
+  }
+}
+
+console.log('17) D — short follow-up after the initial route:')
+{
+  const root = freshRoot('followup')
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ dependencies: { next: '^14' } }))
+  fs.writeFileSync(path.join(root, 'WORKLOG.md'), '# Worklog\n')
+  const sid = 'followup-sess'
+  const n1 = maybeAutoRouteSkills({ sessionId: sid, workspaceRoot: root, userText: 'bikin web blog', priorUserMessages: [], config: CFG })
+  ok(n1 !== null && n1.includes('fake-web'), 'D: initial "bikin web blog" → fake-web loaded once')
+  // "fix itu" — 2 tokens, 0 overlap with the prior message. KNOWN OUT-OF-SCOPE
+  // behavior (audit finding 2.2A, low, NOT fixed in v0.30.1): it is detected
+  // as a topic shift and loads fake-bug. Asserted as-is below — do NOT "fix".
+  const n2 = maybeAutoRouteSkills({ sessionId: sid, workspaceRoot: root, userText: 'fix itu', priorUserMessages: ['bikin web blog'], config: CFG })
+  const skills = sessionAutoSkills(sid)
+  ok(new Set(skills.map((s) => s.name)).size === skills.length, `D: no duplicate skill entries in the session (${skills.map((s) => s.name).join(', ')})`)
+  ok(skills.filter((s) => s.name === 'fake-web').length === 1, 'D: fake-web exactly once — the re-route never re-loads an existing skill')
+  ok(skills.map((s) => s.name).join(',') === 'fake-web,fake-bug' && n2 !== null && n2.includes('fake-bug'), `D: documented — "fix itu" still fires 2.2A and loads fake-bug [out of scope] (${n2 === null ? 'null' : n2.split('\n')[0]})`)
+}
+
+console.log('18) E — manual load_skill is NOT capped by the auto-router budget:')
+{
+  const root = freshRoot('manualcap')
+  const lowCfg = { ...CFG, skills: { autoRoute: true, autoRouteMax: 3, autoRouteThreshold: 0.5, autoRouteMaxTokens: 100 } }
+  const logs: string[] = []
+  const orig = console.log
+  console.log = (...args: unknown[]) => { logs.push(args.map(String).join(' ')) }
+  let body = ''
+  try {
+    body = await loadSkillTool.run({ name: 'fake-cli' }, ctx(root, 'manual-cap', lowCfg))
+  } finally { console.log = orig }
+  ok(body.startsWith('# fake-cli') && body.length > 4_000, `E: full fake-cli body returns despite autoRouteMaxTokens 100 (${body.length} chars)`)
+  ok(!body.includes('auto-loaded as an excerpt'), 'E: no excerpt marker — manual loads bypass the auto-router cap')
+  ok(!logs.some((l) => l.includes('[auto-router] Truncated:')), 'E: no [auto-router] Truncated log involvement')
+}
+
+console.log('19) F — search_skills word-boundary (BUG-3 search side):')
+{
+  const root = freshRoot('wbsearch')
+  const pip = JSON.parse(await searchSkillsTool.run({ query: 'pip' }, ctx(root)))
+  ok(pip.total === 0, `F: query "pip" (substring of "pipelines") → 0 results (${pip.total})`)
+  const pl = JSON.parse(await searchSkillsTool.run({ query: 'pipelines' }, ctx(root)))
+  ok(pl.total >= 1 && pl.skills.some((s: { name: string }) => s.name === 'fake-devops'), `F: query "pipelines" → fake-devops found (${pl.total})`)
+  const web = JSON.parse(await searchSkillsTool.run({ query: 'WEB' }, ctx(root)))
+  ok(web.total >= 1 && web.skills.some((s: { name: string }) => s.name === 'fake-web'), `F: query "WEB" still matches fake-web (${web.total})`)
 }
 
 console.log(`\n${fail === 0 ? 'ALL GREEN' : 'FAILURES'} — ${pass} passed, ${fail} failed`)

@@ -675,3 +675,328 @@ Stage Summary:
   router defect (re-route no-op under rule signals), 2 medium leaks (no
   total cap; substring keywords), tsc claim inaccurate. Recommend v0.30.1
   hotfix for FINDING X + word-boundary matching.
+
+---
+Task ID: 1
+Agent: explore (Explore subagent)
+Task: Read-only map of skill-router.ts + test-skills-router.ts + config.ts for hotfix v0.30.1
+Work Log:
+- Read WORKLOG.md Task 16 (v0.30.0 release) + Task 17 (audit: FINDING X
+  high, 2 medium, several low) for context on the 3 hotfix bugs.
+- Read packages/core/src/skill-router.ts (359 lines), scripts/test-skills-router.ts
+  (327 lines), packages/core/src/config.ts (165 lines) fully; plus
+  skills.ts (search_skills filter + session registry + 24k manual cap),
+  system-prompt.ts (renderAutoLoadedSkillsBlock), loop.ts (router hook +
+  autoSkills injection), types.ts (RouteContext/skills config/SessionData),
+  util.ts (trunc/deepMerge).
+- Grepped for search_skills implementation, token caps (8000/8192/token/
+  estimate), existingLoaded/recentHistory/lastText readers, routeSkills
+  callers (production: only loadRoutedSkills).
+- Ran `bunx tsc --noEmit 2>&1 | rg 'test-skills-router'` (7 errors) and
+  `| rg -c 'error TS'` (124 total); per-file breakdown captured.
+Stage Summary:
+- Signatures: routeSkills(ctx: RouteContext, opts?: {max?: number;
+  threshold?: number}): RoutedSkill[] (skill-router.ts:147-150);
+  RouteContext { userMessage: string; workspaceRoot: string;
+  recentHistory?: string[]; existingLoaded?: string[] } (:20-27);
+  maybeAutoRouteSkills(call: AutoRouteCall): string | null (:280);
+  rerunSkillRouter(call: Omit<AutoRouteCall,'priorUserMessages'>): string
+  | null (:304); capAutoBody(body: string, max = 8_000): string (:266).
+- BUG-1 confirmed: existingLoaded declared (:26) + passed (:319) but NEVER
+  read inside routeSkills (grep: only 2 occurrences in src). Slice
+  (:221-224, `.slice(0, max)`) runs BEFORE dedup (loadRoutedSkills :325
+  `.filter((r) => !already.has(r.name))`) — dedup runs AFTER the slice →
+  in rule-signal workspaces the top-max are 0.9 rule hits already loaded →
+  filtered to [] → topic-shift re-route is a no-op. recentHistory (:24) is
+  also dead; st.lastText (skills.ts:177) written 3x, never read.
+- BUG-3 confirmed: keyword detection = substring includes, no word
+  boundaries — skill-router.ts:162 `scanText.includes(w)` over scanText =
+  userMessage + PRD.md(≤8k) lowercased (:157). 'ci'⊂decide/social,
+  'test'⊂latest, 'rest'⊂restart → spurious 0.5 (=threshold) loads. Skill
+  side: tagHit = exact Set.has on normalized frontmatter tags (:184);
+  textHit = substring over name+description+usage (:169,:185). search_skills
+  query filter lives in skills.ts:262-272 — hay = name+description+usage
+  (tags NOT in the query haystack), `!hay.includes(query)` → false.
+- BUG-2 confirmed: per-skill caps only — capAutoBody 8k chars (auto,
+  skill-router.ts:266-271) + trunc(body, 24_000) for manual load_skill
+  (skills.ts:145). NO total/aggregate cap: recordAutoSkills (skills.ts:203)
+  appends unbounded; renderAutoLoadedSkillsBlock (system-prompt.ts:359-369)
+  renders every body into the system prompt via loop.ts:257.
+- Config: types.ts:457-465 skills?{autoRoute?: boolean; autoRouteMax?:
+  number; autoRouteThreshold?: number}; defaults config.ts:52
+  {autoRoute: true, autoRouteMax: 3, autoRouteThreshold: 0.5}; inline
+  fallbacks skill-router.ts:322-323 + routeSkills :153-154. NO validation/
+  clamping — loadConfig = defaults←global←workspace←extra via deepMerge
+  (raw JSON passthrough); autoRouteMax unclamped; string "false" for
+  autoRoute fails the `=== false` gate (:283) and routing stays ON.
+- tsc: 124 total errors at HEAD. test-skills-router.ts contributes 7, all
+  in section 13 (e2e): (295,39) TS2339 _req.messages on never (fake
+  provider `completeStream: async (_req: never)`); (308,5) TS2322 session
+  literal not assignable to SessionData (mode widened to string vs
+  AgentMode union; messages/todos inferred never[]); (319,53/74/104) +
+  (321,25/77) TS2339 role/meta/content on never.
+- Harness: custom ok() pass/fail counter (exit code via process.exit);
+  fixtures = mkdtemp temp dirs + inline SKILL.md writers; TAGENT_SKILLS_DIR
+  redirected to a temp builtin dir; freshRoot() per scenario; direct
+  routeSkills/maybeAutoRouteSkills calls; run via `bun scripts/test-skills-router.ts`.
+- Other findings (report only): rerunSkillRouter ignores autoRoute:false;
+  /unload-skill + /reload-skills resurrects the skill (already-set recomputed);
+  matchedWords pushes all group words → reason may cite non-matching words;
+  search_skills limit≤0 → default 20, non-array tags silently ignored;
+  existsAt(root,'app') fires web/frontend rule for any app/ dir; mtime cache
+  blind to same-ms/backdated edits and /reload-skills doesn't bust it.
+
+---
+Task ID: 2-a
+Agent: general-purpose (Subagent A)
+Task: FIX 4 — 7 tsc errors in scripts/test-skills-router.ts
+Work Log:
+- BEFORE: `bunx tsc --noEmit 2>&1 | rg 'test-skills-router'` → 7 errors, all in
+  section 13 (e2e through the real AgentLoop):
+  (295,39) TS2339 'messages' on never; (308,5) TS2322 session literal not
+  assignable to SessionData (mode widened to string vs AgentMode; messages/
+  todos inferred never[]); (319,53/74/104) + (321,25/77) TS2339 role/meta/
+  content on never. Total repo-wide: 124 errors.
+- Read the real types: types.ts (ChatMessage :8, TodoItem :30, SessionData
+  :52, AgentMode :57), providers/index.ts (CompletionRequest :28, wire
+  WireMessage :44, CompletionResult :51, ProviderAdapter :59 — complete(req):
+  Promise<string>, completeStream(req): Promise<CompletionResult>), loop.ts
+  AgentLoopOptions :104 (session: SessionData, provider: ProviderAdapter,
+  mode: AgentMode); index.ts `export * from './types'` + provider type re-exports.
+- Fixes (scripts/test-skills-router.ts ONLY — types only, zero runtime change):
+  1) Added top-level type-only imports (erased at runtime — no effect on the
+     TAGENT_SKILLS_DIR setup or the dynamic imports):
+     `import type { SessionData } from '../packages/core/src/types'` and
+     `import type { CompletionRequest, ProviderAdapter } from '../packages/core/src/providers'`.
+  2) Fake provider: `const fake = {...} as never` with
+     `completeStream: async (_req: never)` → `const fake: ProviderAdapter`
+     with `completeStream: async (_req: CompletionRequest)`; dropped the
+     `as { role: string; content: string }[]` cast on the wireCalls push
+     (WireMessage[] is already assignable to the declared element type).
+     Fixes 295,39.
+  3) Session fixture: `const session = {...}` (untyped → mode widens to
+     string, messages/todos infer never[]) → `const session: SessionData = {...}`
+     — contextual typing gives mode: AgentMode ('build' literal checks),
+     messages: ChatMessage[], todos: TodoItem[]. Fixes 308,5 + the five
+     TS2339 cascades at 319/321 (session.messages.find now iterates
+     ChatMessage, so m.role/m.meta/m.content and toolResult?.content type).
+- No `as any` / @ts-ignore / @ts-expect-error / tsconfig changes; no logic
+  touched; other sections of the file untouched.
+- AFTER: `rg 'test-skills-router'` on tsc output → EMPTY (0 errors);
+  total 124 → 117 (exactly -7; remaining 117 all live in OTHER files —
+  test-paste-heuristic 26, audit-v030-followup 9, smoke-discovery 7,
+  packages/core/src/* 6 [primary agent's domain], etc. — out of my scope).
+- Runtime: `bun scripts/test-skills-router.ts` — BEFORE: "ALL GREEN — 73
+  passed, 0 failed" exit 0; AFTER (identical): "ALL GREEN — 73 passed,
+  0 failed" exit 0 (73 ok lines, 0 FAIL lines).
+Stage Summary:
+- test-skills-router.ts tsc errors: 7 → 0 (repo total 124 → 117, all
+  remaining in other files, untouched per scope). Test still ALL GREEN
+  73/73 — behavior identical, types-only change. No anomalies; nothing
+  left unfixed within my file scope.
+
+---
+Task ID: 2
+Agent: Super Z (main) — PRIMARY FIXES v0.30.1
+Task: Hotfix v0.30.1 — FIX 1/2/3 (BUG-1, BUG-3, BUG-2) sequential in
+skill-router.ts + skills.ts + util.ts + types.ts + config.ts
+
+Work Log:
+- FIX 1 (BUG-1, critical — topic-shift re-route no-op): routeSkills() now
+  reads ctx.existingLoaded (case-insensitive set — manual load_skill records
+  the user-typed name) and filters already-loaded skills BEFORE the top-max
+  slice. Previously existingLoaded was declared+passed but never read and the
+  dedup ran after the slice → rule-signal workspaces (package.json present,
+  the common case) re-routed to [] → null. [skill-router.ts:221-232]
+- FIX 2 (BUG-3, high — substring keyword false positives): new shared
+  keywordInText() + escapeRegExp() in util.ts — word-boundary, case-
+  insensitive, multi-word = per-word AND; regex `(?:^|[^\w])kw(?![\w])`
+  (no lookbehind → portable). Applied to the router's keyword detection
+  [skill-router.ts:162-166] and search_skills' query filter
+  [skills.ts:262-267]; tool param/schema descriptions updated to
+  "whole-word match". Frontmatter tag matching untouched (exact Set.has).
+- FIX 3 (BUG-2, medium — no total token cap): new config
+  skills.autoRouteMaxTokens (default 15000 — types.ts, config.ts defaults,
+  inline `?? 15_000` fallback in loadRoutedSkills). Budget = existing
+  st.auto bodies + new candidates; estimate = ceil(chars/4) (the audit's
+  methodology). Over budget → lowest-score additions truncated first
+  (routed is score-desc → loaded.pop()), each logged exactly:
+  `[auto-router] Truncated: <name> (score <score>) — total cap hit`
+  (console.log). Top-1 skill always survives. Manual load_skill (24k cap)
+  NOT affected. [skill-router.ts:347-360]
+- Evidence (scripts/repro-hotfix-0301.ts — persisted, run before AND after):
+  BEFORE: [1b] routed=fake-api,fake-bot,fake-web (existingLoaded ignored);
+  [1d] e2e re-route=null NO-OP, session unchanged; [3a] fake-devops loaded
+  from 'ci'⊂"decide"; [3b] fake-api from 'test'⊂"latest"; [2a] 8 skills,
+  16144 tokens, no cap, no log.
+  AFTER: [1b] routed=fake-cli; [1d] "🎯 Auto-loaded skills: fake-cli" (4
+  skills in session); [3a]/[3b] (none); [3c]/[3d] genuine matches intact;
+  [2a] log "Truncated: web-07 (score 0.5) — total cap hit" + 7 skills,
+  14126 tokens ≤ 15000.
+- Regression: bun scripts/test-skills-router.ts → ALL GREEN 73/73.
+- tsc: 117 before primary fixes (= 106 pre-existing release baseline + 11
+  audit scripts, post Task 2-a) and 117 after — 0 new errors; the new
+  scripts/repro-hotfix-0301.ts is type-clean.
+
+Stage Summary:
+- All 3 bugs fixed in place, minimal diffs, no new features beyond the
+  specified config knob (skills.autoRouteMaxTokens).
+- Scope notes: (1) the "tsc baseline 106" target is unreachable at HEAD —
+  117 = 106 pre-existing + 11 from audit scripts (audit-v030-edge/followup,
+  out of hotfix scope). (2) audit-v030-edge.ts false-positive probes will
+  now print FAIL — expected (the bugs are gone); that script always exits 0
+  (historical probe, not a gating suite). (3) 'fix itu' still counts as a
+  topic shift and loads the bug skill — audit finding 2.2A (low), NOT in
+  hotfix scope.
+- Ready for Subagent B (regression tests A-E) + Subagent C (changelog).
+
+---
+Task ID: 3-b
+Agent: general-purpose (Subagent C — docs)
+Task: Changelog v0.30.1 + release notes prep (text only)
+Work Log:
+- Read WORKLOG entries 16 (v0.30.0 release), 17 (audit), 1 (explore),
+  2-a (tsc fix) and 2 (primary fixes with BEFORE/AFTER evidence) as the
+  source of truth; read website/src/data/releases.ts (Release interface,
+  0.30.0 entry style, unreleased mechanism per the file header) and
+  website/public/latest.json. No CHANGELOG.md exists at repo root — the
+  changelog text is a paste-ready draft.
+- Cross-verified every fix claim against the code: config.ts:52
+  (autoRouteMaxTokens: 15_000), skill-router.ts:355-362 (cap ?? 15_000,
+  ceil(chars/4), exact "[auto-router] Truncated: <name> (score <score>) —
+  total cap hit" log, loop stops at loaded.length > 1), skill-router.ts
+  :233-238 (case-insensitive existingLoaded exclusion BEFORE the
+  top-max slice), util.ts:39 keywordInText shared by skill-router.ts:168
+  (router) + skills.ts:266 (search_skills query filter; tags stay exact).
+- Drafted the three deliverables with all numbers tied to Task 2/2-a
+  evidence: 15000 default, chars/4 estimate, 16144→14126 ≤ 15000 with the
+  Truncated log, re-route null → "🎯 Auto-loaded skills: fake-cli", 73/73
+  green before AND after, tsc 124→117 (= 106 pre-existing release
+  baseline + 11 audit scripts, out of scope), ~12.1k worst-measured
+  tokens/turn. The Tests bullet is count-free on purpose — Subagent B's
+  regression section (Task ID 3) lands in parallel.
+- TEXT PREP ONLY: created exactly one file (download/release-notes-v0.30.1.md)
+  + this WORKLOG entry. No edits to releases.ts, latest.json, version.ts,
+  scripts/ or packages/; no git commit/tag/push, no gh-release.sh,
+  sync-latest.ts or any release script run.
+Stage Summary:
+- Deliverable 1 — CHANGELOG entry (## v0.30.1 — Hotfix: Fixed BUG-1
+  critical / BUG-3 high / BUG-2 medium / N1, Added skills.autoRouteMaxTokens,
+  count-free Tests bullet).
+- Deliverable 2 — ready-to-paste releases.ts Release object (version
+  0.30.1, date 2026-09-26, one-paragraph summary, 4 sections, unreleased:
+  true, no stable) with paste-time instructions (top of RELEASES array,
+  keep LATEST = 0.30.0 until cut).
+- Deliverable 3 — short GH-release body (broken → changed → drop-in-patch
+  upgrade note, optional knob mentioned).
+- All three live in download/release-notes-v0.30.1.md (clearly separated
+  sections + an accuracy checklist mapping every number to WORKLOG Task 2).
+  Release registry untouched — paste at cut time per the releases.ts header.
+---
+Task ID: 3-a
+Agent: general-purpose (Subagent B — tests)
+Task: Regression tests A–E + independent verification of v0.30.1
+Work Log:
+- Read WORKLOG Tasks 16/17/1/2-a/2 + current state of skill-router.ts,
+  skills.ts, util.ts (keywordInText), config.ts, types.ts, repro script.
+- scripts/test-skills-router.ts ONLY (allowed file): added regression
+  sections 14–19, 39 new ok()s — A/BUG-1 (9): routeSkills with
+  existingLoaded [fake-web] + "bikin CLI parser" → fake-cli not [] and
+  not fake-web; stronger e2e FINDING X setup (package.json next+
+  discord.js+express → three 0.9 rule skills) then topic shift via
+  maybeAutoRouteSkills → notice + sessionAutoSkills gain fake-cli (4
+  skills, fake-web exactly once). B/BUG-3 (5): new fixture
+  fake-devops ('Deploy with docker and CI pipelines.', 'devops,
+  docker') → "decide the color scheme" = [] ("ci" must not fire),
+  "latest version" = no fake-api, "bikin CI pipeline" → fake-devops,
+  "latest test result" → fake-api. C/BUG-2 (15): 6 cap-* skills with
+  ~8k bodies (≈2018 tokens each post-8k-cap) — C1 default cap: 3 load,
+  6054 ≤ 15000, 0 truncation logs; C2 cap 3000 (console.log captured
+  via monkey-patch, restored in finally): exactly 2 lines matching
+  "[auto-router] Truncated: <name> (score <score>) — total cap hit",
+  survivor = highest-score cap-w1 (0.6), 2018 ≤ 3000; C3 accumulation
+  (cap 10000): initial 3 skills (6054 tok) then topic-shift re-route
+  adds only cap-c1 (2 truncated), final 4 skills 8072 ≤ 10000.
+  D (4): "bikin web blog" → "fix itu" — no duplicates, fake-web
+  exactly once, re-route only adds NEW skills; 2.2A documented as-is
+  (loads fake-bug, out of scope). E (3): autoRouteMaxTokens 100 +
+  load_skill(fake-cli) → full 5435-char body, no excerpt marker, no
+  Truncated log. F (3): search "pip" → 0, "pipelines" → fake-devops,
+  "WEB" → fake-web.
+- Expected test adjustments from the new fixture: section 2/3 total
+  assertions 6 → 7 (skills array, total/shown, q.total < 7, l.total
+  === 7). ctx() helper gained an optional config param (default CFG)
+  for E — existing call sites unchanged.
+- Independent verification (all commands run myself, raw output):
+  bun scripts/test-skills-router.ts → ALL GREEN — 112 passed, 0 failed
+  (73 + 39); 5 consecutive runs → "ALL GREEN — 112 passed, 0 failed"
+  ×5. bunx tsc --noEmit | rg -c 'error TS' → 117 (= pre-edit baseline;
+  106 release + 11 audit scripts — "≤106" unreachable without
+  out-of-scope edits); rg 'test-skills-router' on tsc output → 0
+  errors; no `as any`/`@ts-ignore` (rg clean). Battery: switch-mode 52,
+  subagents 71, testmode 59, ask 41, features 19, context-loop 30,
+  browser 32, v0190 71, v0220 25, tui-app ALL PASS, host ALL OK,
+  version exit 0 (✓ checks, no counter), cache 38, source-site 127 —
+  all match the v0.30.0 release numbers.
+- repro-hotfix-0301.ts AFTER: [1b] routed=fake-cli; [1d] "🎯 Auto-loaded
+  skills: fake-cli", session fake-api,fake-bot,fake-web,fake-cli;
+  [3a]/[3b] (none); [3c] fake-devops; [3d] fake-api; [2a] 7 skills,
+  14126 tokens ≤ 15000 + "Truncated: web-07 (score 0.5)" log.
+- audit-v030-edge.ts: "FAILURES — 28 passed, 4 failed, 33 notes",
+  exit 0. Flips verified against pre-hotfix code via a throwaway git
+  worktree at HEAD 28d62fa (removed after): FAIL→ok 2.1 "session
+  accumulated 6 auto skills" (BUG-1 fixed); ok→FAIL 2.10 "'test'
+  substring inside laTEST" (BUG-3 fixed — false positive gone). 2.1
+  "NO TOTAL CAP" fails pre AND post for different reasons (pre: BUG-1
+  collateral, re-route no-op'd → 24210 chars; post: 6 skills ≈ 6379
+  tokens < 15000 cap, nothing to truncate — cap path itself proven by
+  repro [2a] + section 16). 2.8 "two keyword groups → 0.6" and 2.10
+  "'ci' inside serviCE" fail pre AND post — PRE-EXISTING probe
+  miscalibrations, NOT hotfix regressions: fake-qa never matched a
+  second group on that message ('api' not in its tags/name/description/
+  usage), and "service" does not actually contain the substring 'ci'
+  (real 'ci' hits were decide/social per Task 17).
+- Findings: NO new bugs. All three hotfix fixes hold under every
+  probe. Known out-of-scope 2.2A ("fix itu" topic-shift) confirmed
+  still present and documented in section 17.
+Stage Summary:
+- 39 tests added (sections 14–19); suite 73 → 112, ALL GREEN, 5×
+  stable. tsc 117 total / 0 in the test file (zero new errors).
+  Full battery matches v0.30.0 release numbers. Repro + audit confirm
+  BUG-1/2/3 fixed. No new bugs; two pre-existing audit-probe
+  miscalibrations (2.8, 2.10-ci) documented — historical script, out
+  of scope.
+
+---
+Task ID: 4
+Agent: Super Z (main) — VERSION BUMP + RELEASE PREP v0.30.1
+Task: Finalize hotfix v0.30.1 — version bump, releases.ts entry, snapshot
+regen, final verification.
+
+Work Log:
+- packages/core/src/version.ts: CURRENT_VERSION 0.30.0 → 0.30.1.
+  `bun packages/cli/src/index.ts --version` → 0.30.1.
+- website/src/data/releases.ts: added the 0.30.1 entry (unreleased: true) at
+  the top per the repo's documented pre-release convention; LATEST stays
+  '0.30.0' so latest.json + download buttons keep pointing at the shipped
+  release until the cut. sync-latest.ts intentionally NOT run — it throws
+  while RELEASES[0].version ≠ LATEST (that is its designed guard).
+- Snapshot regenerated (bun scripts/gen-source-snapshot.ts):
+  v0.30.1 · 336 files · 48 dirs · 71405 lines (release state was 332 ·
+  70,027; the +4 = audit-v030-edge.ts, audit-v030-followup.ts,
+  demo-skills-report.ts from post-release commits, repro-hotfix-0301.ts).
+- Post-bump verification: test-version all ✓ (0.30.1 current vs latest.json
+  0.30.0 → not outdated); test-source-site 127/127 (snapshot version ===
+  CURRENT_VERSION); test-skills-router 112/112; tsc total 117 (unchanged
+  through the whole hotfix).
+- Release NOT executed (per rules): no commit, no tag, no push, no gh
+  release. Ready-state for the cut upon approval: bump LATEST to 0.30.1 +
+  remove the unreleased flag → bun scripts/sync-latest.ts → git commit +
+  tag v0.30.1 + push → scripts/build-binaries.sh + scripts/gh-release.sh
+  with the body from download/release-notes-v0.30.1.md.
+
+Stage Summary:
+- Hotfix v0.30.1 complete in the working tree: 4 fixes (BUG-1, BUG-2, BUG-3,
+  N1), 39 regression tests (112/112 green), full 14-suite battery green,
+  tsc 124 → 117, before/after repro persisted at
+  scripts/repro-hotfix-0301.ts. Awaiting user approval to commit + release.

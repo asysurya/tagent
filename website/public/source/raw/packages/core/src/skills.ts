@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { SkillMeta, ToolDefinition } from './types'
 import { GLOBAL_DIR } from './config'
-import { parseFrontMatter, trunc } from './util'
+import { keywordInText, parseFrontMatter, trunc } from './util'
 
 /**
  * Skills = folders containing SKILL.md (front-matter: name, description,
@@ -238,14 +238,14 @@ export const searchSkillsTool: ToolDefinition = {
     'Pass query to filter by keyword, or omit to list all.',
   risk: 'low',
   params: {
-    query: 'string (optional) — keyword filter, case-insensitive, matches name + description + usage',
+    query: 'string (optional) — keyword filter, case-insensitive whole-word match on name + description + usage',
     tags: 'string[] (optional) — only skills that have ALL these tags',
     limit: 'number (optional, default 20) — max results',
   },
   inputSchema: {
     type: 'object',
     properties: {
-      query: { type: 'string', description: 'Keyword filter (case-insensitive, matches name/description/usage)' },
+      query: { type: 'string', description: 'Keyword filter (case-insensitive, whole-word match on name/description/usage)' },
       tags: { type: 'array', items: { type: 'string' }, description: 'Filter by tags (AND — skill must have ALL)' },
       limit: { type: 'number', description: 'Max results (default 20)' },
     },
@@ -261,8 +261,9 @@ export const searchSkillsTool: ToolDefinition = {
     const all = listSkills(ctx.workspaceRoot)
     const filtered = all.filter((s) => {
       if (query) {
+        // v0.30.1 (BUG-3): word-boundary match — consistent with the router
         const hay = `${s.name}\n${s.description}\n${s.usage ?? ''}`.toLowerCase()
-        if (!hay.includes(query)) return false
+        if (!keywordInText(hay, query)) return false
       }
       if (tags.length) {
         const skillTags = new Set((s.tags ?? []).map((t) => t.toLowerCase()))

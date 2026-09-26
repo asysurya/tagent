@@ -3,6 +3,7 @@ import path from 'node:path'
 import type { AgentEvents, SkillMeta, TagentConfig } from './types'
 import { loadSkill, listSkills, skillState, recordAutoSkills, type LoadedSkill } from './skills'
 import { worklogTool } from './tools/worklog'
+import { keywordInText } from './util'
 
 /**
  * Skill auto-router — proactive skill loading.
@@ -12,6 +13,9 @@ import { worklogTool } from './tools/worklog'
  * the user's message, matches them against skill tags/descriptions, and
  * auto-loads the top skills into context. Rule hits score 0.9, keyword hits
  * 0.5–0.7; below-threshold or empty matches load nothing (no speculation).
+ * (v0.30.1) Keywords match on word boundaries, and the session's total
+ * auto-loaded body budget is capped by skills.autoRouteMaxTokens (default
+ * 15000 tokens ≈ 60k chars) — the lowest-score skills are truncated first.
  *
  * The user stays in control: /skills lists what is loaded, /unload-skill
  * removes one, /no-auto-skill disables auto-loading, /reload-skills re-runs.
@@ -159,7 +163,9 @@ export function routeSkills(ctx: RouteContext, opts?: {
   // detect which keyword groups fired (and with which words)
   const keywordHits: { words: string[]; tags: string[] }[] = []
   for (const g of KEYWORD_GROUPS) {
-    const words = g.words.filter((w) => scanText.includes(w))
+    // v0.30.1 (BUG-3): whole-word matching — the old substring test fired
+    // on 'ci' ⊂ "decide"/"social", 'test' ⊂ "latest", 'rest' ⊂ "restart"
+    const words = g.words.filter((w) => keywordInText(scanText, w))
     if (words.length) keywordHits.push({ words, tags: g.tags })
   }
 
@@ -218,8 +224,16 @@ export function routeSkills(ctx: RouteContext, opts?: {
     })
   }
 
+  // v0.30.1 (BUG-1): skills already in context are excluded BEFORE the
+  // top-max slice. existingLoaded used to be declared but never read, and
+  // the dedup ran after the slice — in rule-signal workspaces the top-max
+  // were all already-loaded 0.9 rule hits, so a topic-shift re-route
+  // filtered to [] and the new (lower-ranked) skills never surfaced.
+  // Case-insensitive: manual load_skill records the user-typed name.
+  const existing = new Set((ctx.existingLoaded ?? []).map((n) => n.toLowerCase()))
   return [...scored.values()]
     .filter((s) => s.matchScore >= threshold)
+    .filter((s) => !existing.has(s.name.toLowerCase()))
     .sort((a, b) => b.matchScore! - a.matchScore! || a.name.localeCompare(b.name))
     .slice(0, max)
 }
@@ -332,6 +346,22 @@ function loadRoutedSkills(call: AutoRouteCall | Omit<AutoRouteCall, 'priorUserMe
     loaded.push({ ...r, body: capAutoBody(body) })
   }
   if (!loaded.length) return null
+
+  // v0.30.1 (BUG-2): total token budget across the session's auto-loaded
+  // skills — already-loaded bodies plus these candidates (estimate:
+  // chars/4, the audit's methodology). Over budget → the lowest-score
+  // additions are truncated first (routed is score-desc); the top skill
+  // always survives. Manual load_skill is NOT capped by this.
+  const cap = call.config.skills?.autoRouteMaxTokens ?? 15_000
+  const estTokens = (body: string): number => Math.ceil(body.length / 4)
+  let total = st.auto.reduce((n, s) => n + estTokens(s.body), 0)
+    + loaded.reduce((n, s) => n + estTokens(s.body), 0)
+  while (total > cap && loaded.length > 1) {
+    const dropped = loaded.pop()!
+    total -= estTokens(dropped.body)
+    console.log(`[auto-router] Truncated: ${dropped.name} (score ${dropped.matchScore}) — total cap hit`)
+  }
+
   recordAutoSkills(call.sessionId, loaded)
 
   // transparency — the worklog journal gets the same story

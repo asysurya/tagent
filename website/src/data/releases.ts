@@ -32,6 +32,50 @@ export const LATEST = '0.30.0'
 
 export const RELEASES: Release[] = [
   {
+    version: '0.30.1',
+    date: '2026-09-26',
+    title: 'Hotfix — the re-route that never fired, whole-word keywords, a token budget',
+    summary:
+      'Three fixes from the v0.30.0 audit, shipped as a drop-in patch. The topic-shift re-route was a silent no-op in any workspace with a rule signal (package.json, Dockerfile or tsconfig.json present — the common case): already-loaded skills were only filtered out AFTER the top-N slice, so the slice was always the same 0.9 rule hits and the re-route returned null; they are now excluded BEFORE the slice, so a topic shift genuinely loads the new relevant skill. Keyword matching now requires word boundaries — "ci" inside "decide" no longer loads the devops skill at 0.5 — and the same matcher backs search_skills, so the two always agree. A new session-wide budget (skills.autoRouteMaxTokens, default 15000, estimated at ceil(chars/4)) caps auto-loaded skill bodies: lowest-score skills are truncated first with an explicit log line, the top match always survives, and manual load_skill is untouched.',
+    unreleased: true,
+    sections: [
+      {
+        name: 'Fixed — the topic-shift re-route was a no-op',
+        items: [
+          'root cause: RouteContext.existingLoaded was declared and passed but never read, and the already-loaded dedup ran AFTER the top-max slice — so in any workspace with a rule signal (package.json, Dockerfile, tsconfig.json — the common case) the top-N were always the already-loaded 0.9 rule hits, filtered to [] and the re-route returned null; the shipped topic-shift test fixture had no rule signals, so the common case was never exercised',
+          'already-loaded skills are now excluded BEFORE the slice, case-insensitively (manual load_skill records the user-typed name) — the one topic-shift re-route per session actually loads the NEW relevant skill',
+          'evidence: the end-to-end repro went from re-route = null (no-op, session unchanged) to "🎯 Auto-loaded skills: fake-cli" with the new skill live in the session',
+        ],
+      },
+      {
+        name: 'Fixed — keywords match words, not fragments',
+        items: [
+          'before: unanchored substring includes() — "ci" matched "decide"/"social", "test" matched "latest", "rest" matched "restart", firing spurious 0.5 (= threshold) skill loads in ANY workspace',
+          'now: word-boundary matching, case-insensitive; a multi-word keyword needs every word (per-word AND); the regex avoids lookbehind so it stays portable',
+          'one shared helper (keywordInText in util.ts) backs the router\u2019s keyword detection AND search_skills\u2019 query filter — the two can no longer disagree; frontmatter tag matching stays exact',
+          'genuine matches survive intact — the repro\u2019s real keyword hits still load, the substring false positives no longer do',
+        ],
+      },
+      {
+        name: 'Added — a total token budget',
+        items: [
+          'new config skills.autoRouteMaxTokens (default 15000): a session-wide cap over auto-loaded skill bodies — the already-loaded ones plus the new candidates, estimated at ceil(chars/4)',
+          'over budget → the lowest-score additions are truncated first (candidates arrive score-desc); each is announced with the exact log line [auto-router] Truncated: <name> (score <score>) — total cap hit',
+          'the top-scoring skill always survives, and manual load_skill (24k per-skill cap) is NOT affected',
+          'evidence: the repro\u2019s worst case went from 16144 uncapped tokens to 14126 ≤ 15000 with the truncation log; pre-fix, the audit measured ~12.1k tokens/turn of skill bodies riding the system prompt, unbounded across re-routes',
+        ],
+      },
+      {
+        name: 'Internals + tests',
+        items: [
+          'scripts/test-skills-router.ts: 7 tsc errors fixed types-only (real ProviderAdapter / SessionData / CompletionRequest annotations — no any, no ts-ignore); runtime identical, 73/73 green before AND after; repo tsc total 124 → 117 (the remaining 117 = 106 pre-existing release baseline + 11 from the audit scripts, out of hotfix scope)',
+          'new regression section in the same suite covering: topic-shift re-route under rule signals, word-boundary keyword matching, total token cap + truncation log, short-follow-up no-duplicate-loads, manual load_skill uncapped (+ search_skills word-boundary)',
+          'drop-in patch: no config changes required — the new knob is optional; set skills.autoRouteMaxTokens only if you want a tighter or looser budget',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.30.0',
     date: '2026-09-26',
     title: 'Skill discovery — search_skills + the skill auto-router',

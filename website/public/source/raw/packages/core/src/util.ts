@@ -22,6 +22,29 @@ export function trunc(s: string, max: number): string {
   return s.slice(0, max) + `\n…[truncated ${s.length - max} chars]`
 }
 
+/** Escape every regex special character in a literal string. */
+export function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Word-boundary keyword test (case-insensitive): the keyword must appear as
+ * a whole word — no alphanumeric/underscore glued on either side — so 'ci'
+ * does NOT match "decide"/"social" and 'test' does NOT match "latest",
+ * while "bikin CI pipeline" and "latest test result" still match. A
+ * multi-word keyword ('web app') matches when EVERY word appears as a whole
+ * word (AND, order-free). Shared by the skill router's keyword detection
+ * and search_skills' query filter (v0.30.1, BUG-3).
+ */
+export function keywordInText(text: string, keyword: string): boolean {
+  const parts = keyword.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (!parts.length) return false
+  const hay = text.toLowerCase()
+  return parts.every((p) =>
+    new RegExp(`(?:^|[^\\w])${escapeRegExp(p)}(?![\\w])`).test(hay),
+  )
+}
+
 /**
  * Jail a user/tool-supplied path inside the workspace root.
  * Throws on escape attempts (absolute outside root, or `..` traversal).
