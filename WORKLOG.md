@@ -614,3 +614,64 @@ Work Log:
 - deviceUrl() ?user_code= prefill; e2e smoke scripts; released v0.25.1
   (6 binaries + SHA256SUMS); "kirim PAT" answered: no credentials in the
   sandbox, safe self-serve path given.
+
+---
+
+Task ID: 17 (audit)
+Agent: Super Z (main) — INDEPENDENT AUDIT
+Task: Audit v0.30.0 (search_skills + skill auto-router) — verify claims
+with evidence, hunt edge cases, skeptic bias. No fixes applied (per rules).
+
+Work Log:
+- Verified: version 0.30.0 (CLI run, version.ts, latest.json via raw GH +
+  jsDelivr, GH release page + 6 binary assets + SHA256SUMS); tag v0.30.0 →
+  bc08f73 on remote (local tags stop at v0.27.0 — not fetched, cosmetic).
+- Test suite: 73/73 green, 6 consecutive runs stable. Battery re-run:
+  ALL numbers match the claim (52/71/59/41/19/30/32/71/25/ALL/OK/38/127).
+- Snapshot at release commit: 332 files · 70,027 lines (exact match);
+  /source/ls/find?q=skill-router serves skill-router.ts (360 lines) live
+  on Vercel. quickref (25 entries) has NO skill-router entry — gap.
+- tsc: measured 113 errors at release state (124 at HEAD incl. 11 from my
+  audit scripts). The new scripts/test-skills-router.ts itself contributes
+  7 type errors → claim "106, 0 new" undercounts; release ships 7 new tsc
+  errors (runtime unaffected — bun does not typecheck).
+- FINDING X (high): topic-shift re-route is a NO-OP in any workspace with
+  a rule signal (package.json/Dockerfile/tsconfig present). Root cause:
+  RouteContext.existingLoaded is declared+passed but NEVER READ by
+  routeSkills; dedup runs AFTER the top-max slice → the slice is all
+  rule-hit (0.9) already-loaded skills → filtered to [] → null. The
+  shipped topic-shift test fixture has NO rule signals → the common case
+  is untested. Repro: scripts/audit-v030-followup.ts (FINDING X section).
+- FINDING (medium): NO aggregate token cap. Keyword-only workspace:
+  3 initial + 3 re-route = 6 skills × ~8k = 48,420 chars ≈ 12.1k tokens
+  in the system prompt every turn; manual load_skill (24k cap each)
+  stacks on top.
+- FINDING (medium): KEYWORD_GROUPS use unanchored includes() → 'ci' ⊂
+  decide/social, 'test' ⊂ latest, 'rest' ⊂ restart fire spurious 0.5
+  (= threshold) loads in ANY workspace.
+- FINDING (low): "fix itu" (2-token follow-up, 0 overlap) counts as a
+  topic shift → loads bug skill + burns the 1 re-route budget.
+- FINDING (low): /reload-skills (rerunSkillRouter) bypasses config
+  skills.autoRoute:false (maybeAutoRouteSkills respects it) — asymmetric.
+- FINDING (low): auto-router bypasses the permission system (load_skill:
+  deny does not stop body injection; audit trail = WORKLOG + notice only);
+  permission-denial text says "denied by the user" even for config denies.
+- FINDING (low): mtime cache blind to backdated/same-ms edits (deterministic
+  repro via utimesSync); /reload-skills does not bust the cache either.
+- FINDING (info): with the 3 shipped builtins, bug/test-ish tasks load 2+
+  skills (code-review is tagged 'test' → pulled into test tasks).
+  search_skills input leniency: limit<=0 → default 20 (not 0), non-array
+  tags silently ignored.
+- Hygiene: release commit ships an empty .tagent session file
+  (966251f3wibx.json, created during release work) + scripts/smoke-skills.ts
+  unmentioned in WORKLOG; scope = 2 features + test hardening + import fix
+  + release infra in ONE commit; no rollback documentation anywhere.
+
+Stage Summary:
+- Audit scripts persisted: scripts/audit-v030-edge.ts (28 checks),
+  scripts/audit-v030-followup.ts (finding verification). No code changes
+  to the product — awaiting user instructions per audit rules.
+- Verdict: release functional + claims mostly verified; 1 high-severity
+  router defect (re-route no-op under rule signals), 2 medium leaks (no
+  total cap; substring keywords), tsc claim inaccurate. Recommend v0.30.1
+  hotfix for FINDING X + word-boundary matching.
