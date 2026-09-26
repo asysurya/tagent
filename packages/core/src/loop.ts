@@ -28,6 +28,8 @@ import { completeWithFallback, fallbackTailFor, type ResolvedChainEntry } from '
 import { BackgroundSubagents } from './bgsubs'
 import { compressOutput, slimActionInput } from './compact'
 import { modelContextWindow, estimateTokens } from './context'
+import { sessionAutoSkills } from './skills'
+import { maybeAutoRouteSkills } from './skill-router'
 
 const ACTION_RE = /```tagent:action\s*\n([\s\S]*?)```/g
 const MAX_TOOL_OUTPUT = 24_000
@@ -252,6 +254,7 @@ export class AgentLoop {
       tools: this.tools,
       subagent: (this.opts.depth ?? 0) > 0,
       caveman,
+      autoSkills: sessionAutoSkills(session.id),
       ...(this.opts.agentPrompt ? { agentPrompt: this.opts.agentPrompt } : {}),
       ...(diagnosticsCommand(this.opts.config) && !this.opts.readOnly
         ? { diagnostics: diagnosticsCommand(this.opts.config) }
@@ -292,9 +295,28 @@ export class AgentLoop {
     let lastProviderFail = ''
     // @-mentions → inline file attachments: zero tool turns for known files
     const expanded = this.expandFileMentions(userText)
+    // skill auto-router: prior REAL user messages (topic-shift detection)
+    // must be captured before this run's message joins them
+    const priorUserTexts = session.messages
+      .filter((m) => m.role === 'user' && !m.meta?.toolResults)
+      .map((m) => m.content)
     const userMsg: ChatMessage = { id: uid(), role: 'user', content: expanded, createdAt: Date.now() }
     session.messages.push(userMsg)
     this.opts.events.onUserMessage?.(userMsg)
+
+    // skill auto-router (v0.30) — proactive skill loading at session start
+    // (and once on a detected topic shift); primary agent only, config-gated,
+    // transparent: the notice is shown to the user + logged to WORKLOG.md
+    if ((this.opts.depth ?? 0) === 0) {
+      const notice = maybeAutoRouteSkills({
+        sessionId: session.id,
+        workspaceRoot: session.workspaceId,
+        userText,
+        priorUserMessages: priorUserTexts,
+        config: this.opts.config,
+      })
+      if (notice) this.opts.events.onNotify?.('info', notice)
+    }
 
     const caveman = this.opts.config.caveman === true
     // rebuilt on a mid-run mode switch (switch_mode, user-approved) — the
@@ -875,7 +897,7 @@ export class AgentLoop {
 }
 
 const READ_ONLY_TOOLS = new Set([
-  'read_file', 'read_files', 'list_files', 'grep', 'web_fetch', 'ddg_search', 'task', 'todowrite', 'memory', 'load_skill', 'ask_user', 'switch_mode',
+  'read_file', 'read_files', 'list_files', 'grep', 'web_fetch', 'ddg_search', 'task', 'todowrite', 'memory', 'load_skill', 'search_skills', 'ask_user', 'switch_mode',
 ])
 
 export function isReadOnlyTool(name: string): boolean {

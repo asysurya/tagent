@@ -166,9 +166,10 @@ async function main() {
   console.log('\n2) real outputs — the committed snapshot + the page')
   {
     const { SOURCE_SNAPSHOT } = await import(path.join(REPO, 'website/src/data/source-snapshot.ts'))
+    const { CURRENT_VERSION } = await import(path.join(REPO, 'packages/core/src/version.ts'))
     const c = SOURCE_SNAPSHOT.counts
     ok('module: snapshot is substantial', c.files > 250 && c.lines > 50000, `files=${c.files}`)
-    ok('module: version is the current release', SOURCE_SNAPSHOT.version === '0.29.0', SOURCE_SNAPSHOT.version)
+    ok('module: version is the current release', SOURCE_SNAPSHOT.version === CURRENT_VERSION, `${SOURCE_SNAPSHOT.version} vs ${CURRENT_VERSION}`)
     ok('module: files carry URLs', SOURCE_SNAPSHOT.files.every((f) => f.rawUrl.startsWith('/source/raw/') && f.jsonUrl.startsWith('/source/json/')))
 
     const keyFiles = ['README.md', 'WORKLOG.md', 'packages/core/src/loop.ts', 'packages/core/src/system-prompt.ts', 'src/components/tagent/tagent-app.tsx', 'native/main.go']
@@ -422,9 +423,11 @@ async function main() {
     ok('ls: depth capped (1..8) — rejects 9', deepBad)
 
     /* plain text */
-    const text = renderLsText(ls({ path: '/packages/core/src' }))
+    const lsSrc = ls({ path: '/packages/core/src' })
+    const text = renderLsText(lsSrc)
+    const loopLines = lsSrc.entries.find((e: { name: string }) => e.name === 'loop.ts')?.lines
     ok('text: ls — tree glyphs + line counts',
-      text.includes('├──') && text.includes('└──') && /loop\.ts\s+951 lines/.test(text))
+      text.includes('├──') && text.includes('└──') && new RegExp(`loop\\.ts\\s+${loopLines} lines`).test(text), `loop.ts lines=${loopLines}`)
     const textRec = renderLsText(ls({ path: '/packages/core/src', recursive: true, depth: 2 }))
     ok('text: recursive — nested glyphs + aggregates',
       textRec.includes('│   ') && textRec.includes('tools/') && textRec.includes(`${toolsFiles.length} files`))

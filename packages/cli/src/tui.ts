@@ -10,6 +10,10 @@ import {
   listCheckpoints,
   listFacts,
   listSkills,
+  skillState,
+  unloadSessionSkill,
+  disableSessionSkillRouting,
+  rerunSkillRouter,
   CURRENT_VERSION,
   SUBAGENT_TEMPLATE,
   renderContextBar,
@@ -773,7 +777,8 @@ export class Tui {
           ['apikey <provider> · permissions · allow/deny/ask <tool>', 'access'],
           ['files [path] · read <f> · grep <pat> · sh <cmd>', 'workspace'],
           ['auth · push [msg]', 'GitHub'],
-          ['checkpoints · undo · memory · skills · skill <n>', 'memory & history'],
+          ['checkpoints · undo · memory · skills [all] · skill <n>', 'memory & history'],
+          ['reload-skills · no-auto-skill · unload-skill <n>', 'skill auto-router control'],
           ['stats · settings · update · webgui [on|off]', 'info · self-update'],
           ['stop · clear · exit', 'run control'],
         ]
@@ -1512,9 +1517,59 @@ export class Tui {
       }
 
       case 'skills': {
-        const skills = listSkills(host.root)
-        if (skills.length === 0) return this.println(dim('  no skills installed'))
-        for (const s of skills) this.println(`   ${bold(s.name)} ${dim(`(${s.source})`)} — ${s.description}`)
+        // v0.30: default = what's in context (auto + manual); `all` = the
+        // old installed listing
+        const sid = host.session?.id
+        if (arg === 'all' || !sid) {
+          const skills = listSkills(host.root)
+          if (skills.length === 0) return this.println(dim('  no skills installed'))
+          for (const s of skills) this.println(`   ${bold(s.name)} ${dim(`(${s.source}${(s.tags ?? []).length ? ` · ${(s.tags ?? []).join(', ')}` : ''})`)} — ${s.description}`)
+          return
+        }
+        const st = skillState(sid)
+        if (!st.auto.length && !st.manual.length) {
+          return this.println(dim('  no skills loaded in this session — /skills all lists every installed one'))
+        }
+        this.println(bold('  skills — loaded this session'))
+        for (const s of st.auto) {
+          this.println(`   ${bold(s.name)} ${cyan('[auto]')} ${dim(`score ${s.matchScore ?? '?'} · ${s.matchReason ?? ''}`)} — ${s.description}`)
+        }
+        for (const n of st.manual) this.println(`   ${bold(n)} ${magenta('[manual]')}`)
+        this.println(dim('    /skills all — installed · /unload-skill <name> — remove one'))
+        return
+      }
+
+      case 'reload-skills': {
+        const s = host.session
+        if (!s) return this.println(dim('  no session yet — say something first'))
+        const lastUser = [...s.messages].reverse().find((m) => m.role === 'user' && !m.meta?.toolResults)
+        const note = rerunSkillRouter({
+          sessionId: s.id,
+          workspaceRoot: host.root,
+          userText: lastUser?.content ?? '',
+          config: host.cfg,
+        })
+        if (!note) return this.println(dim('  router found no new matching skills'))
+        for (const l of note.split('\n')) this.println(`  ${l}`)
+        this.println(dim('    applies from the next message (and mid-run mode switches)'))
+        return
+      }
+
+      case 'no-auto-skill': {
+        const s = host.session
+        if (!s) return this.println(dim('  no session yet — say something first'))
+        disableSessionSkillRouting(s.id)
+        this.println(green('  ✔ auto skill loading off for this session (already loaded ones stay) — /reload-skills re-runs manually'))
+        return
+      }
+
+      case 'unload-skill': {
+        const s = host.session
+        if (!arg) return this.println(dim('  usage: /unload-skill <name> — /skills lists the loaded ones'))
+        if (!s) return this.println(dim('  no session yet — say something first'))
+        const removed = unloadSessionSkill(s.id, arg)
+        if (!removed) return this.println(red(`  ✗ "${arg}" is not loaded (auto or manual) in this session`))
+        this.println(green(`  ✔ ${bold(arg)} removed — it drops out of the context on the next message`))
         return
       }
 

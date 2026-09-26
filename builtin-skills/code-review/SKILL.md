@@ -1,6 +1,8 @@
 ---
 name: code-review
 description: Systematic review of code in the workspace — correctness, security, performance, style — with concrete fixes.
+usage: Follow when asked to review, audit, or refactor code, or to check a change before shipping it.
+tags: review, quality, test
 ---
 
 # Code Review

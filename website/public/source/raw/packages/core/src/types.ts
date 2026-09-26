@@ -336,8 +336,16 @@ export interface MemoryFact {
 export interface SkillMeta {
   name: string
   description: string
+  /** one-line usage hint — frontmatter `usage:` or the body's first paragraph */
+  usage?: string
+  /** domain tags — frontmatter `tags:` (comma-separated), lowercase */
+  tags?: string[]
   source: 'builtin' | 'global' | 'workspace'
   path: string
+  /** filled by the skill router — match quality, 0..1 */
+  matchScore?: number
+  /** filled by the skill router — why it matched ("rule:next-detected") */
+  matchReason?: string
 }
 
 /* ------------------------------------------------------------------ */
@@ -444,6 +452,16 @@ export interface TagentConfig {
   diagnostics?: {
     command?: string
     timeoutMs?: number
+  }
+  /** v0.30: skill discovery — search tool + auto-router */
+  skills?: {
+    /** auto-load relevant skills based on workspace signals + the user's
+     *  message (default true). /reload-skills re-runs it manually. */
+    autoRoute?: boolean
+    /** max skills auto-loaded per route (default 3) */
+    autoRouteMax?: number
+    /** min match score 0..1 for auto-load (default 0.5) */
+    autoRouteThreshold?: number
   }
 }
 

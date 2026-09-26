@@ -1,6 +1,6 @@
 import os from 'node:os'
 import { renderMemoryBlock } from './memory'
-import { renderSkillsBlock } from './skills'
+import { renderSkillsBlock, type LoadedSkill } from './skills'
 import { renderSubagentsBlock } from './subagents'
 import type { AgentMode, ToolDefinition } from './types'
 
@@ -21,6 +21,8 @@ export function buildSystemPrompt(opts: {
   agentPrompt?: string
   /** auto-diagnostics command configured — tell the agent about the gate */
   diagnostics?: string
+  /** v0.30: skills auto-loaded by the router — rendered with their bodies */
+  autoSkills?: LoadedSkill[]
 }): string {
   const { workspaceRoot, mode, tools } = opts
   const caveman = opts.caveman === true
@@ -304,6 +306,24 @@ When TEST passes and the job is done, close EVERY task with exactly this structu
   lines.push(`
 ## Skills`)
   lines.push(renderSkillsBlock(workspaceRoot))
+  lines.push(`
+### How to use skills — two-stage progressive disclosure
+1. When you need a capability, FIRST call search_skills to browse available
+   skills (name + description + usage + tags). Pass a query to filter by
+   keyword, or omit to list all. This is cheap and read-only.
+2. If a skill matches, THEN call load_skill(name) to load its full content
+   right before using it.
+3. Do NOT guess skill names from the list above — search_skills gives the
+   full metadata so you can pick with confidence.
+4. If no skill matches, find another way or ask the user — do not load skills
+   speculatively.`)
+  lines.push(`
+### Auto-loaded skills
+The following skills were auto-loaded based on your task context (workspace
+signals + user message keywords). They are already in your context — USE THEM.
+If they don't fit, call load_skill for others, or the user can remove one with
+/unload-skill <name>.
+${renderAutoLoadedSkillsBlock(opts.autoSkills ?? [])}`)
 
   lines.push(`
 ## Custom subagents`)
@@ -332,4 +352,18 @@ ${toolDocs}`)
 function firstSentence(s: string): string {
   const m = s.split(/(?<=[.!?])\s/)[0] ?? s
   return m.length > 90 ? `${m.slice(0, 87)}…` : m
+}
+
+/** The auto-loaded skill list + their bodies — "(none)" when the router
+ *  loaded nothing (or was disabled). */
+export function renderAutoLoadedSkillsBlock(skills: LoadedSkill[]): string {
+  if (!skills.length) return '(none)'
+  const list = skills
+    .map((s) => `- ${s.name} [auto, score ${s.matchScore ?? '?'}, ${s.matchReason ?? 'matched'}]: ${s.description}`)
+    .join('\n')
+  const bodies = skills
+    .filter((s) => s.body && s.body.trim())
+    .map((s) => `#### Skill: ${s.name}\n${s.body.trim()}`)
+    .join('\n\n')
+  return bodies ? `${list}\n\n${bodies}` : list
 }

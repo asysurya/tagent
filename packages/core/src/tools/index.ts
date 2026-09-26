@@ -14,7 +14,7 @@ import { askUserTool } from './ask'
 import { switchModeTool } from './switch-mode'
 import { bgLogsTool, bgRunTool, bgStopTool } from './bg'
 import { memoryTool } from '../memory'
-import { loadSkillTool } from '../skills'
+import { loadSkillTool, searchSkillsTool } from '../skills'
 
 const ALL_TOOLS: ToolDefinition[] = [
   readFileTool,
@@ -31,6 +31,7 @@ const ALL_TOOLS: ToolDefinition[] = [
   taskTool,
   subsTool,
   memoryTool,
+  searchSkillsTool,
   loadSkillTool,
   browserTool,
   visionTool,
@@ -58,13 +59,13 @@ export interface BuildToolsetOptions {
 export const TEST_MODE_TOOLS = new Set([
   'read_file', 'read_files', 'list_files', 'grep', 'web_fetch', 'ddg_search',
   'bash', 'browser', 'vision', 'serve', 'test_report', 'task', 'todowrite', 'memory', 'load_skill',
-  'ask_user', 'bg_run', 'bg_logs', 'bg_stop', 'subs', 'switch_mode',
+  'ask_user', 'bg_run', 'bg_logs', 'bg_stop', 'subs', 'switch_mode', 'search_skills',
 ])
 
 /** read/observe set — plan mode & explore subagents */
 const RO_NAMES = new Set([
   'read_file', 'read_files', 'list_files', 'grep', 'web_fetch', 'ddg_search',
-  'vision', 'todowrite', 'memory', 'load_skill', 'ask_user', 'subs',
+  'vision', 'todowrite', 'memory', 'load_skill', 'ask_user', 'subs', 'search_skills',
 ])
 
 /**

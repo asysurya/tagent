@@ -1,6 +1,6 @@
 {
-  "version": "0.29.0",
-  "date": "2026-09-24",
-  "notes": "The agent’s operating contract is now a strict loop: PLAN → BUILD → TEST — PASS delivers the structured ✅ SELESAI summary, FAIL goes back to BUILD with the evidence, and the loop repeats until the verification passes. Retry discipline has teeth: every failed round must carry a concrete hypothesis, blind trial-and-error is forbidden, and after 5 fix rounds the agent stops and escalates with the full story. The same loop — and the same rigor — now applies to every project kind: web, CLI, bot, API, library, pipeline.",
-  "url": "https://github.com/asysurya/tagent/releases/tag/v0.29.0"
+  "version": "0.30.0",
+  "date": "2026-09-26",
+  "notes": "Skills get a two-stage protocol and a proactive brain. The new search_skills tool browses skill metadata (name, description, usage, tags) by keyword or tags — cheap, read-only, cached — before the agent commits tokens to a load_skill. On top of that, a skill auto-router inspects the workspace (package.json deps, files, folders, language fingerprint, PRD.md) plus the task’s wording, and pre-loads the matching skills into context (max 3, score-gated, ~8k chars each) with full transparency: a 🎯 notice in the TUI, the match reasons in the system prompt, and an [auto-router] line in WORKLOG.md. /skills, /reload-skills, /no-auto-skill and /unload-skill keep you in charge.",
+  "url": "https://github.com/asysurya/tagent/releases/tag/v0.30.0"
 }

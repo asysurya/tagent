@@ -1,6 +1,8 @@
 ---
 name: web-app-builder
 description: Playbook for building a complete web app in the workspace — structure, styling quality, and verification loops.
+usage: Follow when asked to build or significantly extend a web application, website, landing page, or dashboard.
+tags: web, frontend
 ---
 
 # Web App Builder

@@ -52,8 +52,15 @@ export {
   globalAgentsPath, workspaceAgentsPath, memoryTool,
 } from './memory'
 export {
-  listSkills, loadSkill, renderSkillsBlock, loadSkillTool, type SkillDirs,
+  listSkills, loadSkill, renderSkillsBlock, loadSkillTool, searchSkillsTool, type SkillDirs,
+  type LoadedSkill, type SessionSkillState, skillState, clearSkillState,
+  recordManualSkillLoad, recordAutoSkills, sessionAutoSkills,
+  unloadSessionSkill, disableSessionSkillRouting,
 } from './skills'
+export {
+  routeSkills, maybeAutoRouteSkills, rerunSkillRouter, capAutoBody,
+  type RouteContext, type RoutedSkill, type AutoRouteCall,
+} from './skill-router'
 export {
   getAdapter, listProviderInfos,
   acceptsImages, withoutImages,

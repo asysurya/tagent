@@ -55,7 +55,7 @@ process when you want a browser. Same engine, same sessions, same permissions.
 | 🔐 **Permissions** | Per-tool ask/allow/deny, remember once/session/always — every write asks first |
 | 💾 **Checkpoints** | Auto-snapshot before writes; one-click `/undo` |
 | 🧠 **Memory** | `AGENTS.md` (global + workspace) + durable facts, injected into every system prompt |
-| 📚 **Skills** | `SKILL.md` playbooks with progressive disclosure (name+description in prompt, full body on demand) |
+| 📚 **Skills** | `SKILL.md` playbooks with two-stage progressive disclosure (`search_skills` browses metadata by keyword/tags → `load_skill` pulls the body on demand) + an auto-router that pre-loads relevant skills from workspace signals and the task's wording |
 | 🌐 **Web tools** | `web_fetch`, `ddg_search` (no API key), `browser` (Playwright — full e2e signal: click/type/screenshot/audit) |
 | 🧪 **Test mode** | `tagent test` — QA agent: serves the project, clicks through it with a real browser, screenshots + audits responsive/typography/contrast, writes `TEST-REPORT.md` (vision models see the screenshots) |
 | 🎯 **Model roles** | Three model categories, set independently: the **main agent**, **subagents** (`models.subagent`), and **media** per modality — `models.media.vision/audio/video/pdf` (`/model subagent zai/glm-4.5-air`, `/model media vision zai/glm-4.6`, or the Model-roles dialog in the GUI). Unset roles follow the main model |
@@ -302,11 +302,38 @@ action blocks ends the run. See `packages/core/src/system-prompt.ts`.
 ## Tools
 
 `read_file` · `list_files` · `grep` · `write_file` · `edit_file` · `bash` (blocklist-guarded) ·
-`web_fetch` · `ddg_search` · `task` (subagents) · `todowrite` · `memory` · `load_skill` · `browser` (optional Playwright) ·
+`web_fetch` · `ddg_search` · `task` (subagents) · `todowrite` · `memory` · `search_skills` · `load_skill` · `browser` (optional Playwright) ·
 `serve` + `test_report` (test mode) · `ask_user` (interview forms) ·
 `mcp_<server>_<tool>` (every connected MCP server) · `plugin_<name>_<tool>` (every loaded plugin)
 
 All file tools are **jailed to the workspace root** — traversal outside is rejected.
+
+## Skills — two-stage discovery + auto-router
+
+**Two-stage skill usage: search → load.**
+
+1. `search_skills({ query?, tags?, limit? })` — browse metadata (name, description, usage, tags) of installed skills. Read-only, cached, cheap.
+2. `load_skill({ name })` — load the full instructions of the chosen skill, right before using it.
+
+**Skill auto-router** — Tagent pre-loads relevant skills based on:
+- Workspace signals (package.json deps, file/folder structure, language fingerprint, PRD.md)
+- User message keywords (matched against skill tags + descriptions)
+
+Auto-loaded skills (max 3 by default, bodies capped at ~8k chars each) ride the system prompt with their match scores; nothing loads below the 0.5 threshold — no speculative loads. One topic-shift re-route per session keeps a mid-session "now build a CLI instead" covered.
+
+Config (`.tagent/config.json`):
+
+```jsonc
+{
+  "skills": {
+    "autoRoute": true,          // disable auto-loading entirely
+    "autoRouteMax": 3,          // max skills auto-loaded per route
+    "autoRouteThreshold": 0.5   // min match score (0..1)
+  }
+}
+```
+
+Slash commands: `/skills` (loaded this session, `[auto]`/`[manual]` badges · `all` = installed) · `/reload-skills` (re-run the router) · `/no-auto-skill` (disable for this session) · `/unload-skill <name>` (remove one from context).
 
 ## Configuration
 

@@ -36,69 +36,64 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — operating loop v2: PLAN · BUILD · TEST, verified finishes
+## v__VER__ — skill discovery: search_skills + auto-router
 
-The agent's operating contract is now a strict loop with teeth — same shape
-for every project kind (web, CLI, bot, API, library, pipeline).
+Skills now come with a two-stage protocol and a proactive layer that
+loads the right playbook before you even ask for it.
 
-```
-  PLAN ──► BUILD ──► TEST ──┬── PASS ──► ✅ SELESAI summary to the user
-                           └── FAIL ──► BUILD (fix) ──► TEST ──► (loop)
+### search_skills — browse before you load
 
-  every failed round NEEDS a concrete hypothesis (why + what changes)
-  blind trial-and-error is FORBIDDEN
-  5 failed fix rounds → STOP, escalate: what was tried · the last error
-                            verbatim · what is needed
-```
+- new tool: browse skill METADATA (name, description, usage, tags) by
+  keyword query, tags (AND), and limit — read-only, risk:low, every mode
+- two-stage progressive disclosure: FIRST search_skills to find the
+  right skill, THEN load_skill(name) for the full body — no more guessing
+  names from the prompt list or loading skills one by one to peek
+- mtime-cached listing: re-scans only when a skills dir / SKILL.md
+  actually changed; cached calls are well under a millisecond
 
-### The work loop — PLAN · BUILD · TEST
+### The skill auto-router
 
-- PLAN investigates the request AND the repo before writing the steps
-  (PRD.md is the approved spec); BUILD implements step by step; TEST
-  verifies for real — "should work" is not a result
-- PASS means STOP: the final summary is delivered and the agent never
-  keeps iterating on finished work
-- hard cap: max 5 fix rounds, then escalation with the full story; real
-  blockers (credentials, product decisions) escalate immediately
+- before the first turn, the router matches the task to skills:
+  · workspace signals (score 0.9): package.json deps (next/react → web,
+    discord.js/telegraf → bot, express/fastify/hono → API), Dockerfile,
+    tsconfig.json, app/ or src/pages, .py density, PRD.md hints
+  · task keywords (0.5–0.7): matched against skill tags + descriptions
+- matched skills auto-load into context (max 3, bodies capped ~8k chars
+  each); below-threshold or empty matches load NOTHING — no speculation
+- one topic-shift re-route per session keeps a mid-session "now build
+  a CLI instead" covered; a re-route that finds nothing new burns no
+  budget
 
-### The structured finish — ✅ SELESAI
+### Transparency + control
 
-Every finished task closes with the exact block (labels follow the
-user's language):
+- the TUI shows: 🎯 Auto-loaded skills + the match reasons; WORKLOG.md
+  gets the [auto-router] entry; the system prompt carries the list
+  (name, score, reason) plus the bodies
+- slash commands: /skills (loaded, [auto]/[manual] badges; all =
+  installed) · /reload-skills · /no-auto-skill · /unload-skill <name>
+- config: skills.autoRoute (default true) · autoRouteMax (3) ·
+  autoRouteThreshold (0.5)
 
-```
-✅ SELESAI
-📌 Yang dikerjakan: what was done — the short story
-📁 File yang diubah: every path touched + one-line why
-🧪 Verifikasi: what you actually ran and the result — commands, counts
-⚠️ Catatan: known gaps, follow-ups — or "-"
-```
+### SKILL.md metadata
 
-- the ✅ is EARNED by verification — untested work must say so under ⚠️
-  instead of being claimed
-- caveman mode keeps the structure, one telegraphic line per field
-
-### TEST mode — same rigor on every stack
-
-- per-kind methods baked into the QA persona: web (serve + browser +
-  shots/vision) · CLI (real commands, exit codes, stdout/stderr, edge
-  cases) · API (curl, status codes, payloads, auth) · bot (real channel,
-  replies + side effects) · library (test suite, build, public API) ·
-  pipeline (real sample data, output verified end-to-end)
-- workflow restated stack-neutral: understand → start it → exercise →
-  report — the web path stays the fully-detailed reference
-- "reading the code is not testing" is now explicit
+- front-matter now understands usage: and tags: (comma-separated);
+  usage falls back to the body's first paragraph, tags to []
+- the shipped skills (web-app-builder, code-review, bug-hunter) carry
+  usage + tags
 
 ### Verification
 
-- switch-mode suite extended to 52 checks (loop branches, numbered
-  contract, max-5 + escalation, hypothesis rule, stack-agnostic,
-  ✅ SELESAI block, caveman variant); testmode assertions restated (59)
-- full battery green: subagents 71 · async-subs 40 · testmode 59 ·
+- new suite scripts/test-skills-router.ts — 73 checks: registration +
+  mode gating, query/tags/limit filters, two-stage flow, cache timing +
+  invalidation, router scenarios (web/bot/CLI), scoring caps +
+  thresholds, config disable, topic shift, slash-command logic, prompt
+  rendering, 50-skill routing perf (<100ms), and a full AgentLoop
+  end-to-end with a fake provider (notice fires, body rides the prompt,
+  search_skills executes through the permission gate)
+- battery re-run green: switch-mode 52 · subagents 71 · testmode 59 ·
   ask 41 · features 19 · context-loop 30 · browser 32 · v0190 71 ·
-  v0220 25 · updater 31 · updater-source 33 · host · tui-app · cache
-- additive again — every protected prompt contract survives (mode
-  personas, MCP, ask_user, delegation, PRD/QA, switch_mode gate)
+  v0220 25 · tui-app · host · version
+- tsc: no new errors (one pre-existing fixed); website build clean
 EOF
 )
 
@@ -108,7 +103,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — operating loop v2: PLAN · BUILD · TEST, verified finishes" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — skill discovery: search_skills + auto-router" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")

@@ -28,9 +28,55 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.29.0'
+export const LATEST = '0.30.0'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.30.0',
+    date: '2026-09-26',
+    title: 'Skill discovery — search_skills + the skill auto-router',
+    summary:
+      'Skills get a two-stage protocol and a proactive brain. The new search_skills tool browses skill metadata (name, description, usage, tags) by keyword or tags — cheap, read-only, cached — before the agent commits tokens to a load_skill. On top of that, a skill auto-router inspects the workspace (package.json deps, files, folders, language fingerprint, PRD.md) plus the task\u2019s wording, and pre-loads the matching skills into context (max 3, score-gated, ~8k chars each) with full transparency: a 🎯 notice in the TUI, the match reasons in the system prompt, and an [auto-router] line in WORKLOG.md. /skills, /reload-skills, /no-auto-skill and /unload-skill keep you in charge.',
+    stable: true,
+    sections: [
+      {
+        name: 'search_skills — browse before you load',
+        items: [
+          'the two-stage protocol: FIRST search_skills (metadata only — name, description, usage, tags), THEN load_skill for the chosen one\u2019s full body',
+          'filters: query (case-insensitive, matches name + description + usage), tags (AND-ed), limit (default 20) — plus total/shown/truncated accounting and a hint pointing at load_skill',
+          'read-only, risk:low, available in every mode (build · plan · test) and to explore subagents',
+          'mtime-based cache: listSkills re-scans only when a skills dir or SKILL.md actually changed — cached calls measure well under 1ms',
+        ],
+      },
+      {
+        name: 'The skill auto-router',
+        items: [
+          'workspace signals (rule hits, score 0.9): next/react → web · discord.js/telegraf → bot · express/fastify/hono → API · Dockerfile → devops · tsconfig.json → typescript · app/ or src/pages → frontend · .py density → python',
+          'keyword hits (score 0.5–0.7, capped): the task\u2019s words matched against skill tags and descriptions; PRD.md content counts as domain hint',
+          'below-threshold or empty matches load nothing — no speculative loads, ever; sorted by score, capped at autoRouteMax (3)',
+          'one topic-shift re-route per session (token-overlap heuristic), and a re-route that maps to no new skill burns no budget',
+        ],
+      },
+      {
+        name: 'Transparency + control',
+        items: [
+          '🎯 Auto-loaded skills notice in the TUI with the match reasons; the same story lands in WORKLOG.md as an [auto-router] entry',
+          'the system prompt carries the auto-loaded list (name, score, reason) plus the capped bodies under "### Auto-loaded skills — USE THEM"',
+          'slash commands: /skills (loaded this session with [auto]/[manual] badges, all = installed) · /reload-skills · /no-auto-skill · /unload-skill <name>',
+          'config: skills.autoRoute (default true) · skills.autoRouteMax (3) · skills.autoRouteThreshold (0.5)',
+        ],
+      },
+      {
+        name: 'Fixes + internals',
+        items: [
+          'SKILL.md front-matter now understands usage: and tags: (comma-separated); usage falls back to the body\u2019s first paragraph, tags to []',
+          'the three shipped skills (web-app-builder, code-review, bug-hunter) ship with usage + tags metadata',
+          'pre-existing tsc module error in skills.ts fixed (../types → ./types); net typecheck errors down, none added',
+          'new suite: scripts/test-skills-router.ts — 73 checks (tool registration, filters, cache, router scenarios web/bot/CLI, config gate, topic shift, slash-command logic, prompt rendering, perf, and a full AgentLoop end-to-end with a fake provider); full battery re-run green',
+        ],
+      },
+    ],
+  },
   {
     version: '0.29.0',
     date: '2026-09-24',

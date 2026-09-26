@@ -1,6 +1,8 @@
 ---
 name: bug-hunter
 description: Debug-first workflow — reproduce, isolate, fix, and regression-protect a bug with evidence at every step.
+usage: Follow when something is broken and needs a reliable fix — reproduce, isolate, fix, then protect with a regression check.
+tags: debug, bug, test
 ---
 
 # Bug Hunter

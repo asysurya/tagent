@@ -6,6 +6,68 @@ section per task. Fresh agents: read top-down before working.
 
 ---
 
+Task ID: 16
+Agent: Super Z (main)
+Task: search_skills tool + skill auto-router (v0.30.0) — two-stage
+progressive disclosure + proactive skill loading.
+
+Work Log:
+- packages/core/src/types.ts: SkillMeta += usage?/tags?/matchScore?/
+  matchReason? (all optional — backward compatible); TagentConfig +=
+  skills { autoRoute, autoRouteMax, autoRouteThreshold }.
+- packages/core/src/skills.ts: scanDir parses front-matter usage: +
+  tags: (comma-separated; usage falls back to the body's first
+  paragraph, tags to []); mtime cache in listSkills (key root+dirs,
+  dirMtime = max dir + every child SKILL.md); session registry
+  (auto/manual loaded lists, routing flags) + helpers; NEW
+  searchSkillsTool (query/tags/limit, read-only); loadSkillTool records
+  manual loads; fixed pre-existing '../types' import (tsc).
+- packages/core/src/skill-router.ts (NEW): routeSkills — rule hits
+  (package.json deps: next/react/discord.js/telegraf/express-family;
+  Dockerfile/tsconfig.json; app/·src/pages·src/api; .py density; PRD.md
+  hints) score 0.9, keyword groups score 0.5–0.7 capped, threshold
+  filter + score sort + max slice; maybeAutoRouteSkills (loop hook —
+  initial route + 1 topic-shift re-route by token-overlap <20%, budget
+  only burns when something loads); rerunSkillRouter (/reload-skills);
+  capAutoBody (8k, paragraph boundary); 🎯 notice + [auto-router]
+  WORKLOG entry via worklogTool.
+- packages/core/src/loop.ts: one maybeAutoRouteSkills call per run
+  (primary agent only) + autoSkills passed to the system prompt +
+  'search_skills' in READ_ONLY_TOOLS (plan-mode gate).
+- packages/core/src/system-prompt.ts: "How to use skills — two-stage
+  progressive disclosure" + "Auto-loaded skills" section
+  (renderAutoLoadedSkillsBlock: list + bodies).
+- packages/core/src/tools/index.ts: searchSkillsTool registered in
+  ALL_TOOLS (before load_skill) + TEST_MODE_TOOLS + RO_NAMES.
+- packages/cli/src/tui-app.ts + tui.ts: /skills (loaded with
+  [auto]/[manual] badges; all = installed) · /reload-skills ·
+  /no-auto-skill · /unload-skill — full parity both TUIs, palette +
+  help rows updated.
+- builtin-skills/*: usage + tags front-matter on the three shipped
+  skills. README.md: Skills feature row + two-stage/auto-router
+  section. docs/USERLAND.md is a phone-setup guide (no skill docs →
+  docs/ section skipped per spec).
+- Release: version.ts 0.30.0, releases.ts + LATEST, gh-release.sh BODY,
+  sync-latest, source snapshot regen (332 files · 70,027 lines), website
+  build clean; test-source-site.ts hardened (version + loop.ts line
+  count now read dynamically, 127 checks green).
+
+Stage Summary:
+- scripts/test-skills-router.ts NEW — 73 checks ALL GREEN (stable 5x):
+  registration/mode gating, output shape, query/tags/limit, two-stage
+  flow + token economy, cache <50ms + invalidation, router J/K/L
+  scenarios, scoring + threshold/max, config disable (M), topic shift
+  (S), slash logic N/O/P, transparency (Q: 🎯 + WORKLOG), prompt
+  rendering, perf (R: 0.26ms/50 skills), AgentLoop end-to-end (fake
+  provider: notice fires, body rides the prompt, search_skills executes
+  through the permission gate).
+- Battery green: switch-mode 52 · subagents 71 · testmode 59 · ask 41 ·
+  features 19 · context-loop 30 · browser 32 · v0190 71 · v0220 25 ·
+  tui-app · host · version · cache · source-site 127. tsc: 106 vs 107
+  baseline (1 pre-existing fixed, 0 new).
+
+---
+
 Task ID: 15
 Agent: Super Z (main)
 Task: The /source/ls API — queryable per-folder listings over the snapshot
