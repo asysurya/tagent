@@ -29,7 +29,7 @@ const server = Bun.serve({
   fetch(req) {
     const p = new URL(req.url).pathname
     if (p === '/latest.json') return Response.json({ version: '0.28.0', notes: 'updater test release', url: 'https://example.com/v0.28.0' })
-    if (p === '/api.json') return Response.json({ tag_name: 'v0.29.0', name: 'v0.29.0 test', body: '## release notes\nline', html_url: 'https://example.com/v0.29.0' })
+    if (p === '/api.json') return Response.json({ tag_name: `v${NEXT_VERSION}`, name: `${NEXT_VERSION} test`, body: '## release notes\nline', html_url: `https://example.com/v${NEXT_VERSION}` })
     if (p === '/bad.json') return Response.json({ nonsense: true })
     const m = /^\/(dl|wrong|small|missing|nosums)\/v0\.28\.0\/(.+)$/.exec(p)
     if (m) {
@@ -61,6 +61,13 @@ const { checkUpdate, isNewer, CURRENT_VERSION } = core as typeof import('../pack
 const { assetName, assetUrl, downloadAsset, verifyDownloaded, swapBinary, installBinaryTo, detectInstallKind, findTagentCheckout } =
   upd as typeof import('../packages/cli/src/updater')
 
+/** a version always NEWER than the running one — keeps the "outdated"
+ *  assertions valid across version bumps */
+const NEXT_VERSION = (() => {
+  const [maj, min] = CURRENT_VERSION.split('.').map(Number)
+  return `${maj}.${min + 1}.0`
+})()
+
 function nameOfAsset(): string {
   const p = process.platform
   const osName = p === 'win32' ? 'windows' : p === 'darwin' ? 'macos' : 'linux'
@@ -88,7 +95,7 @@ ok('isNewer: 0.27.0 not > 0.28.0', isNewer('0.27.0', '0.28.0') === false)
   process.env.TAGENT_UPDATE_URLS = 'http://127.0.0.1:1/dead.json'
   process.env.TAGENT_RELEASE_API = `${BASE}/api.json`
   const info = await checkUpdate(true)
-  ok('GitHub-API shape: v0.29.0 tag_name normalized', info?.latest === '0.29.0')
+  ok(`GitHub-API shape: v${NEXT_VERSION} tag_name normalized`, info?.latest === NEXT_VERSION)
   ok('API fallback marks outdated', info?.outdated === true)
   delete process.env.TAGENT_RELEASE_API
   process.env.TAGENT_UPDATE_URLS = `http://127.0.0.1:1/dead.json, ${BASE}/nonexistent.json, ${BASE}/bad.json, ${BASE}/latest.json`
