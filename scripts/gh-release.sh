@@ -36,67 +36,117 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — Hotfix: the re-route that never fired, whole-word keywords, a token budget
+## v__VER__ — Plugin decision hooks: a gatekeeper + a resolver
 
-Three fixes from the v0.30.0 audit, shipped as a drop-in patch — no config
-changes required.
+Two decision hooks join the plugin system — beforeToolCall (a gatekeeper
+that runs BEFORE the permission gate) and onResolve (a capability resolver
+contract) — plus subagent plugin inheritance and the Taceen scaffolding
+(template + capability categories; the model itself is future work).
+Drop-in: no config required, plugins stay optional — with no plugins loaded
+the emit layer is bypassed entirely and nothing changes.
 
-### Fixed — the topic-shift re-route was a silent no-op
+### Added — beforeToolCall: the gatekeeper before the permission gate
 
-- root cause: RouteContext.existingLoaded was declared and passed but never
-  read, and the already-loaded dedup ran AFTER the top-max slice — so in
-  any workspace with a rule signal (package.json, Dockerfile, tsconfig.json
-  — the common case) the top-N were always the already-loaded 0.9 rule
-  hits, filtered to [] and the re-route returned null
-- already-loaded skills are now excluded BEFORE the slice (case-insensitive
-  — manual load_skill records the user-typed name), so a mid-session "now
-  build a CLI instead" genuinely loads the new skill
-- evidence: the end-to-end repro went from re-route = null (session
-  unchanged) to "🎯 Auto-loaded skills: fake-cli" with the new skill live
-  in the session
+- fires on every tool call with { tool, input, risk, workspaceRoot,
+  sessionId }, BEFORE permissions.gate()
+- the contract — first block/modify across plugins wins:
+  - {action:'allow'} or void → neutral, the call proceeds
+  - {action:'block', reason, alternative?} → the call stops: record status
+    'denied', output `Blocked by plugin: <reason>` (+ `Alternative: <alt>`
+    on its own line) fed back to the agent on the same path as a permission
+    denial; the permission gate and the tool run are skipped
+  - {action:'modify', input} → the tool input is replaced; the record's
+    input is updated too, so the transcript shows what actually ran
+- fail-open: a hook that throws is logged and skipped — the call proceeds;
+  a broken plugin never blocks the agent
+- deviation from the original design snippet, on purpose: the record
+  status is 'denied' (an existing ToolCallRecord value), not 'blocked'
 
-### Fixed — keywords match words, not fragments
+### Added — onResolve: the capability resolver (contract now, call-site later)
 
-- before: unanchored substring includes() — "ci" matched "decide"/"social",
-  "test" matched "latest", firing spurious 0.5 (= threshold) skill loads
-  in ANY workspace
-- now: word-boundary matching, case-insensitive; a multi-word keyword
-  needs every word (per-word AND); the regex avoids lookbehind so it stays
-  portable
-- one shared helper (keywordInText in util.ts) backs the router's keyword
-  detection AND search_skills' query filter — the two can no longer
-  disagree; frontmatter tag matching stays exact
+- fires with { query, workspaceRoot, mode } and answers
+  { available: [{type:'tool'|'mcp'|'plugin'|'skill', name, reason?}],
+  unavailable?, hint? } — or void for "no answer"
+- emitOnResolve merges answers across plugins (first hint wins; null when
+  nobody answered)
+- there is NO loop call-site yet — deliberate: this is the stable
+  integration surface for Taceen (the main-agent/sub-agent wiring lands in
+  a follow-up release); the contract + template ship first
+- PermissionDecision grows optional reason? / alternative? — unconsumed
+  prep for the gatekeeper ↔ permission-gate integration
 
-### Added — a total token budget
+### Added — subagents inherit plugins + MCP/plugin tools
 
-- new config skills.autoRouteMaxTokens (default 15000): a session-wide
-  cap over auto-loaded skill bodies — the already-loaded ones plus the new
-  candidates, estimated at ceil(chars/4)
-- over budget → the lowest-score additions are truncated first; each is
-  announced with the exact log line
-  [auto-router] Truncated: <name> (score <score>) — total cap hit
-- the top-scoring skill always survives, and manual load_skill (24k
-  per-skill cap) is NOT affected
-- evidence: the repro's worst case went from 16144 uncapped tokens to
-  14126 ≤ 15000 with the truncation log; pre-fix, the audit measured ~12.1k
-  tokens/turn of skill bodies riding the system prompt, unbounded across
-  re-routes
+- AgentLoopOptions.plugins? is new; spawnSubagent forwards plugins AND
+  extraTools — spawned subagents (including background subagents, same
+  code path) now run the gatekeeper and see the host-injected MCP/plugin
+  tools
+- e2e: a plugin denial inside a subagent is fed back into the sub
+  conversation, and the report still reaches the parent
+- host.ts passes the loaded plugins to the primary AgentLoop (one line) —
+  without it the gatekeeper would never have fired in real CLI runs
+
+### Added — the Taceen plugin template (prep work — no model yet)
+
+Taceen is a planned small (~30–50 MB) local Python Tool & Capability
+Resolver. This release ships the scaffolding it slots into — mock +
+subprocess modes, everything fails open:
+
+| File | What |
+|---|---|
+| `.tagent/plugins/taceen.mjs` | the plugin (mock + subprocess modes) |
+| `.tagent/plugins/taceen.json` | config |
+| `.tagent/taceen/taceen.py` | JSON-over-stdio skeleton (one line in, one out) |
+| `docs/TACEEN.md` | developer doc (EN/ID) |
+
+- config (defaults): enabled `true` · mode `"mock"` · pythonPath `"python3"`
+  · taceenScript `.tagent/taceen/taceen.py` · timeoutMs `1500`
+- mock mode: file/test/web keywords resolve heuristically to
+  read_file / bash / mcp_browser_navigate; any bash command containing
+  rm -rf is blocked with an alternative
+- switch to subprocess mode with {"mode":"subprocess"} in taceen.json —
+  onResolve and beforeToolCall then shell out to python3 with the JSON
+  contract above
+- the fallback rule (design invariant): any Taceen error or timeout →
+  allow. Every hook body is try/catch → undefined; spawn failure, empty
+  stdout, unparseable JSON and timeout all collapse to allow. Verified
+  live with a 1 ms timeout and the missing-script path — the agent stays
+  unblocked in every failure mode
+
+### Added — capability categories (10 categories / 41 capabilities)
+
+- .tagent/taceen/categories.json v1.0 + docs/CATEGORIES.md — the taxonomy
+  the future resolver model consumes
+- 10 functional cross-kind categories covering 41 capabilities: all 25
+  registered tools + the 3 builtin skills + 13 representative MCP
+  examples (the live MCP list is per-user config; these are demonstrative)
+- two-stage answers: pick ONE category, return only that category's
+  capabilities — ~30 tokens per entry, the full catalog under ~1.5k tokens
+- docs/CATEGORIES.md records the 8 design answers (exposure, no-match
+  fallback, multi-match ranking, MCP naming, skill handling) + 3 worked
+  examples
 
 ### Tests
 
-- scripts/test-skills-router.ts: 73 → 112 checks (39 new regression checks
-  covering the re-route under rule signals, word-boundary matching, the
-  total token cap + truncation log, short-follow-up no-duplicate-loads,
-  manual load_skill uncapped, and search_skills word-boundary); 5
-  consecutive runs green
-- full battery re-run green, matching the v0.30.0 release numbers; tsc
-  total 124 → 117 (zero errors in the test file; the remaining 117 =
-  106 pre-existing release baseline + 11 audit scripts, out of scope)
+- new suite scripts/test-plugin-hooks.ts — 62 checks (hermetic mkdtemp
+  roots, 5 consecutive identical runs): e2e block/modify through a real
+  AgentLoop, the no-plugins path, subagent inheritance, 12 emit-layer
+  units, and the real taceen plugin in mock/subprocess/disabled/
+  missing-script modes — including the proof that the plugin fires BEFORE
+  the bash blocklist (the /tmp sentinel survived an rm -rf attempt)
+- scripts/smoke-plugin-hooks.ts — 8 sanity checks (persisted)
+- full battery green, matching the release numbers: switch-mode 52 ·
+  subagents 71 · testmode 59 · ask 41 · features 19 · context-loop 30 ·
+  browser 32 · v0190 71 · v0220 25 · tui-app ALL PASS · host ALL OK ·
+  version exit 0 · cache 38 · skills-router 112; source-site snapshot
+  regenerated for this release (125 passed / 2 failed before the regen —
+  it predated the loop.ts change)
+- tsc: 117 total — 0 new vs the pre-change baseline
 
 ### Upgrade note
 
-- drop-in patch: no config changes required — the new knob is optional;
-  set skills.autoRouteMaxTokens only if you want a tighter or looser budget
+- drop-in: no config changes required — plugins stay entirely optional;
+  with none loaded, the emit layer is bypassed and behavior is unchanged
 EOF
 )
 
@@ -106,7 +156,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — Hotfix: the re-route that never fired, whole-word keywords, a token budget" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — Plugin decision hooks: a gatekeeper + a resolver" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")

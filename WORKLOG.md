@@ -1036,3 +1036,348 @@ Stage Summary:
 - v0.30.1 fully shipped: commit a38cee7 (cut) + 1d1f940 (snapshot), tag
   v0.30.1, release live with 7 assets, both update endpoints serving 0.30.1,
   CLI + binary self-report 0.30.1 and consider themselves up to date.
+---
+Task ID: 6
+Agent: Explore (read-only)
+Task: Map plugins/loop/permissions/tools/skills for Taceen prep work
+Work Log:
+- Read WORKLOG entries for Tasks 3-a, 4, 5 (v0.30.1 hotfix + release cut).
+- Read in full: packages/core/src/plugins.ts, permissions.ts, tools/index.ts,
+  skills.ts, types.ts, loop.ts, subagents.ts; mcp.ts key sections (naming,
+  toolDefinitions, timeouts); packages/cli/src/host.ts (plugin wiring,
+  chatSend AgentLoop construction, workspaceId); config.ts (GLOBAL_DIR,
+  config layering).
+- Grepped codebase for emitPluginEvent/loadPlugins/pluginToolDefinitions/
+  pluginMeta call sites (packages + scripts + mini-services) — only
+  packages/cli/src/host.ts emits events (onSessionStart, onAgentDone).
+- Grepped onToolCall/onToolResult/onUserMessage hook names — plugin hooks
+  onToolCall/onToolResult/onUserMessage are NEVER invoked anywhere (dead).
+- Extracted every tool name + risk + description from tools/*, memory.ts,
+  skills.ts; ALL_TOOLS order verified in tools/index.ts.
+- Read builtin-skills/*/SKILL.md frontmatter (3 skills + tags).
+- Read scripts/test-subagents.ts (full), test-skills-router.ts (setup +
+  e2e section), test-plugins-v2.ts — test-isolation patterns captured.
+- Verified workspaceId === resolved workspace root path (host.ts:149-150;
+  loop.ts:172 uses session.workspaceId as ToolContext.workspaceRoot).
+- NO files modified except this WORKLOG append.
+Stage Summary:
+- PluginHooks has 5 hooks (onSessionStart/onUserMessage/onToolCall/
+  onToolResult/onAgentDone), all (ctx: Record<string,unknown>) =>
+  void|Promise<void>; hooks object passed through AS-IS (no whitelist);
+  loaded async from <root>/.tagent/plugins + ~/.tagent/plugins *.m?js with
+  per-file try/catch; PLUGIN_API_VERSION 2.0.0.
+- emitPluginEvent fires ONLY onSessionStart + onAgentDone, both from
+  host.ts chatSend; onToolCall/onToolResult/onUserMessage are dead code —
+  loop.ts has zero plugin awareness.
+- loop.ts: for..of allActions; record created status 'running', onToolStart
+  fires, permissions.gate() at loop.ts:497; denied path sets status 'denied'
+  + fixed output string, falls through to common tail (onToolEnd + results
+  push), NO continue; statuses: running|done|error|denied.
+- spawnSubagent (loop.ts:631) passes session/provider/model/events/
+  permissions(shared parent manager)/config+maxTurns/mode/depth/readOnly/
+  signal/onSubagentSession/agentPrompt+toolsFilter — NO extraTools, NO
+  plugins: subagents never see MCP/plugin tools today.
+- AgentLoopOptions has extraTools (yes) but NO plugins field; ToolContext
+  workspaceRoot = session.workspaceId (the root path).
+- PermissionDecision = { approved: boolean; remember?: 'once'|'session'|
+  'always' }; gate() order: session-deny → session-allow → tool rule (exact,
+  mcp_<server> prefix, mcp catch-all; plugin_<name> prefix, plugin
+  catch-all) → defaultMode → onPermission → headless allow.
+- MCP tools named mcp_<server>_<tool> (slug, ≤60 chars), risk hardcoded
+  'medium', injected as extraTools in host.ts:393 alongside
+  pluginToolDefinitions; config from cfg.mcp.servers (stdio).
+- 25 registered tools (6 low-risk read/fs+web, high: bash/browser/serve/
+  bg_run; medium: write_file/edit_file/task/switch_mode/bg_stop); 3
+  builtin skills (bug-hunter, code-review, web-app-builder).
+- Tests isolate via mkdtemp roots + TAGENT_SKILLS_DIR env (set BEFORE
+  dynamic import) + fake ProviderAdapter {completeStream: script} +
+  PermissionManager(defaultConfig with defaultMode allow) + raw
+  AgentLoop construction.
+---
+Task ID: 8-a
+Agent: general-purpose (Subagent B — Taceen plugin template)
+Task: PART B — taceen.mjs + taceen.json + taceen.py + docs/TACEEN.md
+Work Log:
+- Created the Taceen plugin TEMPLATE (skeleton + mock only — the real
+  ~30-50MB model is future work). Exactly 4 files, nothing else touched:
+  .tagent/plugins/taceen.mjs (plain ESM, node: builtins only), .tagent/
+  plugins/taceen.json (config, byte-identical to spec), .tagent/taceen/
+  taceen.py (JSON-over-stdio skeleton, byte-identical to spec),
+  docs/TACEEN.md (162-line developer doc, EN/ID).
+- Plugin exports name/version/description + hooks { onResolve,
+  beforeToolCall } targeting the NEW v0.31 hook contract (no
+  tools/commands contributed). Every hook body wrapped in try/catch →
+  console.error + undefined (FALLBACK-TO-ALLOW invariant); subprocess
+  helper never throws (spawn error / empty stdout / bad JSON / timeout
+  all collapse to null → undefined → allow).
+- Config read once at module level from taceen.json BESIDE the plugin
+  file (import.meta.url → fileURLToPath — query-safe against the
+  loader's ?t= cache-buster, verified live). Missing file → silent
+  defaults; broken JSON → defaults + one warning (both verified).
+- mockResolve: case-insensitive accumulate heuristic — 'file'→read_file,
+  'test'→bash, 'web'→mcp_browser_navigate; always returns the '[MOCK]
+  heuristic resolver' hint; '[MOCK] Taceen resolve:' log line is the
+  spec'd marker. mockValidate: bash+rm -rf → block with alternative;
+  else undefined.
+- KEY FIX during verification: spec's "root = dirname(dirname(
+  pluginFile))" is off by one — the plugin lives at <root>/.tagent/
+  plugins/taceen.mjs so the workspace root needs THREE dirname hops;
+  with two, python exited code 2 (script path <root>/.tagent/.tagent/
+  taceen/taceen.py) and the fallback-to-allow fired exactly as designed
+  (observed live). Fixed to dirname x3 + documented the decision +
+  fixed the stale prose comment after the initial run.
+- Subprocess bridge: one JSON line in / one JSON line out per request;
+  stdin EPIPE swallowed (child may die early); close handler no-ops if
+  the timeout already settled (single clean timeout log).
+Stage Summary:
+- Files (4, all verified): .tagent/plugins/taceen.mjs (234 lines),
+  .tagent/plugins/taceen.json, .tagent/taceen/taceen.py (23 lines),
+  docs/TACEEN.md (162 lines). Config final state: enabled:true,
+  mode:"mock" (restored + cat-proven after every temporary toggle).
+- bun -e dynamic-import checks (fresh process each, final code): 1a
+  name/version/description ✓; 1b 'read a file' → [MOCK] log +
+  read_file + hint ✓; 1c bash rm -rf → block '[MOCK] destructive
+  command detected (rm -rf)' + alternative ✓; 1d read_file →
+  undefined ✓; 1e 'bikin web app' → mcp_browser_navigate entry ✓;
+  accumulation 'test the web file thing' → all 3 entries ✓.
+- Python stdio: resolve → [python-mock] hint JSON ✓; validate ls →
+  {"action": "allow"} ✓; 'not json' → error JSON, exit 0 ✓.
+- Subprocess mode e2e: onResolve returns '[python-mock] resolve: read
+  a file' hint from taceen.py ✓; beforeToolCall ls → allow ✓; restored
+  to mock + cat ✓. Disabled: both hooks → undefined, no [MOCK] log ✓;
+  restored + cat ✓. Timeout 1ms → '[taceen] subprocess timeout after
+  1ms — falling back to allow' + hook returns undefined (agent
+  unblocked) ✓ — the critical invariant proven live.
+- Cache-busting import (?t=…) works; taceen.json diff vs spec =
+  byte-identical. NOTE: .tagent/taceen/categories.json appeared
+  mid-run — that is Part C's file (parallel agent), not mine, no
+  conflict. Next: core wiring of beforeToolCall/onResolve (primary
+  agent, packages/core) can consume this template as-is.
+---
+Task ID: 8-b
+Agent: general-purpose (Subagent C — capability categories)
+Task: PART C — docs/CATEGORIES.md + .tagent/taceen/categories.json
+Work Log:
+- Read WORKLOG Task 6 (explore) + verified inventory read-only against
+  packages/core/src/tools/index.ts (ALL_TOOLS, 25 tools), mcp.ts
+  (toolName: mcp_<slug(server)>_<slug(tool)>, ≤60 chars, hash suffix),
+  builtin-skills/*/SKILL.md frontmatter (3 skills + tags).
+- Designed the Taceen capability category structure (Model A2: functional,
+  cross-kind — one category holds tools + MCP + skills).
+- Created .tagent/taceen/categories.json (v1.0): 10 categories, 41
+  capabilities (25 tools + 3 skills + 13 representative MCP examples with
+  "s": filesystem/fetch/brave-search/browser/github/sqlite/postgres).
+  Categories: filesystem(9, subcats read_ops/write_ops), web_research(4),
+  web_ui(6: browser+vision+web-app-builder+browser MCP), execution(4),
+  quality_assurance(4: serve+test_report+bug-hunter+code-review),
+  delegation(3: task/subs/switch_mode), workflow(3: todowrite/worklog/
+  ask_user), knowledge(3: memory/search_skills/load_skill), data(2,
+  MCP-only), repo_collab(3, MCP-only).
+- Convention: capabilities ALWAYS live in subcategories; ≥8 capabilities →
+  meaningful partition, below → single "general" subcategory (uniform
+  parser shape). Mode gating deliberately NOT encoded (stays in
+  buildToolset); MCP entries marked as examples in docs.
+- Created docs/CATEGORIES.md: category table + why (coverage/balance/no
+  overlap), subcategory policy, {type,n,d,s} spec + token budget (~30
+  tokens/entry), the 8 design answers (exposure=static versioned JSON +
+  regenerate-on-startup/MCP-config-change with live-registry fallback;
+  no-match=hint+flattened list+search_skills delegate; multi-match=rank by
+  keyword score, smaller category tie-break; MCP=server-slug convention
+  table + runtime "extensions" catch-all for unknown servers; skills=static
+  entries + search_skills as live long-tail), 3 worked examples,
+  maintenance/versioning.
+- Verification: VALID_JSON; 41 capabilities (30-50 ok); 10 categories (≤10
+  ok); every (type,n,s) triple unique; all 25 tools + 3 skills present; 13
+  MCP entries all have "s" and names ≤60 chars; docs/CATEGORIES.md = 300
+  lines. Files written: only the 2 in scope + this append.
+Stage Summary:
+- Deliverables: docs/CATEGORIES.md (300 lines) + .tagent/taceen/categories.json
+  (41 capabilities / 10 categories, v1.0) — both verified. Design answers for
+  exposure/fallback/MCP/skill handling documented for the Taceen implementer
+  (taceen.py, parallel Task 8-a).
+---
+Task ID: 7
+Agent: Super Z (main) — PART A: plugin hook system
+Task: A1-A5 — decision hooks (beforeToolCall gatekeeper + onResolve resolver)
++ loop wiring + subagent inheritance + PermissionDecision extension.
+
+Work Log:
+- plugins.ts A1: PluginHooks extended with beforeToolCall (block/modify/allow,
+  typed ctx: tool/input/risk/workspaceRoot/sessionId) + onResolve (available/
+  unavailable/hint, ctx: query/workspaceRoot/mode). Header doc updated.
+  Backward-compat: both optional; the 5 observability hooks untouched.
+- plugins.ts A2: emitBeforeToolCall (first block/modify wins, throw→logged+
+  skipped = fails open) + emitOnResolve (merge across plugins, first hint
+  wins, null when no plugin answered). emitPluginEvent narrowed to the 5
+  observability hook names (keyof PluginHooks became unsound once the typed
+  ctx hooks landed — that was the one tsc regression, fixed same commit).
+- loop.ts A3: in the action loop, BEFORE the permission gate —
+  pluginDecision = plugins?.length ? await emitBeforeToolCall(...) : allow;
+  block → record.status 'denied' + output "Blocked by plugin: <reason>\n
+  Alternative: <alt>" and the permission gate + tool.run are SKIPPED (falls
+  to the common tail: onToolEnd + results.push, same as a permission denial);
+  modify → action.input replaced (+ record.input updated for transparency).
+  Deviation from spec snippet: status 'denied' (valid ToolCallRecord value),
+  not 'blocked' — keeps the union type sound.
+- loop.ts A4: AgentLoopOptions.plugins?: TagentPlugin[] added;
+  spawnSubagent() now passes ...(plugins) + ...(extraTools) → subagents
+  inherit the gatekeeper AND the host-injected MCP/plugin tools (background
+  subagents go through spawnSubagent too — one change covers both).
+- host.ts (1-line, necessary deviation from the file list): the primary
+  AgentLoop construction now passes `plugins` — without it the gatekeeper
+  would never fire in real CLI runs (plugins were loaded in chatSend but
+  only their TOOLS were forwarded).
+- types.ts A5: PermissionDecision + reason? + alternative? (optional,
+  unconsumed yet — prep for gatekeeper/permission integration).
+- Verification: bunx tsc --noEmit = 117 total = exact pre-change baseline
+  (stash-compared error lists: 0 new; transient 3-error regression caught
+  and fixed: keyof clash + 2× TS2454 definite-assignment false positives on
+  the flag-wrapper variant — restructured to a plain if/else which TS proves).
+  scripts/smoke-plugin-hooks.ts (persisted): 8/8 — block wins, empty→allow,
+  throw→allow, modify, block>modify ordering, resolve merge + first-hint,
+  null, throwing-resolver skip. test-plugins-v2 green; test-subagents 71/71.
+Stage Summary:
+- PART A done: the hook system + wiring + inheritance, tsc 117 (0 new),
+  affected suites green. PART B (8-a) + PART C (8-b) landed in parallel
+  (taceen template 4 files; categories 10 cats/41 capabilities). Next:
+  independent test subagent (Task 9) → docs (Task 10) → release prep.
+---
+Task ID: 9
+Agent: general-purpose (independent TEST subagent — verify hooks+plugin+categories)
+Task: Independent verification of PART A (plugin hook system) + PART B (Taceen
+plugin template) + PART C (capability categories); one new permanent file
+scripts/test-plugin-hooks.ts; report, never fix.
+Work Log:
+- Read WORKLOG Tasks 6/7/8-a/8-b (the last-appended entries), loop.ts gate
+  section (499-545), plugins.ts (emitBeforeToolCall/emitOnResolve), host.ts
+  plugin wiring, taceen.mjs/.json/.py, test-subagents.ts +
+  smoke-plugin-hooks.ts + test-plugins-v2.ts patterns.
+- Created scripts/test-plugin-hooks.ts (hermetic, mkdtemp roots only — the
+  repo's .tagent/ is only ever read): A1 test-gate scaffold + loadPlugins;
+  A2 e2e block (denied record + "### bash (denied)" fed back + no side
+  effect); A3 read_file unaffected; A4 subagent inheritance (denial fed
+  back into the sub conversation, report reaches parent); A5 no-plugins
+  old behavior; A6 modify e2e (rewritten command runs, record.input
+  replaced) + 12 emit-layer units (block/modify ordering, throw→allow,
+  void→allow, resolve merge/first-hint/null/throwing-resolver).
+- PART B in the same suite: B1 real taceen loadPlugins(repoRoot) direct
+  onResolve ([MOCK] marker + read_file); B2 e2e rm -rf → denied "[MOCK]
+  destructive command detected" (plugin fires BEFORE the bash blocklist —
+  /tmp/tagent-taceen-test sentinel survived), benign echo → done; B3
+  enabled:false temp copy → hooks undefined, no [MOCK], bash done; B4
+  subprocess temp copy → python hint "[python-mock] resolve: read a file",
+  validate → {action:"allow"} (in-suite spawnSync + raw repo-file echo |
+  python3), missing-script error path → undefined + logged "falling back
+  to allow".
+- RESULT: 62 passed, 0 failed (5 consecutive identical runs).
+- PART C (raw commands): categories.json VALID via json.tool; 41
+  capabilities / 41 unique (type,n,s) / 0 duplicates / 10 categories; all
+  25 ALL_TOOLS present, no extras; docs/CATEGORIES.md has the category
+  table (10 rows + totals), 8 numbered design answers (### (1)..(8)),
+  3 worked examples (A/B/C).
+- F1 battery: switch-mode 52, subagents 71, testmode 59, ask 41,
+  features 19, context-loop 30, browser 32, v0190 71, v0220 25, tui-app
+  ALL PASS, host ALL OK, version exit 0, cache 38, skills-router 112 —
+  all match. DEVIATION: test-source-site = 125 passed, 2 FAILED (expected
+  127, exit 1): "raw loop.ts byte-identical" + "json wrapper for loop.ts"
+  — the committed website/public/source snapshot predates PART A's loop.ts
+  changes (76-line diff = the plugin gatekeeper block). Stale snapshot,
+  needs regeneration at release prep — REPORTED, not fixed (out of scope).
+- F3: bunx tsc --noEmit → 117 'error TS' = exact baseline; 0 errors
+  mention test-plugin-hooks (my file adds none; no as-any/@ts-ignore).
+- No repo file modified by me (git: only scripts/test-plugin-hooks.ts
+  added + this WORKLOG append); repo .tagent/plugins/ still holds only
+  taceen.{mjs,json} (enabled:true, mode:mock verified).
+Stage Summary:
+- PART A/B/C all verified green (62/0 + raw C checks). One true finding:
+  source-site snapshot is stale vs the modified loop.ts (2 failing
+  assertions, exit 1) — regenerate before the v0.31 release. Suite is
+  deterministic (5× identical) and isolated (mkdtemp only).
+Task ID: 10
+Agent: general-purpose (docs subagent — release-notes PREP, TEXT ONLY)
+Task: v0.31.0 release text (changelog + releases.ts object + GH release
+body) — prepared only, NOT cut; no versions bumped, no registry touched.
+Work Log:
+- Read WORKLOG Tasks 6/7/8-a/8-b/9 (appended today — the source of truth),
+  then cross-checked every claim against the live code:
+  packages/core/src/plugins.ts (hook signatures, L64-92),
+  loop.ts (gatekeeper block, L500-522), types.ts (PermissionDecision),
+  host wiring context, scripts/gh-release.sh (BODY heredoc + __VER__
+  substitution + the hardcoded --arg name), website/src/data/releases.ts
+  (Release interface, header unreleased-convention, 0.30.1/0.30.0 voice),
+  docs/TACEEN.md (full), docs/CATEGORIES.md, .tagent/plugins/taceen.json,
+  .tagent/taceen/taceen.py, test-plugin-hooks.ts (RESULT line),
+  smoke-plugin-hooks.ts (8 checks, one per numbered case).
+- Created download/ + wrote download/release-notes-v0.31.0.md (the ONLY
+  repo file besides this append): D1 changelog entry (Added/Fixed/Tests,
+  the Fixed section framed honestly — emitPluginEvent keyof narrowing +
+  the taceen dirname off-by-one were same-change fixes, never shipped);
+  D2 paste-ready releases.ts object (version 0.31.0, date 2026-09-27,
+  5 sections, unreleased: true, NO stable field, paste-at-top
+  instructions per the releases.ts header: LATEST stays '0.30.1' until
+  the cut, then flip + remove flag + run sync-latest.ts); D3 GH release
+  body in gh-release.sh heredoc format (## v__VER__ title, gatekeeper /
+  resolver / subagent-inheritance / Taceen-template-with-config-table /
+  categories / Tests / Upgrade-note sections, plus a paste note that
+  the --arg name title must also be updated); ACCURACY CHECKLIST — a
+  31-row table mapping every number/claim to its WORKLOG task + line
+  range, with 3 flagged rows (see below).
+- Validated D2 by extracting the fenced block and parsing it with bun
+  (fields + section count + the literal \n in the blocked-output string
+  all check out; braces/quotes balanced).
+- Numbers cross-verified against the worklog: 62/0 (5x identical), smoke
+  8/8, battery 52/71/59/41/19/30/32/71/25 + tui-app/host/version/38/112,
+  source-site 125+2 (expected 127 after snapshot regen), tsc 117 / 0 new,
+  10 categories / 41 capabilities (25 tools + 3 skills + 13 MCP examples).
+- Flagged in the checklist (not invented, honestly marked): the tsc
+  split "106 release + 11 audit" comes from the v0.30.1 release notes,
+  not the worklog (worklog only confirms 117 total / 0 new) —
+  TODO-verify at cut; "onResolve has no loop call-site yet" + "full
+  catalog < ~1.5k tokens" are doc-sourced (TACEEN.md / CATEGORIES.md,
+  authored in Tasks 8-a/8-b), consistent with Task 7's wiring; found ONE
+  factual discrepancy: taceen.mjs is 235 lines on disk vs "234" in
+  Task 8-a — line count NOT cited in any deliverable.
+- NO release actions taken: version.ts untouched, releases.ts untouched,
+  LATEST still '0.30.1', no sync-latest run, no tags, no registry writes.
+Stage Summary:
+- Release text READY at download/release-notes-v0.31.0.md — three
+  deliverables + accuracy checklist, every number worklog-sourced (3
+  flagged rows documented above). Next (release-cut agent): regenerate
+  the source-site snapshot (expected 127), paste D2 at the top of
+  RELEASES (keep LATEST until the cut), swap the gh-release.sh BODY +
+  --arg name, bump version.ts, flip LATEST -> '0.31.0', remove
+  unreleased, run bun scripts/sync-latest.ts, tag v0.31.0.
+---
+Task ID: 11
+Agent: Super Z (main) — RELEASE PREP v0.31.0 (pre-cut state, NO release)
+Task: version bump + releases.ts entry + gh-release BODY + snapshot regen + final verification.
+
+Work Log:
+- version.ts: CURRENT_VERSION 0.30.1 → 0.31.0 (bun packages/cli/src/index.ts --version → 0.31.0).
+- releases.ts: pasted docs subagent Deliverable 2 (Task 10) at the top of RELEASES
+  (version 0.31.0, date 2026-09-27, 5 sections, unreleased: true); LATEST stays
+  '0.30.1' per the file's pre-release convention. latest.json untouched.
+- gh-release.sh: BODY + --arg name swapped to the v0.31.0 story (Deliverable 3).
+- Snapshot regenerated: v0.31.0 · 340 files · 48 dirs · 73037 lines (v0.30.1 was
+  336 · 71441; +4 = TACEEN.md, CATEGORIES.md, smoke-plugin-hooks.ts,
+  test-plugin-hooks.ts).
+- BUG FOUND + 1-line fix (documented deviation from "report, don't fix"):
+  test-source-site 'text: ls — tree glyphs + line counts' failed 126/127 after
+  the regen — renderLsText formats counts via toLocaleString ("1,006") but the
+  check regex expected the bare number; latent assumption (loop.ts < 1000
+  lines) broken by PART A growing it to 1006. Direct consequence of this
+  release's own change + blocks F1 → fixed by stripping commas before the
+  match (commented). Snapshot data was never wrong (byte-identical checks pass).
+- Docs checklist TODO #26 resolved: scripts/audit-v030* = 11 tsc errors (rg
+  count) — the v0.30.1 "106 + 11" split holds; the pasted notes quote only
+  "117 total, 0 new".
+- Post-bump verification (raw): test-version ✓ (0.31.0 vs latest.json 0.30.1 →
+  not outdated); test-source-site 127/0; test-plugin-hooks 62/62;
+  test-skills-router 112/112; bunx tsc 117.
+- Committed LOCALLY ONLY (no push / tag / gh-release — awaiting approval).
+Stage Summary:
+- v0.31.0 complete + committed locally: PART A hooks, PART B template, PART C
+  categories, 62-check suite + 8-check smoke, battery green (source-site 127
+  post-fix), tsc 117/0-new, snapshot v0.31.0. Cut sequence ready on approval:
+  flip LATEST → 0.31.0 + drop unreleased → sync-latest.ts → commit+tag v0.31.0
+  + push → build-binaries.sh → gh-release.sh.

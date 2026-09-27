@@ -401,6 +401,9 @@ export class AgentHost {
       config: this.cfg,
       mode: s.mode,
       extraTools,
+      // v0.31: plugins ride along — the loop's beforeToolCall gatekeeper
+      // runs for the primary agent AND every subagent it spawns
+      plugins,
       onSessionUpdate: (sess) => this.sessions.save(sess),
       // subagent runs persist → timeline survives restarts
       onSubagentSession: (sub) => this.sessions.save(sub),

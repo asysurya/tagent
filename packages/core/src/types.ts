@@ -178,6 +178,11 @@ export type Risk = 'low' | 'medium' | 'high'
 
 export interface PermissionDecision {
   approved: boolean
+  /** v0.31: why the decision was made (shown to the agent on denial) */
+  reason?: string
+  /** v0.31: suggested alternative path when denied (e.g. by a gatekeeper
+   *  plugin: "list the files first, then remove them one by one") */
+  alternative?: string
   remember?: 'once' | 'session' | 'always'
 }
 

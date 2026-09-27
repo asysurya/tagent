@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { ensureDir, homeDir } from './util'
-import type { TagentConfig, ToolDefinition } from './types'
+import type { AgentMode, Risk, TagentConfig, ToolDefinition } from './types'
 
 /**
  * Plugin system — lightweight, semver'd hooks + custom tools + commands.
@@ -19,6 +19,12 @@ import type { TagentConfig, ToolDefinition } from './types'
  *     onToolResult({tool, input, record}) {},   // after execution
  *     onAgentDone({summary, session}) {},
  *   }
+ *
+ *   // v0.31 — decision hooks (return values the loop acts on):
+ *   // beforeToolCall gates every tool call BEFORE the permission gate
+ *   // (block with reason / modify the input / allow); onResolve answers
+ *   // "which tools / MCP / skills are available for this task?" —
+ *   // the Taceen resolver contract.
  *
  *   // custom tools — become agent-callable as plugin_<plugin>_<tool>
  *   export const tools = [{
@@ -48,6 +54,42 @@ export interface PluginHooks {
   onToolCall?: (ctx: Record<string, unknown>) => void | Promise<void>
   onToolResult?: (ctx: Record<string, unknown>) => void | Promise<void>
   onAgentDone?: (ctx: Record<string, unknown>) => void | Promise<void>
+
+  /** v0.31 gatekeeper — runs before the permission gate on every tool
+   *  call. Unlike the observability hooks above this one changes the
+   *  outcome: 'block' stops the call (reason + optional alternative are
+   *  fed back to the agent), 'modify' rewrites the input, void/undefined
+   *  stays neutral. A hook that throws is logged and skipped — a broken
+   *  plugin never blocks the agent. */
+  beforeToolCall?: (ctx: {
+    tool: string
+    input: unknown
+    risk: Risk
+    workspaceRoot: string
+    sessionId: string
+  }) => Promise<
+    | { action: 'allow' }
+    | { action: 'block'; reason: string; alternative?: string }
+    | { action: 'modify'; input: unknown }
+    | void
+  >
+
+  /** v0.31 resolver — "which tools / MCP servers / skills are available
+   *  for X?". Answers with the capabilities the plugin knows about;
+   *  answers from every plugin are merged by emitOnResolve().
+   *  void/undefined = no answer. */
+  onResolve?: (ctx: {
+    query: string
+    workspaceRoot: string
+    mode: AgentMode
+  }) => Promise<
+    | {
+        available: { type: 'tool' | 'mcp' | 'plugin' | 'skill'; name: string; reason?: string }[]
+        unavailable?: { type: string; name: string; reason: string }[]
+        hint?: string
+      }
+    | void
+  >
 }
 
 /** a custom agent tool contributed by a plugin */
@@ -151,7 +193,7 @@ export function pluginToolDefinitions(plugins: TagentPlugin[]): ToolDefinition[]
 
 export async function emitPluginEvent(
   plugins: TagentPlugin[],
-  hook: keyof PluginHooks,
+  hook: 'onSessionStart' | 'onUserMessage' | 'onToolCall' | 'onToolResult' | 'onAgentDone',
   ctx: Record<string, unknown>,
 ): Promise<void> {
   for (const p of plugins) {
@@ -161,6 +203,71 @@ export async function emitPluginEvent(
       console.error(`[tagent] plugin "${p.name}" ${hook} error: ${(e as Error).message}`)
     }
   }
+}
+
+/**
+ * v0.31 — the gatekeeper emit. Runs every plugin's beforeToolCall hook
+ * before the permission gate; the first block/modify decision wins and
+ * void/undefined counts as neutral. A throwing hook is logged and skipped
+ * (fails open) — a plugin crash can never block the agent.
+ */
+export async function emitBeforeToolCall(
+  plugins: TagentPlugin[],
+  ctx: {
+    tool: string
+    input: unknown
+    risk: Risk
+    workspaceRoot: string
+    sessionId: string
+  },
+): Promise<
+  | { action: 'allow' }
+  | { action: 'block'; reason: string; alternative?: string }
+  | { action: 'modify'; input: unknown }
+> {
+  for (const p of plugins) {
+    try {
+      const r = await p.hooks.beforeToolCall?.(ctx)
+      if (r && r.action === 'block') return r
+      if (r && r.action === 'modify') return r
+    } catch (e) {
+      console.error(`[tagent] plugin "${p.name}" beforeToolCall error: ${(e as Error).message}`)
+    }
+  }
+  return { action: 'allow' }
+}
+
+/**
+ * v0.31 — the resolver emit. Merges every plugin's onResolve answer into
+ * one { available, unavailable, hint } (first hint wins); null when no
+ * plugin answered. A throwing hook is logged and skipped.
+ */
+export async function emitOnResolve(
+  plugins: TagentPlugin[],
+  ctx: { query: string; workspaceRoot: string; mode: AgentMode },
+): Promise<{
+  available: { type: string; name: string; reason?: string }[]
+  unavailable: { type: string; name: string; reason: string }[]
+  hint?: string
+} | null> {
+  const available: { type: string; name: string; reason?: string }[] = []
+  const unavailable: { type: string; name: string; reason: string }[] = []
+  let hint: string | undefined
+  let any = false
+  for (const p of plugins) {
+    try {
+      const r = await p.hooks.onResolve?.(ctx)
+      if (r) {
+        any = true
+        available.push(...(r.available ?? []))
+        unavailable.push(...(r.unavailable ?? []))
+        if (r.hint && !hint) hint = r.hint
+      }
+    } catch (e) {
+      console.error(`[tagent] plugin "${p.name}" onResolve error: ${(e as Error).message}`)
+    }
+  }
+  return any ? { available, unavailable, ...(hint !== undefined ? { hint } : {}) } : null
 }
 
 /** metadata for pickers / the GUI (no module loading) */

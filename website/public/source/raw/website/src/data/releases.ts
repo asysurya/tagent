@@ -32,6 +32,60 @@ export const LATEST = '0.30.1'
 
 export const RELEASES: Release[] = [
   {
+    version: '0.31.0',
+    date: '2026-09-27',
+    title: 'Plugin decision hooks — a gatekeeper, a resolver, and the Taceen scaffolding',
+    summary:
+      'The plugin system gains two decision hooks — the first plugin API that changes outcomes instead of just observing them. beforeToolCall gates every tool call BEFORE the permission gate: block (reason + optional alternative, fed back to the agent on the same path as a permission denial), modify (rewrite the tool input — the record is updated too, so the transcript shows what actually ran), or neutral; the first block/modify across plugins wins, and a hook that throws is logged and skipped, so a broken plugin never blocks the agent. onResolve is the counterpart: a capability resolver answering "which tools / MCP / skills fit this query?" (available/unavailable/hint, merged across plugins, first hint wins) — deliberately not wired into the loop yet; it is the stable contract the planned Taceen resolver (a small local Python model) will plug into, and this release ships its scaffolding: subagents now inherit plugins and the host-injected MCP/plugin tools, PermissionDecision grows optional reason/alternative fields, a working Taceen plugin template lands (.tagent/plugins/taceen.mjs — mock + subprocess modes, JSON over stdio, every error path fails open), plus a 10-category / 41-capability taxonomy (25 tools + 3 skills + 13 example MCP entries) the future model consumes. With no plugins loaded the emit layer is bypassed entirely — zero behavior change.',
+    unreleased: true,
+    sections: [
+      {
+        name: 'Added — beforeToolCall: a gatekeeper before the permission gate',
+        items: [
+          'new PluginHooks.beforeToolCall({ tool, input, risk, workspaceRoot, sessionId }) → {action:"allow"} | {action:"block", reason, alternative?} | {action:"modify", input} | void — the first block/modify across plugins wins',
+          'runs in the action loop BEFORE permissions.gate(): a block records status "denied" and returns the output "Blocked by plugin: <reason>\\nAlternative: <alt>" to the agent on the same fed-back path as a permission denial (the permission gate and tool.run are skipped); a modify replaces action.input AND record.input, so the transcript shows what actually ran',
+          'fail-open by design: a hook that throws is logged and skipped (the call proceeds); void/undefined stays neutral; with no plugins loaded the emit is short-circuited to allow — zero behavior change',
+          'deviation from the design snippet, on purpose: the record status is "denied" (an existing ToolCallRecord value), not "blocked" — keeps the status union sound',
+        ],
+      },
+      {
+        name: 'Added — onResolve: the capability resolver contract (call-site lands later, by design)',
+        items: [
+          'new PluginHooks.onResolve({ query, workspaceRoot, mode }) → { available: [{type:"tool"|"mcp"|"plugin"|"skill", name, reason?}], unavailable?, hint? } | void',
+          'emitOnResolve merges the answers of every plugin (first hint wins; null when nobody answered) — but nothing in the loop calls it yet: this release ships the stable contract + a working template so the Taceen main-agent/sub-agent integration lands against a fixed surface',
+          'PermissionDecision grows optional reason? and alternative? (types.ts) — unconsumed for now, prep for the gatekeeper ↔ permission-gate integration',
+        ],
+      },
+      {
+        name: 'Added — the Taceen template + capability categories (prep; the model is NOT included)',
+        items: [
+          '4 files: .tagent/plugins/taceen.mjs (mock + subprocess modes) · .tagent/plugins/taceen.json (config) · .tagent/taceen/taceen.py (JSON-over-stdio skeleton — one line in, one line out) · docs/TACEEN.md (EN/ID); the real ~30–50 MB resolver model is future work, this is the scaffolding it slots into',
+          'the fallback rule (design invariant): any Taceen error or timeout → allow — every hook body is try/catch → undefined, and spawn failure, empty stdout, unparseable JSON and timeout all collapse to allow; proven live with a 1 ms timeout ("[taceen] subprocess timeout … falling back to allow") and on the missing-script path',
+          'taceen.json: enabled (default true) · mode ("mock" | "subprocess", default "mock") · pythonPath ("python3") · taceenScript (".tagent/taceen/taceen.py") · timeoutMs (1500); in mock mode bash commands containing rm -rf are blocked with an alternative and file/test/web keywords resolve heuristically to read_file / bash / mcp_browser_navigate',
+          'categories.json v1.0 + docs/CATEGORIES.md: 10 functional cross-kind categories, 41 capabilities — all 25 registered tools + the 3 builtin skills + 13 representative MCP examples (the live MCP list is per-user config); answers are two-stage (pick ONE category → return only its capabilities), ~30 tokens per entry, the full catalog under ~1.5k tokens',
+        ],
+      },
+      {
+        name: 'Internals + compatibility',
+        items: [
+          'subagents inherit the gatekeeper AND the host-injected MCP/plugin tools: spawnSubagent forwards plugins + extraTools (background subagents use the same path — one change covers both); e2e proof: a plugin denial inside a subagent is fed back into the sub conversation and the report still reaches the parent',
+          'host.ts passes the loaded plugins to the primary AgentLoop — a one-line change; without it the gatekeeper would never have fired in real CLI runs (plugins were loaded in chatSend but only their contributed tools were forwarded)',
+          'the five observability hooks (onSessionStart / onUserMessage / onToolCall / onToolResult / onAgentDone) are untouched and stay optional — the decision hooks are purely additive',
+          'emitPluginEvent is narrowed to the five observability hook names: keyof PluginHooks went unsound once the typed-ctx decision hooks landed — caught and fixed within the same change (a refactor, not a shipped bug)',
+        ],
+      },
+      {
+        name: 'Tests',
+        items: [
+          'new suite scripts/test-plugin-hooks.ts — 62 checks, hermetic (mkdtemp roots only; the repo .tagent/ is only ever read), 5 consecutive identical runs: e2e block/modify through a real AgentLoop, the no-plugins path, subagent inheritance, 12 emit-layer units (ordering, throw→allow, resolve merge/first-hint/null/throwing resolver), and the real taceen plugin in mock/subprocess/disabled/missing-script modes — including the proof that the plugin fires BEFORE the bash blocklist (the /tmp sentinel survived rm -rf)',
+          'persisted sanity layer scripts/smoke-plugin-hooks.ts — 8 checks (block wins, empty→allow, throw→allow, modify, block>modify, resolve merge, null, throwing resolver)',
+          'full battery re-run green, matching the release numbers: switch-mode 52 · subagents 71 · testmode 59 · ask 41 · features 19 · context-loop 30 · browser 32 · v0190 71 · v0220 25 · tui-app ALL PASS · host ALL OK · version exit 0 · cache 38 · skills-router 112; source-site 125 passed / 2 failed pre-snapshot-regen (the website/public/source snapshot predates the loop.ts change — regenerated as part of this release)',
+          'tsc: 117 total, 0 new vs the pre-change baseline (error lists stash-compared)',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.30.1',
     date: '2026-09-26',
     title: 'Hotfix — the re-route that never fired, whole-word keywords, a token budget',

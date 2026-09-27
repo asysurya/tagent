@@ -30,6 +30,7 @@ import { compressOutput, slimActionInput } from './compact'
 import { modelContextWindow, estimateTokens } from './context'
 import { sessionAutoSkills } from './skills'
 import { maybeAutoRouteSkills } from './skill-router'
+import { emitBeforeToolCall, type TagentPlugin } from './plugins'
 
 const ACTION_RE = /```tagent:action\s*\n([\s\S]*?)```/g
 const MAX_TOOL_OUTPUT = 24_000
@@ -119,6 +120,9 @@ export interface AgentLoopOptions {
   onSubagentSession?: (sub: SessionData, phase: 'start' | 'end') => void
   /** extra tools injected by the host (MCP servers, plugins, …) */
   extraTools?: ToolDefinition[]
+  /** v0.31: loaded plugins — the beforeToolCall gatekeeper runs on every
+   *  tool call BEFORE the permission gate; inherited by subagents */
+  plugins?: TagentPlugin[]
   /** custom subagent persona — replaces the default identity in the system prompt */
   agentPrompt?: string
   /** custom subagent tool whitelist (tool names) */
@@ -492,25 +496,50 @@ export class AgentLoop {
                   'Switch to build mode to fix issues.',
               )
             }
-            // permission gate — ask the human when the rule says so
-            this.opts.events.onStatus?.('waiting-permission', tool.name)
-            const decision = await this.opts.permissions.gate(tool.name, action.input, this.ctx, tool.risk)
-            if (!decision.approved) {
+            // v0.31 plugin gatekeeper — decision hooks run BEFORE the
+            // permission gate: 'block' stops the call with a reason (plus an
+            // optional alternative) the agent can act on, 'modify' rewrites
+            // the input. No plugins configured → short-circuits to allow,
+            // zero behavior change.
+            const pluginDecision = this.opts.plugins?.length
+              ? await emitBeforeToolCall(this.opts.plugins, {
+                  tool: action.tool,
+                  input: action.input,
+                  risk: tool.risk,
+                  workspaceRoot: session.workspaceId,
+                  sessionId: session.id,
+                })
+              : ({ action: 'allow' } as const)
+            if (pluginDecision.action === 'block') {
               record.status = 'denied'
-              output = 'Permission denied by the user. Do not retry this exact action; ask the user how to proceed or continue with what you can.'
+              output =
+                `Blocked by plugin: ${pluginDecision.reason}` +
+                (pluginDecision.alternative ? `\nAlternative: ${pluginDecision.alternative}` : '')
             } else {
-              this.opts.events.onStatus?.('acting', tool.name)
-              // pre-write checkpoint
-              if (shouldCheckpoint(tool.name, this.snapshots.get(session.id) === true, this.ctx)) {
-                this.snapshots.set(session.id, true)
-                try {
-                  createCheckpoint(session.workspaceId, `pre-${tool.name} (session ${session.id})`)
-                } catch { /* checkpoint is best-effort */ }
+              if (pluginDecision.action === 'modify') {
+                action.input = pluginDecision.input as Record<string, unknown>
+                record.input = action.input
               }
-              output = await tool.run(action.input, this.ctx)
-              record.status = 'done'
-              if (record.status === 'done' && (tool.name === 'write_file' || tool.name === 'edit_file')) {
-                editedThisTurn = true
+              // permission gate — ask the human when the rule says so
+              this.opts.events.onStatus?.('waiting-permission', tool.name)
+              const decision = await this.opts.permissions.gate(tool.name, action.input, this.ctx, tool.risk)
+              if (!decision.approved) {
+                record.status = 'denied'
+                output = 'Permission denied by the user. Do not retry this exact action; ask the user how to proceed or continue with what you can.'
+              } else {
+                this.opts.events.onStatus?.('acting', tool.name)
+                // pre-write checkpoint
+                if (shouldCheckpoint(tool.name, this.snapshots.get(session.id) === true, this.ctx)) {
+                  this.snapshots.set(session.id, true)
+                  try {
+                    createCheckpoint(session.workspaceId, `pre-${tool.name} (session ${session.id})`)
+                  } catch { /* checkpoint is best-effort */ }
+                }
+                output = await tool.run(action.input, this.ctx)
+                record.status = 'done'
+                if (record.status === 'done' && (tool.name === 'write_file' || tool.name === 'edit_file')) {
+                  editedThisTurn = true
+                }
               }
             }
           } catch (e) {
@@ -693,6 +722,10 @@ export class AgentLoop {
       signal: this.abort.signal,
       onSubagentSession: this.opts.onSubagentSession,
       ...(def ? { agentPrompt: def.systemPrompt, toolsFilter: def.tools } : {}),
+      // v0.31: subagents inherit the plugin gatekeeper and the host-injected
+      // extra tools (MCP + plugin tools) — delegation keeps the same rules
+      ...(this.opts.plugins ? { plugins: this.opts.plugins } : {}),
+      ...(this.opts.extraTools ? { extraTools: this.opts.extraTools } : {}),
     })
     const summary = await loop.run(prompt)
     this.opts.onSubagentSession?.(sub, 'end')

@@ -1,0 +1,171 @@
+{
+  "version": "1.0",
+  "categories": [
+    {
+      "id": "filesystem",
+      "name": "Filesystem",
+      "description": "Read, search, and modify workspace files and directories (baca/tulis/edit file).",
+      "subcategories": [
+        {
+          "id": "read_ops",
+          "capabilities": [
+            { "type": "tool", "n": "read_file", "d": "Read one workspace file; smart-cached, truncates around 200KB" },
+            { "type": "tool", "n": "read_files", "d": "Batch-read up to 12 workspace files in one call" },
+            { "type": "tool", "n": "list_files", "d": "List files and directories inside the workspace" },
+            { "type": "tool", "n": "grep", "d": "Regex content search across files; returns path:line:text matches" },
+            { "type": "mcp", "n": "mcp_filesystem_read_file", "s": "filesystem", "d": "Read file contents through the filesystem MCP server" },
+            { "type": "mcp", "n": "mcp_filesystem_list_directory", "s": "filesystem", "d": "List a directory's entries through the filesystem MCP server" }
+          ]
+        },
+        {
+          "id": "write_ops",
+          "capabilities": [
+            { "type": "tool", "n": "write_file", "d": "Create a new file or fully overwrite an existing one" },
+            { "type": "tool", "n": "edit_file", "d": "Apply an exact-string replacement edit to one file" },
+            { "type": "mcp", "n": "mcp_filesystem_write_file", "s": "filesystem", "d": "Create or overwrite files through the filesystem MCP server" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "web_research",
+      "name": "Web Research",
+      "description": "Fetch web pages and search the internet (cari informasi online).",
+      "subcategories": [
+        {
+          "id": "general",
+          "capabilities": [
+            { "type": "tool", "n": "web_fetch", "d": "Fetch a URL and return readable text or JSON" },
+            { "type": "tool", "n": "ddg_search", "d": "Search the web via DuckDuckGo; returns ranked result summaries" },
+            { "type": "mcp", "n": "mcp_fetch_fetch", "s": "fetch", "d": "Fetch a URL as cleaned markdown through the fetch MCP server" },
+            { "type": "mcp", "n": "mcp_brave_search_web_search", "s": "brave-search", "d": "Privacy-focused web search through the brave-search MCP server" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "web_ui",
+      "name": "Web & UI",
+      "description": "Build and verify web interfaces: drive browsers, inspect screenshots (bangun dan uji web UI).",
+      "subcategories": [
+        {
+          "id": "general",
+          "capabilities": [
+            { "type": "tool", "n": "browser", "d": "Drive a real Playwright browser: navigate, click, type, screenshot" },
+            { "type": "tool", "n": "vision", "d": "Analyze images and screenshots with a dedicated vision model" },
+            { "type": "skill", "n": "web-app-builder", "d": "Playbook for building complete web apps with verification loops" },
+            { "type": "mcp", "n": "mcp_browser_navigate", "s": "browser", "d": "Navigate to a URL through the browser MCP server" },
+            { "type": "mcp", "n": "mcp_browser_click", "s": "browser", "d": "Click a page element through the browser MCP server" },
+            { "type": "mcp", "n": "mcp_browser_screenshot", "s": "browser", "d": "Capture a page screenshot through the browser MCP server" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "execution",
+      "name": "Execution",
+      "description": "Run shell commands and manage background processes (jalankan perintah).",
+      "subcategories": [
+        {
+          "id": "general",
+          "capabilities": [
+            { "type": "tool", "n": "bash", "d": "Run a shell command in the workspace root" },
+            { "type": "tool", "n": "bg_run", "d": "Start a long-running background command, e.g. dev servers or watchers" },
+            { "type": "tool", "n": "bg_logs", "d": "Read new output from running background processes" },
+            { "type": "tool", "n": "bg_stop", "d": "Kill a background process tree by id" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "quality_assurance",
+      "name": "Quality Assurance",
+      "description": "Run, exercise, and verify projects; debug and review code (uji, debug, review).",
+      "subcategories": [
+        {
+          "id": "general",
+          "capabilities": [
+            { "type": "tool", "n": "serve", "d": "Start the project and block until it is reachable" },
+            { "type": "tool", "n": "test_report", "d": "Write the final TEST-REPORT.md deliverable in test mode" },
+            { "type": "skill", "n": "bug-hunter", "d": "Debug-first workflow: reproduce, isolate, fix, then regression-protect" },
+            { "type": "skill", "n": "code-review", "d": "Systematic review for correctness, security, performance, and style" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "delegation",
+      "name": "Delegation",
+      "description": "Spawn subagents and control the current run (delegasi subagent, kontrol mode).",
+      "subcategories": [
+        {
+          "id": "general",
+          "capabilities": [
+            { "type": "tool", "n": "task", "d": "Spawn a foreground or background subagent with its own prompt" },
+            { "type": "tool", "n": "subs", "d": "Check status and re-read reports of background subagents" },
+            { "type": "tool", "n": "switch_mode", "d": "Switch the run mode mid-run (build, plan, test); permission-gated" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "workflow",
+      "name": "Workflow",
+      "description": "Track session work: todos, journal, and human questions (kelola pekerjaan sesi).",
+      "subcategories": [
+        {
+          "id": "general",
+          "capabilities": [
+            { "type": "tool", "n": "todowrite", "d": "Create and update the session's task list" },
+            { "type": "tool", "n": "worklog", "d": "Append a dated entry to the shared WORKLOG.md journal" },
+            { "type": "tool", "n": "ask_user", "d": "Ask the human an interactive question via a form" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "knowledge",
+      "name": "Knowledge",
+      "description": "Persistent memory and skill discovery across sessions (ingatan dan pencarian skill).",
+      "subcategories": [
+        {
+          "id": "general",
+          "capabilities": [
+            { "type": "tool", "n": "memory", "d": "Save, list, or delete persistent facts across sessions" },
+            { "type": "tool", "n": "search_skills", "d": "Browse available skills by free-text query or tags" },
+            { "type": "tool", "n": "load_skill", "d": "Load a skill's full instructions into the session" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "data",
+      "name": "Data",
+      "description": "Query databases through MCP servers (query database via MCP).",
+      "subcategories": [
+        {
+          "id": "general",
+          "capabilities": [
+            { "type": "mcp", "n": "mcp_sqlite_query", "s": "sqlite", "d": "Run SQL queries on a SQLite database file" },
+            { "type": "mcp", "n": "mcp_postgres_query", "s": "postgres", "d": "Run SQL queries on a Postgres database" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "repo_collab",
+      "name": "Repo Collaboration",
+      "description": "Manage repositories, issues, and pull requests via MCP (kelola repo dan PR).",
+      "subcategories": [
+        {
+          "id": "general",
+          "capabilities": [
+            { "type": "mcp", "n": "mcp_github_create_issue", "s": "github", "d": "Create GitHub issues through the github MCP server" },
+            { "type": "mcp", "n": "mcp_github_create_pull_request", "s": "github", "d": "Open a GitHub pull request through the github MCP server" },
+            { "type": "mcp", "n": "mcp_github_search_code", "s": "github", "d": "Search code across GitHub repositories via the github MCP server" }
+          ]
+        }
+      ]
+    }
+  ]
+}

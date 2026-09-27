@@ -426,8 +426,11 @@ async function main() {
     const lsSrc = ls({ path: '/packages/core/src' })
     const text = renderLsText(lsSrc)
     const loopLines = lsSrc.entries.find((e: { name: string }) => e.name === 'loop.ts')?.lines
+    // strip thousands separators before matching — renderLsText formats
+    // counts with toLocaleString ("1,006"), which first mattered when
+    // loop.ts crossed 1000 lines (v0.31)
     ok('text: ls — tree glyphs + line counts',
-      text.includes('├──') && text.includes('└──') && new RegExp(`loop\\.ts\\s+${loopLines} lines`).test(text), `loop.ts lines=${loopLines}`)
+      text.includes('├──') && text.includes('└──') && new RegExp(`loop\\.ts\\s+${loopLines} lines`).test(text.replace(/,/g, '')), `loop.ts lines=${loopLines}`)
     const textRec = renderLsText(ls({ path: '/packages/core/src', recursive: true, depth: 2 }))
     ok('text: recursive — nested glyphs + aggregates',
       textRec.includes('│   ') && textRec.includes('tools/') && textRec.includes(`${toolsFiles.length} files`))

@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "mode": "mock",
+  "pythonPath": "python3",
+  "taceenScript": ".tagent/taceen/taceen.py",
+  "timeoutMs": 1500
+}
