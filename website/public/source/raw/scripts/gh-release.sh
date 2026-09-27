@@ -36,64 +36,67 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — skill discovery: search_skills + auto-router
+## v__VER__ — Hotfix: the re-route that never fired, whole-word keywords, a token budget
 
-Skills now come with a two-stage protocol and a proactive layer that
-loads the right playbook before you even ask for it.
+Three fixes from the v0.30.0 audit, shipped as a drop-in patch — no config
+changes required.
 
-### search_skills — browse before you load
+### Fixed — the topic-shift re-route was a silent no-op
 
-- new tool: browse skill METADATA (name, description, usage, tags) by
-  keyword query, tags (AND), and limit — read-only, risk:low, every mode
-- two-stage progressive disclosure: FIRST search_skills to find the
-  right skill, THEN load_skill(name) for the full body — no more guessing
-  names from the prompt list or loading skills one by one to peek
-- mtime-cached listing: re-scans only when a skills dir / SKILL.md
-  actually changed; cached calls are well under a millisecond
+- root cause: RouteContext.existingLoaded was declared and passed but never
+  read, and the already-loaded dedup ran AFTER the top-max slice — so in
+  any workspace with a rule signal (package.json, Dockerfile, tsconfig.json
+  — the common case) the top-N were always the already-loaded 0.9 rule
+  hits, filtered to [] and the re-route returned null
+- already-loaded skills are now excluded BEFORE the slice (case-insensitive
+  — manual load_skill records the user-typed name), so a mid-session "now
+  build a CLI instead" genuinely loads the new skill
+- evidence: the end-to-end repro went from re-route = null (session
+  unchanged) to "🎯 Auto-loaded skills: fake-cli" with the new skill live
+  in the session
 
-### The skill auto-router
+### Fixed — keywords match words, not fragments
 
-- before the first turn, the router matches the task to skills:
-  · workspace signals (score 0.9): package.json deps (next/react → web,
-    discord.js/telegraf → bot, express/fastify/hono → API), Dockerfile,
-    tsconfig.json, app/ or src/pages, .py density, PRD.md hints
-  · task keywords (0.5–0.7): matched against skill tags + descriptions
-- matched skills auto-load into context (max 3, bodies capped ~8k chars
-  each); below-threshold or empty matches load NOTHING — no speculation
-- one topic-shift re-route per session keeps a mid-session "now build
-  a CLI instead" covered; a re-route that finds nothing new burns no
-  budget
+- before: unanchored substring includes() — "ci" matched "decide"/"social",
+  "test" matched "latest", firing spurious 0.5 (= threshold) skill loads
+  in ANY workspace
+- now: word-boundary matching, case-insensitive; a multi-word keyword
+  needs every word (per-word AND); the regex avoids lookbehind so it stays
+  portable
+- one shared helper (keywordInText in util.ts) backs the router's keyword
+  detection AND search_skills' query filter — the two can no longer
+  disagree; frontmatter tag matching stays exact
 
-### Transparency + control
+### Added — a total token budget
 
-- the TUI shows: 🎯 Auto-loaded skills + the match reasons; WORKLOG.md
-  gets the [auto-router] entry; the system prompt carries the list
-  (name, score, reason) plus the bodies
-- slash commands: /skills (loaded, [auto]/[manual] badges; all =
-  installed) · /reload-skills · /no-auto-skill · /unload-skill <name>
-- config: skills.autoRoute (default true) · autoRouteMax (3) ·
-  autoRouteThreshold (0.5)
+- new config skills.autoRouteMaxTokens (default 15000): a session-wide
+  cap over auto-loaded skill bodies — the already-loaded ones plus the new
+  candidates, estimated at ceil(chars/4)
+- over budget → the lowest-score additions are truncated first; each is
+  announced with the exact log line
+  [auto-router] Truncated: <name> (score <score>) — total cap hit
+- the top-scoring skill always survives, and manual load_skill (24k
+  per-skill cap) is NOT affected
+- evidence: the repro's worst case went from 16144 uncapped tokens to
+  14126 ≤ 15000 with the truncation log; pre-fix, the audit measured ~12.1k
+  tokens/turn of skill bodies riding the system prompt, unbounded across
+  re-routes
 
-### SKILL.md metadata
+### Tests
 
-- front-matter now understands usage: and tags: (comma-separated);
-  usage falls back to the body's first paragraph, tags to []
-- the shipped skills (web-app-builder, code-review, bug-hunter) carry
-  usage + tags
+- scripts/test-skills-router.ts: 73 → 112 checks (39 new regression checks
+  covering the re-route under rule signals, word-boundary matching, the
+  total token cap + truncation log, short-follow-up no-duplicate-loads,
+  manual load_skill uncapped, and search_skills word-boundary); 5
+  consecutive runs green
+- full battery re-run green, matching the v0.30.0 release numbers; tsc
+  total 124 → 117 (zero errors in the test file; the remaining 117 =
+  106 pre-existing release baseline + 11 audit scripts, out of scope)
 
-### Verification
+### Upgrade note
 
-- new suite scripts/test-skills-router.ts — 73 checks: registration +
-  mode gating, query/tags/limit filters, two-stage flow, cache timing +
-  invalidation, router scenarios (web/bot/CLI), scoring caps +
-  thresholds, config disable, topic shift, slash-command logic, prompt
-  rendering, 50-skill routing perf (<100ms), and a full AgentLoop
-  end-to-end with a fake provider (notice fires, body rides the prompt,
-  search_skills executes through the permission gate)
-- battery re-run green: switch-mode 52 · subagents 71 · testmode 59 ·
-  ask 41 · features 19 · context-loop 30 · browser 32 · v0190 71 ·
-  v0220 25 · tui-app · host · version
-- tsc: no new errors (one pre-existing fixed); website build clean
+- drop-in patch: no config changes required — the new knob is optional;
+  set skills.autoRouteMaxTokens only if you want a tighter or looser budget
 EOF
 )
 
@@ -103,7 +106,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — skill discovery: search_skills + auto-router" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — Hotfix: the re-route that never fired, whole-word keywords, a token budget" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")

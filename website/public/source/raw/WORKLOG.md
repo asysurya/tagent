@@ -966,3 +966,37 @@ Stage Summary:
   BUG-1/2/3 fixed. No new bugs; two pre-existing audit-probe
   miscalibrations (2.8, 2.10-ci) documented — historical script, out
   of scope.
+
+---
+Task ID: 4
+Agent: Super Z (main) — VERSION BUMP + RELEASE PREP v0.30.1
+Task: Finalize hotfix v0.30.1 — version bump, releases.ts entry, snapshot
+regen, final verification.
+
+Work Log:
+- packages/core/src/version.ts: CURRENT_VERSION 0.30.0 → 0.30.1.
+  `bun packages/cli/src/index.ts --version` → 0.30.1.
+- website/src/data/releases.ts: added the 0.30.1 entry (unreleased: true) at
+  the top per the repo's documented pre-release convention; LATEST stays
+  '0.30.0' so latest.json + download buttons keep pointing at the shipped
+  release until the cut. sync-latest.ts intentionally NOT run — it throws
+  while RELEASES[0].version ≠ LATEST (that is its designed guard).
+- Snapshot regenerated (bun scripts/gen-source-snapshot.ts):
+  v0.30.1 · 336 files · 48 dirs · 71405 lines (release state was 332 ·
+  70,027; the +4 = audit-v030-edge.ts, audit-v030-followup.ts,
+  demo-skills-report.ts from post-release commits, repro-hotfix-0301.ts).
+- Post-bump verification: test-version all ✓ (0.30.1 current vs latest.json
+  0.30.0 → not outdated); test-source-site 127/127 (snapshot version ===
+  CURRENT_VERSION); test-skills-router 112/112; tsc total 117 (unchanged
+  through the whole hotfix).
+- Release NOT executed (per rules): no commit, no tag, no push, no gh
+  release. Ready-state for the cut upon approval: bump LATEST to 0.30.1 +
+  remove the unreleased flag → bun scripts/sync-latest.ts → git commit +
+  tag v0.30.1 + push → scripts/build-binaries.sh + scripts/gh-release.sh
+  with the body from download/release-notes-v0.30.1.md.
+
+Stage Summary:
+- Hotfix v0.30.1 complete in the working tree: 4 fixes (BUG-1, BUG-2, BUG-3,
+  N1), 39 regression tests (112/112 green), full 14-suite battery green,
+  tsc 124 → 117, before/after repro persisted at
+  scripts/repro-hotfix-0301.ts. Awaiting user approval to commit + release.
