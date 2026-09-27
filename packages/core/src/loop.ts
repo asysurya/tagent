@@ -511,6 +511,9 @@ export class AgentLoop {
                 })
               : ({ action: 'allow' } as const)
             if (pluginDecision.action === 'block') {
+              // TODO(v0.31.1): a dedicated 'blocked' record status to tell
+              // plugin blocks apart from user permission denials — 'denied'
+              // is reused for now (tech debt, confirmed at the v0.31.0 cut).
               record.status = 'denied'
               output =
                 `Blocked by plugin: ${pluginDecision.reason}` +

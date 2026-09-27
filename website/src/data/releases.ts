@@ -28,7 +28,7 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.30.1'
+export const LATEST = '0.31.0'
 
 export const RELEASES: Release[] = [
   {
@@ -37,7 +37,6 @@ export const RELEASES: Release[] = [
     title: 'Plugin decision hooks — a gatekeeper, a resolver, and the Taceen scaffolding',
     summary:
       'The plugin system gains two decision hooks — the first plugin API that changes outcomes instead of just observing them. beforeToolCall gates every tool call BEFORE the permission gate: block (reason + optional alternative, fed back to the agent on the same path as a permission denial), modify (rewrite the tool input — the record is updated too, so the transcript shows what actually ran), or neutral; the first block/modify across plugins wins, and a hook that throws is logged and skipped, so a broken plugin never blocks the agent. onResolve is the counterpart: a capability resolver answering "which tools / MCP / skills fit this query?" (available/unavailable/hint, merged across plugins, first hint wins) — deliberately not wired into the loop yet; it is the stable contract the planned Taceen resolver (a small local Python model) will plug into, and this release ships its scaffolding: subagents now inherit plugins and the host-injected MCP/plugin tools, PermissionDecision grows optional reason/alternative fields, a working Taceen plugin template lands (.tagent/plugins/taceen.mjs — mock + subprocess modes, JSON over stdio, every error path fails open), plus a 10-category / 41-capability taxonomy (25 tools + 3 skills + 13 example MCP entries) the future model consumes. With no plugins loaded the emit layer is bypassed entirely — zero behavior change.',
-    unreleased: true,
     sections: [
       {
         name: 'Added — beforeToolCall: a gatekeeper before the permission gate',
