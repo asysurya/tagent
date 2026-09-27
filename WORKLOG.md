@@ -1381,3 +1381,60 @@ Stage Summary:
   post-fix), tsc 117/0-new, snapshot v0.31.0. Cut sequence ready on approval:
   flip LATEST → 0.31.0 + drop unreleased → sync-latest.ts → commit+tag v0.31.0
   + push → build-binaries.sh → gh-release.sh.
+---
+Task ID: 12
+Agent: Super Z (main) — RELEASE CUT v0.31.0
+
+Task: Cut v0.31.0 (user-approved sequence, same order as v0.30.1) after
+showing the pre-cut evidence: plugins.ts + host.ts diffs and the 'denied'
+plugin-block status confirmation.
+
+Work Log:
+- Pre-cut evidence shown: plugins.ts diff in 8bcd18e is +109/-2 (import
+  AgentMode/Risk, v0.31 header comment, beforeToolCall + onResolve in
+  PluginHooks, emitBeforeToolCall + emitOnResolve); host.ts +3/-0 (plugins
+  pass-through into the primary AgentLoop, with comment). NOTE: user's
+  notes said "63 lines" for plugins.ts — actual committed diff is 109
+  added; the number grew past the PART A report when the emit layer +
+  JSDoc landed in the same file. Flagged transparently in the cut report.
+- 'denied' confirmed: loop.ts plugin-block branch sets record.status =
+  'denied' (same status as a user permission denial) — recorded as TECH
+  DEBT for v0.31.1 via a TODO(v0.31.1) comment at the site (loop.ts:514)
+  + this entry. The releases.ts 0.31.0 entry and the gh-release BODY
+  already documented the deviation ("keeps the status union sound").
+- Cut sequence (all 8 steps, zero errors):
+  1. releases.ts LATEST '0.30.1' → '0.31.0' (line 31)
+  2. unreleased: true removed from the 0.31.0 entry (line 40)
+  3. bun scripts/sync-latest.ts → latest.json = 0.31.0
+  4. commit 71fecf0 (cut: releases.ts + latest.json + loop.ts TODO) +
+     lightweight tag v0.31.0 (matches repo convention: all tags are
+     lightweight)
+  5. push origin main (f833db2..71fecf0, carries 8bcd18e work commit) +
+     push tag v0.31.0 — 0 unpushed after
+  6. build-binaries.sh 0.31.0 → 6/6 binaries + SHA256SUMS.txt (565MB
+     total; linux 102M/102M, macos 74M/79M, windows 103M/106M)
+  7. gh-release.sh (token from origin remote) → release live, 7 assets
+     uploaded, idempotent asset loop
+  8. gen-source-snapshot.ts → v0.31.0 · 340 files · 48 dirs · 73076 lines
+     (pre-cut 73037; +39 = loop.ts TODO +3, WORKLOG Task 11 entry ~37,
+     minus unreleased line -1); commit 8ea7f54 + push
+- Post-cut verification (all green):
+  - raw.githubusercontent latest.json → 0.31.0 ✓ (url points at the
+    v0.31.0 release); jsDelivr still serves 0.30.1 — CDN cache lag,
+    same as the v0.30.1 cut, self-resolves
+  - GitHub API: release "v0.31.0 — Plugin decision hooks: a gatekeeper +
+    a resolver", tag v0.31.0, draft=False, prerelease=False, 7 assets
+  - source: --version 0.31.0, --check-update "up to date: v0.31.0";
+    binary (linux-x64): --version 0.31.0, --check-update "up to date:
+    v0.31.0"
+  - test-source-site 127 passed / 0 failed · test-skills-router 112 / 0 ·
+    test-plugin-hooks 62 / 0
+  - bunx tsc: 117 errors (= pre-change baseline, 0 new)
+- download/release-notes-v0.31.0.md header updated from "PREP — not cut"
+  to the released state with commit hashes.
+
+Stage Summary:
+- v0.31.0 is LIVE: https://github.com/asysurya/tagent/releases/tag/v0.31.0
+  (7 assets, 6 binaries + SHA256SUMS.txt). Commits: 8bcd18e (work) →
+  71fecf0 (cut) → 8ea7f54 (snapshot). Tech debt for v0.31.1 recorded:
+  dedicated 'blocked' record status for plugin blocks (TODO at loop.ts).
