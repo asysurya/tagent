@@ -28,7 +28,7 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.30.0'
+export const LATEST = '0.30.1'
 
 export const RELEASES: Release[] = [
   {
@@ -37,7 +37,6 @@ export const RELEASES: Release[] = [
     title: 'Hotfix — the re-route that never fired, whole-word keywords, a token budget',
     summary:
       'Three fixes from the v0.30.0 audit, shipped as a drop-in patch. The topic-shift re-route was a silent no-op in any workspace with a rule signal (package.json, Dockerfile or tsconfig.json present — the common case): already-loaded skills were only filtered out AFTER the top-N slice, so the slice was always the same 0.9 rule hits and the re-route returned null; they are now excluded BEFORE the slice, so a topic shift genuinely loads the new relevant skill. Keyword matching now requires word boundaries — "ci" inside "decide" no longer loads the devops skill at 0.5 — and the same matcher backs search_skills, so the two always agree. A new session-wide budget (skills.autoRouteMaxTokens, default 15000, estimated at ceil(chars/4)) caps auto-loaded skill bodies: lowest-score skills are truncated first with an explicit log line, the top match always survives, and manual load_skill is untouched.',
-    unreleased: true,
     sections: [
       {
         name: 'Fixed — the topic-shift re-route was a no-op',
