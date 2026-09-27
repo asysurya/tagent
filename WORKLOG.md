@@ -1000,3 +1000,39 @@ Stage Summary:
   N1), 39 regression tests (112/112 green), full 14-suite battery green,
   tsc 124 → 117, before/after repro persisted at
   scripts/repro-hotfix-0301.ts. Awaiting user approval to commit + release.
+---
+Task ID: 5
+Agent: Super Z (main) — RELEASE CUT v0.30.1
+Task: Execute the approved cut sequence for v0.30.1.
+
+Work Log:
+- Pre-flight: hotfix state confirmed at HEAD 4142c6a (fixes + 112/112 tests
+  + version bump + pre-cut snapshot), tree clean, branch main.
+- download/ had been wiped between sessions (gitignored) — release notes
+  body reconstructed verbatim from releases.ts 0.30.1 entry + Tasks 2/3-a
+  evidence, saved to download/release-notes-v0.30.1.md (Subagent C's 3
+  deliverables mirrored).
+- scripts/gh-release.sh: BODY + release name swapped to the v0.30.1 hotfix
+  story (same pattern as every previous release).
+- releases.ts: LATEST 0.30.0 → 0.30.1; unreleased flag removed from the
+  0.30.1 entry (interface + doc comments untouched).
+- bun scripts/sync-latest.ts → latest.json 0.30.1 (guard passed).
+- Commit a38cee7 + tag v0.30.1, pushed (main a9a189a..a38cee7).
+- scripts/build-binaries.sh → 6/6 binaries + SHA256SUMS.txt (dist/tagent-v0.30.1/).
+- scripts/gh-release.sh <token> 0.30.1 --no-build → release live, 7 assets
+  uploaded (6 binaries + SHA256SUMS.txt).
+- Snapshot regenerated post-cut: v0.30.1 · 336 files · 48 dirs · 71441 lines
+  (registry flip reflected in raw copies); commit 1d1f940, pushed.
+- Verification (all raw outputs in the session):
+  bun packages/cli/src/index.ts --version → 0.30.1
+  bun packages/cli/src/index.ts --check-update → "up to date: v0.30.1" exit 0
+  dist/tagent-v0.30.1-linux-x64 --version → 0.30.1; --check-update → up to date
+  raw.githubusercontent latest.json → 0.30.1; jsDelivr latest.json → 0.30.1
+  GitHub API (auth): tag v0.30.1, name "v0.30.1 — Hotfix: the re-route that
+  never fired, whole-word keywords, a token budget", 7 assets, body correct
+  test-source-site.ts → 127 passed, 0 failed; test-skills-router.ts → ALL
+  GREEN 112 passed, 0 failed
+Stage Summary:
+- v0.30.1 fully shipped: commit a38cee7 (cut) + 1d1f940 (snapshot), tag
+  v0.30.1, release live with 7 assets, both update endpoints serving 0.30.1,
+  CLI + binary self-report 0.30.1 and consider themselves up to date.
