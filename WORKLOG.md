@@ -1438,3 +1438,99 @@ Stage Summary:
   (7 assets, 6 binaries + SHA256SUMS.txt). Commits: 8bcd18e (work) →
   71fecf0 (cut) → 8ea7f54 (snapshot). Tech debt for v0.31.1 recorded:
   dedicated 'blocked' record status for plugin blocks (TODO at loop.ts).
+---
+Task ID: 13
+Agent: Super Z (main) — v0.31.1 prep: small-RAM stability + TUI render glitch fix
+
+Task: user report, two parts: (1) tagent must run stably on small RAM —
+user-settable target (4/8/… GB); bun got OOM-killed during build on an
+8 GB laptop; "check the others too". (2) TUI render glitch: "box tool call
+tiba-tiba jadi kayak navbar" — the tool box freezes like a navbar while the
+AI stream response renders below it, then scrolls away.
+
+Work Log:
+- Root-cause analysis (tui-app.ts render model: one-shot scrollback flush +
+  sticky region repainted via cursor-up + \x1b[J):
+  * BUG 1 (the reported glitch): FOREIGN WRITES — plugins.ts console.error
+    (plugin load failure at chatSend, hook errors) write directly between
+    frames → the next cursor-up lands below the previous frame's top → the
+    \x1b[J erase starts too low → the previous frame's top rows (a
+    roundBox: navbar / box fragments) stay FROZEN on screen while new
+    content paints under them. Intermittent ("kadang2") because it needs a
+    plugin error to fire — the user just started using taceen plugins.
+  * BUG 2: SIGWINCH — onResize() only requestRender()ed; after the
+    terminal's reflow the stickyDrawn row count is stale → same frozen
+    fragments after any resize.
+  * BUG 3: flatLines() set flushed = log.length — lines printed while the
+    inline history viewer was open (pgup) were marked flushed WITHOUT ever
+    reaching the scrollback → tool boxes/assistant messages VANISHED when
+    the viewer closed.
+  * BUG 4 (minor): streamTailRows cached the markdown render by LENGTH
+    only — stale wraps reused after a width change.
+- Render fixes (tui-app.ts):
+  * installIoGuard() — while the app owns the screen, console.log/info/
+    warn/error + the output stream write (and process.stderr.write) are
+    patched: the app's own frame writes (writeOut under tuiWriting flag)
+    pass through; every FOREIGN write is queued as a transcript row and
+    flushed by the next frame on the sticky math's own terms. Restored in
+    destroy(). The 2 direct escape writes (destroy's sticky clear, the
+    resize re-anchor) converted to writeOut so the guard lets them through.
+  * onResize rewritten — drop every width-dependent cache (wrapped, flat,
+    stream), erase the old sticky zone generously (2× stickyDrawn + 2,
+    clamped), stickyDrawn = 0 → the next frame re-anchors from the bottom.
+  * flatLines fix — flushed advances ONLY in renderNow's write loop.
+  * streamCache keyed by {len, w}.
+- RAM profile (core + cli):
+  * types.ts: TagentConfig.performance.ramGb (0 = auto).
+  * NEW core/src/memory-profile.ts — detectRamGb (os.totalmem, cached),
+    profileForRam tiers (≤4: log 1500 / subs 2 / web 48 / diet 100k · ≤8:
+    2500 / 3 / 96 / 120k · else the defaults 4000 / 4 / 128 / 150k),
+    resolveMemoryProfile (user pin beats auto).
+  * cache.ts setWebCacheMax — eviction is now a while-loop (a lowered cap
+    actually drains), clamped 8..128.
+  * loop.ts AgentLoopOptions.compactThresholdChars — the context diet
+    threshold; host passes profile.compactThresholdChars.
+  * host.ts — memProfile() (live, cheap), bgSubs default ← profile (explicit
+    subagents.maxParallel still wins), setWebCacheMax at boot,
+    sanitizeConfig exposes the profile, settingsSave({ramGb}) → cfg +
+    GLOBAL config (machine property) + live rescale.
+  * tui-app.ts — log cap from the profile (logCap(), 1s cfg cache);
+    /config ram [gb|auto] + dashboard row 🧠.
+  * build-binaries.sh — free-RAM detection (/proc/meminfo · vm_stat), bun
+    --smol under 6GB free, TAGENT_BUILD_SMOL=1/0 override, single-target
+    filter documented. (Build OOM source: 11.8MB base64 GUI embed compiled
+    per target; this box itself reported 2368MB free → --smol kicked in.)
+- Tests: NEW scripts/test-render-guard.ts (27 checks: foreign writes queued
+  + flushed inside frames, sticky math, resize re-anchor + cache drops +
+  clamp, flatLines viewer fix, stream cache width, profile log cap, /config
+  ram set/auto, guard restore — reporting rides raw stdout since the guard
+  swallows console while an app is live) + NEW scripts/test-memory-profile.ts
+  (24 checks: tiers/monotonicity, resolve/auto, webCache eviction, the diet
+  fires earlier via compactThresholdChars — 96k passes at default, digested
+  at 20k, host wiring, GLOBAL-config persistence, explicit maxParallel wins)
+  + NEW scripts/glitch-proof.py (LIVE pty: noisy plugin console.error
+  mid-session + mid-run resize → 6/6: error text as transcript rows inside
+  frame writes, navbar rails intact, editor intact, coherent repaint).
+- Full battery: tui-app 44 ALL PASS · plugin-hooks 62 · plugins-v2 ·
+  host ALL OK · cache 38 · compact 49 · context-loop 30 · switch-mode 52 ·
+  subagents 71 · skills-router 112 · ask 41 · features 19 · testmode 59 ·
+  browser 32 · v0190 71 · v0220 25 · version exit 0 · source-site 125/2
+  (expected pre-regen: the /source snapshot predates this change — regen at
+  cut, same as v0.31.0) · PTY app suite 37/42 = BASELINE-IDENTICAL (the 5
+  custom-provider-wizard failures reproduce on a clean stash too).
+- tsc: 117 total — 0 new vs baseline (stash-compared; the one real new
+  error found mid-work — the guard's stderr spread tuple — fixed).
+- Audit (per "periksa juga yang lain"): bash tool output capped 32k ✓ ·
+  MCP stdio fully piped (no direct terminal writes) ✓ · session history
+  disk-based, only metadata in memory ✓ · tPending debounced 1.5s ✓ ·
+  transcript/wrapped/flat caches bounded by the (now profile-scaled) log
+  cap ✓. Honest limits NOT silently "tuned" (reported): the Bun runtime
+  baseline (~80-150MB RSS), MCP child processes are their own OS
+  processes, provider payloads.
+- Committed locally. NO release actions (rule 7): version.ts still 0.31.0,
+  no LATEST flip, no tags, no push.
+
+Stage Summary:
+- Working tree: 8 modified + 3 new source/test files, +289/−21. Ready for
+  review; cut v0.31.1 on approval (version bump + releases.ts entry +
+  snapshot regen + gh-release BODY).

@@ -56,6 +56,8 @@ import {
   fallbackListFor,
   BackgroundSubagents,
   trunc,
+  resolveMemoryProfile,
+  setWebCacheMax,
   diagnosticsCommand,
   runDiagnostics,
   compactSession as compactMessages,
@@ -139,8 +141,10 @@ export class AgentHost {
   /** one compact-prompt per crossing — don't nag every turn */
   private ctxWarned = false
   /** background subagents (task background:true) — host-owned so a sub
-   *  started in one run can deliver its report in a later one */
-  private bgSubs = new BackgroundSubagents(() => this.cfg.subagents?.maxParallel ?? 4)
+   *  started in one run can deliver its report in a later one. The default
+   *  limit comes from the memory profile (v0.31.1): small machines spawn
+   *  fewer at once; an explicit subagents.maxParallel always wins */
+  private bgSubs = new BackgroundSubagents(() => this.cfg.subagents?.maxParallel ?? this.memProfile().subagentParallelDefault)
   /** a background report arrived while NO run was live — pending wake-up
    *  (fired by a short timer; coalesces multiple reports into one run) */
   private pendingWake = false
@@ -152,7 +156,17 @@ export class AgentHost {
     this.mcp = new McpManager(this.cfg.mcp)
     this.sessions = new SessionStore(this.root, this.workspaceId)
     rememberWorkspace(this.root)
+    // v0.31.1: small-RAM stability — apply the memory profile's web-cache
+    // cap at boot (the other knobs are read live through memProfile())
+    setWebCacheMax(this.memProfile().webCacheMax)
     this.bus.setMaxListeners(50)
+  }
+
+  /** v0.31.1: the memory profile for THIS machine (performance.ramGb ←
+   *  auto-detect). Cheap to recompute; read live so /config ram applies
+   *  without a restart. */
+  memProfile() {
+    return resolveMemoryProfile(this.cfg)
   }
 
   private log(...a: unknown[]) { /* frontends render events; host stays quiet */ }
@@ -217,6 +231,18 @@ export class AgentHost {
         ...(f.apiKey ? { apiKey: '••••' } : {}),
       })),
       diagnostics: { command: diagnosticsCommand(this.cfg) ?? '' },
+      performance: (() => {
+        const p = this.memProfile()
+        return {
+          detected: p.source === 'auto' ? p.ramGb : undefined,
+          ramGb: p.ramGb,
+          source: p.source,
+          tuiLogLines: p.tuiLogLines,
+          subagentParallelDefault: p.subagentParallelDefault,
+          webCacheMax: p.webCacheMax,
+          compactThresholdChars: p.compactThresholdChars,
+        }
+      })(),
       bashEnabled: this.cfg.tools.bash,
       browserEnabled: this.cfg.tools.browser,
       mcp: this.cfg.mcp ?? { servers: {} },
@@ -404,6 +430,8 @@ export class AgentHost {
       // v0.31: plugins ride along — the loop's beforeToolCall gatekeeper
       // runs for the primary agent AND every subagent it spawns
       plugins,
+      // v0.31.1: context-diet threshold scales with the RAM profile
+      compactThresholdChars: this.memProfile().compactThresholdChars,
       onSessionUpdate: (sess) => this.sessions.save(sess),
       // subagent runs persist → timeline survives restarts
       onSubagentSession: (sub) => this.sessions.save(sub),
@@ -859,6 +887,10 @@ export class AgentHost {
     fallbackRole?: { role: 'subagent' | 'vision'; list: import('@tagent/core').FallbackEntry[] }
     /** background subagents — max concurrently running (task background:true) */
     subagentMaxParallel?: number
+    /** v0.31.1: pin the machine's RAM budget in GB (0 = auto-detect) — the
+     *  memory profile knobs rescale immediately; stored in the GLOBAL
+     *  config (a machine property, not a workspace one) */
+    ramGb?: number
     /** auto-diagnostics command — "" clears the gate */
     diagnosticsCommand?: string
     /** upsert a custom provider by id (empty baseUrl + remove → delete) */
@@ -940,6 +972,15 @@ export class AgentHost {
     if (typeof patch.subagentMaxParallel === 'number') {
       const n = Math.min(Math.max(Math.floor(patch.subagentMaxParallel), 1), 16)
       this.cfg.subagents = { ...(this.cfg.subagents ?? {}), maxParallel: n }
+    }
+    // v0.31.1: RAM budget — machine property → GLOBAL config + live rescale
+    if (typeof patch.ramGb === 'number' && Number.isFinite(patch.ramGb) && patch.ramGb >= 0) {
+      const gb = Math.min(Math.floor(patch.ramGb), 512)
+      this.cfg.performance = { ...(this.cfg.performance ?? {}), ramGb: gb }
+      try {
+        updateGlobalConfig({ performance: { ramGb: gb } })
+      } catch { /* read-only home — workspace cfg still carries it */ }
+      setWebCacheMax(this.memProfile().webCacheMax)
     }
     // auto-diagnostics gate
     if (typeof patch.diagnosticsCommand === 'string') {

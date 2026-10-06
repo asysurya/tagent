@@ -452,6 +452,14 @@ export interface TagentConfig {
      *  task tool refuses spawns beyond this until one finishes */
     maxParallel?: number
   }
+  /** v0.31.1: small-RAM stability. Pin the machine's memory budget (GB) and
+   *  tagent tunes its buffers to stay comfortably inside it: TUI transcript
+   *  retention, default subagent parallelism, web-cache entries and the
+   *  context-diet threshold all scale down. 0 / undefined = auto-detect
+   *  (os.totalmem). A machine property — store it in the GLOBAL config. */
+  performance?: {
+    ramGb?: number
+  }
   /** auto-diagnostics — a command (tsc --noEmit, npm run lint, …) run after
    *  edit turns; failures are fed back so the model self-corrects */
   diagnostics?: {

@@ -42,6 +42,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import util from 'node:util'
 
 import {
   listProviderInfos,
@@ -821,6 +822,14 @@ export class TuiApp {
   lastFrame: string[] = []
   /** sticky rows currently on screen — the cursor sits on the last one */
   private stickyDrawn = 0
+  /** v0.31.1 render guard — true ONLY while writeOut writes a frame; every
+   *  other write to the terminal is FOREIGN (a plugin's console.error, a
+   *  stray library log) and gets queued as a transcript line instead of
+   *  shifting the sticky region's anchor */
+  private tuiWriting = false
+  /** installed by installIoGuard(), run by destroy() — puts console.* and
+   *  the output stream back the way the process found them */
+  private ioRestore: (() => void) | undefined
 
   /* transcript */
   private log: LogLine[] = []
@@ -851,7 +860,7 @@ export class TuiApp {
   private streamText = ''
   /** markdown-render cache of the streaming tail — keyed by length, cleared
    *  whenever the stream restarts or completes */
-  private streamCache: { len: number; lines: string[] } | undefined
+  private streamCache: { len: number; w: number; lines: string[] } | undefined
   private lastCtrlC = 0
   private notice = ''
   private lastDoneLabel = ''
@@ -966,6 +975,10 @@ export class TuiApp {
     if (this.begun) return
     this.begun = true
     this.enterScreen()
+    // v0.31.1: install the render guard FIRST — anything that writes before
+    // the first frame (plugin load errors, MCP noise) must land in the
+    // transcript, never between the sticky rows
+    this.installIoGuard()
     try {
       this.wireHost()
       this.wireInput()
@@ -1075,6 +1088,14 @@ export class TuiApp {
       } catch { /* ignore */ }
     }
     this.busCleanup = []
+    // v0.31.1: the render guard goes back off — console.* and the output
+    // stream return to the process exactly as we found them
+    if (this.ioRestore) {
+      try {
+        this.ioRestore()
+      } catch { /* ignore */ }
+      this.ioRestore = undefined
+    }
     if (this.resizeBound) {
       try {
         (this.io.output as { removeListener?: (e: string, f: () => void) => unknown }).removeListener?.('resize', this.onResize)
@@ -1082,11 +1103,10 @@ export class TuiApp {
       this.resizeBound = false
     }
     // clear the sticky region — the transcript stays in the scrollback
-    // (fullscreen mode never used one: the whole screen IS the app)
+    // (fullscreen mode never used one: the whole screen IS the app).
+    // writeOut so the v0.31.1 render guard lets OUR escape sequence through
     if (!this.fullscreen && this.stickyDrawn > 0) {
-      try {
-        this.io.output.write(`\x1b[${this.stickyDrawn - 1}A\x1b[J`)
-      } catch { /* EPIPE */ }
+      this.writeOut(`\x1b[${this.stickyDrawn - 1}A\x1b[J`)
       this.stickyDrawn = 0
     }
     if (this.fullscreen) {
@@ -1117,12 +1137,100 @@ export class TuiApp {
   }
 
   private writeOut(s: string): void {
+    // v0.31.1: frame writes run under the render-guard flag — the patched
+    // output stream lets exactly these through untouched
+    this.tuiWriting = true
     try {
       this.io.output.write(s)
-    } catch { /* EPIPE — terminal gone */ }
+    } catch { /* EPIPE — terminal gone */ } finally {
+      this.tuiWriting = false
+    }
   }
   onResize = (): void => {
+    // v0.31.1: the terminal just reflowed its buffer at the new width —
+    // every wrapped cache and the sticky region's row count are stale. The
+    // old code just requested a repaint, trusting `stickyDrawn` to still
+    // point at the frame's first row; after a reflow it points anywhere,
+    // the cursor-up + \x1b[J erase starts mid-frame, and the rows ABOVE it
+    // stay frozen on screen (the "box tool call tiba-tiba jadi kayak
+    // navbar" glitch). So: drop every width-dependent cache, erase the
+    // old sticky zone generously, and let the next frame re-anchor from
+    // the bottom.
+    for (const e of this.log) e.wrapped = undefined
+    this.flatCache = { upto: 0, lines: [] }
+    this.streamCache = undefined
+    if (!this.fullscreen && this.stickyDrawn > 0) {
+      // reflow can at most ~double the visual rows on a width halving —
+      // erase with that much slack, clamped to the screen, from the bottom
+      // (writeOut so the render guard lets our own escape sequence through)
+      const slack = Math.min(this.termH - 1, this.stickyDrawn * 2 + 2)
+      const from = Math.max(1, this.termH - slack)
+      this.writeOut(`\x1b[${from};1H\r\x1b[J`)
+      this.stickyDrawn = 0
+    }
     this.requestRender()
+  }
+
+  /** v0.31.1 render guard — while the app owns the screen, every write that
+   *  is not one of our own frames is FOREIGN: a plugin's console.error, a
+   *  library log, anything. Left alone it lands between the sticky rows,
+   *  the next cursor-up lands BELOW the previous frame's top, the \x1b[J
+   *  erase starts too low, and the previous frame's top rows stay frozen
+   *  on screen while new content paints under them — the reported "box
+   *  tool call tiba-tiba jadi kayak navbar" glitch. The guard redirects
+   *  foreign writes into the transcript queue (they surface as normal
+   *  scrollback lines, flushed by the next frame on the sticky math's own
+   *  terms) and puts everything back on destroy(). */
+  private installIoGuard(): void {
+    if (this.ioRestore) return
+    const out = this.io.output as unknown as {
+      write: (s: string | Uint8Array, ...a: unknown[]) => boolean
+    }
+    const origOut = out.write
+    const origLog = console.log
+    const origInfo = console.info
+    const origWarn = console.warn
+    const origError = console.error
+    const queue = (s: unknown): void => {
+      if (this.destroyed) return
+      const text = String(s).replace(/\r/g, '').replace(/\n+$/, '')
+      if (text.trim()) this.sysPrintln(text)
+    }
+    const cbOf = (rest: unknown[]): (() => void) | undefined => {
+      const cb = rest.find((r) => typeof r === 'function')
+      return typeof cb === 'function' ? (cb as () => void) : undefined
+    }
+    out.write = (chunk: string | Uint8Array, ...rest: unknown[]): boolean => {
+      if (this.tuiWriting || this.destroyed) return origOut.call(out, chunk, ...rest)
+      queue(chunk)
+      const cb = cbOf(rest)
+      if (cb) setImmediate(cb)
+      return true
+    }
+    // the TUI never writes to stderr — every stderr write is foreign
+    const err = typeof process !== 'undefined' && process.stderr && (process.stderr as unknown) !== (out as unknown) ? process.stderr : undefined
+    const origErr = err ? (err.write.bind(err) as unknown as (chunk: string | Uint8Array, ...rest: unknown[]) => boolean) : undefined
+    if (err && origErr) {
+      err.write = (chunk: string | Uint8Array, ...rest: unknown[]): boolean => {
+        if (this.destroyed) return origErr(chunk, ...rest)
+        queue(chunk)
+        const cb = cbOf(rest)
+        if (cb) setImmediate(cb)
+        return true
+      }
+    }
+    console.log = (...a: unknown[]) => queue(util.format(...a))
+    console.info = (...a: unknown[]) => queue(util.format(...a))
+    console.warn = (...a: unknown[]) => queue(util.format(...a))
+    console.error = (...a: unknown[]) => queue(util.format(...a))
+    this.ioRestore = () => {
+      out.write = origOut
+      if (err && origErr) err.write = origErr as typeof err.write
+      console.log = origLog
+      console.info = origInfo
+      console.warn = origWarn
+      console.error = origError
+    }
   }
 
   /* ---------------- host events (port of tui.ts wireHost) ---------------- */
@@ -1524,11 +1632,13 @@ export class TuiApp {
       // the session exists and the box belongs to it.
       if (!sys) this.tPending.push({ sid: this.host.session?.id ?? '', e: { t: l, ...(mark ? { m: 1 } : {}) } })
     }
-    // the scrollback itself is the transcript history — 4000 entries is only
-    // a safety valve against unbounded memory in an endless session
-    if (this.log.length > 4000) {
-      const cut = this.log.length - 4000
-      this.log.splice(0, this.log.length - 4000)
+    // the scrollback itself is the transcript history — the cap is a safety
+    // valve against unbounded memory in an endless session, scaled by the
+    // RAM profile (v0.31.1: 4000 default · 2500 at 8 GB · 1500 at 4 GB)
+    const cap = this.logCap()
+    if (this.log.length > cap) {
+      const cut = this.log.length - cap
+      this.log.splice(0, this.log.length - cap)
       this.flushed = Math.max(0, this.flushed - cut)
       // the viewer cache indexes into the flat line list — drop it and let
       // flatLines() rebuild from the wrapped caches (cheap, they persist)
@@ -1536,6 +1646,13 @@ export class TuiApp {
     }
     this.scheduleTranscriptFlush()
     this.requestRender()
+  }
+
+  /** v0.31.1: transcript retention cap — from the RAM profile via the host's
+   *  sanitized config (1s cache, so /config ram applies within a second) */
+  private logCap(): number {
+    const p = (this.cfgFast() as unknown as { performance?: { tuiLogLines?: number } }).performance
+    return Math.max(500, Math.min(4000, Math.floor(p?.tuiLogLines ?? 4000)))
   }
 
   private flushFrozen(): void {
@@ -4780,6 +4897,7 @@ export class TuiApp {
     if (sub === 'fallback' || sub === 'failover') return this.configFallbackFlow(rest)
     if (sub === 'keys' || sub === 'key') return this.configKeysFlow(rest)
     if (sub === 'subs' || sub === 'subagents') return this.configSubsFlow(rest)
+    if (sub === 'ram' || sub === 'memory') return this.configRamFlow(rest)
 
     // interactive dashboard — the add/apply template
     for (;;) {
@@ -4816,6 +4934,12 @@ export class TuiApp {
           detail: `max running at once (now ${limits.maxParallel})`,
         },
         {
+          label: `🧠 ram ${yellow(`· ${this.host.memProfile().ramGb} GB`)}`,
+          hint: 'small-RAM stability profile',
+          value: 'ram',
+          detail: `log ${this.host.memProfile().tuiLogLines} · subs ≤${this.host.memProfile().subagentParallelDefault} · web ${this.host.memProfile().webCacheMax}`,
+        },
+        {
           label: `🔑 api keys ${keyN ? yellow(`· ${keyN} named`) : ''}`,
           hint: 'multi-key per provider — pick / fallback',
           value: 'keys',
@@ -4837,6 +4961,7 @@ export class TuiApp {
       if (pick === 'apply') { await this.configApplyFlow(''); continue }
       if (pick === 'fallback') { await this.configFallbackFlow(''); continue }
       if (pick === 'subs') { await this.configSubsFlow(''); continue }
+      if (pick === 'ram') { await this.configRamFlow(''); continue }
       if (pick === 'keys') { await this.configKeysFlow(''); continue }
       if (pick === 'sync') {
         const act = await this.pick(
@@ -4953,6 +5078,41 @@ export class TuiApp {
       this.host.settingsSave({ subagentMaxParallel: Math.floor(v) })
       this.println(`  ${okPill()} limit → ${bold(String(Math.floor(v)))}`)
     }
+  }
+
+  /** /config ram [gb|auto] — v0.31.1: the small-RAM stability profile. Pin
+   *  the machine's memory budget (4, 8, 16…) and tagent scales its buffers
+   *  to stay comfortable inside it; "auto" (or 0) follows os.totalmem. A
+   *  MACHINE property — persisted to the GLOBAL config so every workspace
+   *  on this laptop inherits it. */
+  private async configRamFlow(rest: string): Promise<void> {
+    const arg = rest.trim().toLowerCase()
+    const apply = (v: number): void => {
+      this.host.settingsSave({ ramGb: v })
+      const p = this.host.memProfile()
+      this.println(
+        `  ${okPill()} RAM profile → ${v === 0 ? `${bold('auto')} (detected ${p.ramGb} GB)` : bold(`${p.ramGb} GB`)}`,
+      )
+      this.println(
+        dim(
+          `    log ${p.tuiLogLines} lines · subs ≤${p.subagentParallelDefault} · web cache ${p.webCacheMax} · context diet ${p.compactThresholdChars.toLocaleString('en-US')} chars`,
+        ),
+      )
+    }
+    if (arg === 'auto' || arg === '0') return apply(0)
+    const n = Number(arg)
+    if (Number.isFinite(n) && n >= 0) return apply(Math.floor(n))
+    const p = this.host.memProfile()
+    this.println(
+      `  ${chip('🧠 RAM profile', 'blue')} ${bold(`${p.ramGb} GB`)} ${p.source === 'auto' ? dim('(auto-detected)') : dim('(pinned)')}`,
+    )
+    this.println(
+      `    ${dim('log')} ${p.tuiLogLines} lines · ${dim('subs')} ≤${p.subagentParallelDefault} · ${dim('web cache')} ${p.webCacheMax} · ${dim('context diet')} ${p.compactThresholdChars.toLocaleString('en-US')} chars`,
+    )
+    this.println(dim('    pin a budget so tagent stays stable on this machine: /config ram 4 (or 8, 16, …) · auto follows the machine'))
+    const next = (await this.ask('target RAM in GB (enter = keep · 0 = auto)')) ?? ''
+    const v = Number(next.trim())
+    if (Number.isFinite(v) && v >= 0 && next.trim() !== '') apply(Math.floor(v))
   }
 
   /** /config status — the global card: scope, repo health, keys, vault. */
@@ -5643,7 +5803,12 @@ export class TuiApp {
       for (const l of wrapped) this.flatCache.lines.push(l)
     }
     this.flatCache.upto = this.log.length
-    this.flushed = this.log.length
+    // v0.31.1 fix: this used to set `flushed = log.length` — in INLINE mode
+    // with the history viewer open it marked pending lines as written
+    // BEFORE they ever reached the terminal scrollback, so anything printed
+    // while scrolled up (tool boxes, assistant messages) vanished the moment
+    // the viewer closed. The flush cursor now advances ONLY in renderNow's
+    // write loop, where the bytes actually hit the terminal.
     return this.flatCache.lines
   }
 
@@ -5699,7 +5864,7 @@ export class TuiApp {
     const fenceOpens = (text.match(/^[ \t]*(`{3,}|~{3,})/gm) ?? []).length
     if (fenceOpens % 2 === 1) text += '\n```'
     let lines: string[]
-    if (this.streamCache?.len === text.length) {
+    if (this.streamCache?.len === text.length && this.streamCache?.w === w) {
       lines = this.streamCache.lines
     } else {
       if (this.mdRender) {
@@ -5711,7 +5876,7 @@ export class TuiApp {
       } else {
         lines = wrapStyled(this.streamText.trimEnd(), w)
       }
-      this.streamCache = { len: text.length, lines }
+      this.streamCache = { len: text.length, w, lines }
     }
     while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
     const max = Math.max(1, Math.min(8, availH))

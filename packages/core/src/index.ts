@@ -16,6 +16,7 @@ export {
   type ResolvedRef,
 } from './modelroles'
 export { loadConfig, saveConfig, defaultConfig, workspaceDir, GLOBAL_DIR, listRecentWorkspaces, rememberWorkspace, updateGlobalConfig, readGlobalConfig, type RecentWorkspace } from './config'
+export { detectRamGb, profileForRam, resolveMemoryProfile, type MemoryProfile } from './memory-profile'
 export { PermissionManager } from './permissions'
 export { AgentLoop, isReadOnlyTool, extractPlan } from './loop'
 export {
@@ -146,7 +147,7 @@ export * from './util'
 export { CURRENT_VERSION, checkUpdate, isNewer, type UpdateInfo } from './version'
 export {
   fileStateFor, clearCaches, cacheStats, resetCacheStats, bumpStat,
-  webCacheGet, webCacheSet, webTtlMs,
+  webCacheGet, webCacheSet, webTtlMs, setWebCacheMax,
   type CacheStats, type FileStamp, type Freshness,
 } from './cache'
 export {
