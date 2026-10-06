@@ -130,6 +130,9 @@ export interface AgentLoopOptions {
   /** host-owned registry of background subagents (task background:true) —
    *  shared across runs so a late report can wake a FRESH run */
   backgroundSubs?: BackgroundSubagents
+  /** v0.31.1: context-diet threshold in chars (performance.ramGb scales it
+   *  down on small machines). Falls back to COMPACT_THRESHOLD. */
+  compactThresholdChars?: number
   /** fired exactly once when a background subagent finishes (done|error) —
    *  the host notifies the user and decides delivery: inject into the
    *  running loop, or auto-continue with a new run. Never asks the user. */
@@ -882,7 +885,8 @@ export class AgentLoop {
     //    older ones into per-tool digests (tool + key input + status — the
     //    what/where is preserved, only the bulk output is dropped).
     let total = out.reduce((n, m) => n + m.content.length, 0)
-    const threshold = caveman ? COMPACT_THRESHOLD_CAVEMAN : COMPACT_THRESHOLD
+    const threshold = this.opts.compactThresholdChars
+      ?? (caveman ? COMPACT_THRESHOLD_CAVEMAN : COMPACT_THRESHOLD)
     if (total > threshold) {
       const toolIdx: number[] = []
       for (let i = 0; i < out.length; i++) {

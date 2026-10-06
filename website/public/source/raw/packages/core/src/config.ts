@@ -52,6 +52,7 @@ export function defaultConfig(): TagentConfig {
     skills: { autoRoute: true, autoRouteMax: 3, autoRouteThreshold: 0.5, autoRouteMaxTokens: 15_000 },
     caveman: false,
     theme: 'dark',
+    performance: { ramGb: 0 },
     compact: { threshold: 80, keepTokens: 10_000 },
     webGui: false,
     mcp: { servers: {} },

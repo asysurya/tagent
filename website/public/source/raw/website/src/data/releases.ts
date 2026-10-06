@@ -28,9 +28,60 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.31.0'
+export const LATEST = '0.31.1'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.31.1',
+    date: '2026-10-06',
+    title: 'Small-RAM profiles & render-guard fixes — stable on an 8 GB laptop',
+    summary:
+      'Two stability fixes for the machines tagent actually runs on. A RAM profile lands in config — performance.ramGb (0 = auto-detect from the OS): the TUI transcript retention, the subagent parallel default, the web-cache cap and the context-diet threshold all scale to the machine budget (≤4 GB: 1500 rows / 2 parallel subs / 48 web entries / 100k diet chars · ≤8 GB: 2500 / 3 / 96 / 120k · above: the existing defaults 4000 / 4 / 128 / 150k), settable live with /config ram [gb|auto], shown on the dashboard (the 🧠 row), persisted to the GLOBAL config (a machine property, not per-project) — and an explicit setting always wins where it is stricter (min). The reported render glitch — "box tool call tiba-tiba jadi kayak navbar", a tool box freezing in place while the AI stream kept scrolling under it — is root-caused and fixed: a foreign write landing between frames (a plugin console.error, a stray log) shifted the sticky region, so the next erase started too low and the previous frame\'s top rows stayed frozen on screen while new content painted under them; a render guard now captures every foreign write while the app owns the screen and flushes it as a transcript row inside the next frame, resizes re-anchor from the bottom and drop every width cache (no frozen fragments after a terminal reflow), lines printed while the inline history viewer is open no longer vanish when it closes, and the stream cache is keyed by width too. The build itself stops OOM-killing small machines: bun build runs with --smol whenever free RAM is under 6 GB (TAGENT_BUILD_SMOL=1/0 forces it on/off), each target still compiles separately and sequentially, and the single-target filter ("linux x64") is documented for the tightest boxes.',
+    sections: [
+      {
+        name: 'Added — the RAM profile (performance.ramGb)',
+        items: [
+          'new TagentConfig.performance.ramGb (default 0 = auto-detect via os.totalmem, cached) — pin the machine\'s RAM budget in GB (4, 8, 16 …); everything memory-shaped in the CLI scales from it',
+          'tiers (profileForRam, monotonic by construction): ≤4 GB → transcript cap 1500 rows · subagents parallel 2 · web cache 48 entries · context diet at 100k chars; ≤8 GB → 2500 · 3 · 96 · 120k; above → the existing defaults 4000 · 4 · 128 · 150k',
+          '/config ram [gb|auto] sets it live (rescales without a restart), the dashboard grows a 🧠 row, and the value persists to the GLOBAL config — a machine property, not per-project; an explicit config always wins where stricter (min): e.g. subagents.maxParallel 1 stays 1',
+          'new core/src/memory-profile.ts (detectRamGb + profileForRam + resolveMemoryProfile — a user pin beats auto-detect); setWebCacheMax eviction is now a while-loop so a lowered cap actually drains (clamped 8..128)',
+        ],
+      },
+      {
+        name: 'Fixed — the render glitch (the "navbar" tool box)',
+        items: [
+          'root cause: tui-app repaints the sticky region with cursor-up + erase-below; a foreign write landing between frames (plugin console.error on load failure, hook errors, any stray log) pushes the cursor down, so the next erase starts too low and the PREVIOUS frame\'s top rows — the tool-call box — stay frozen on screen while new content paints under them; intermittent because it needed a plugin error to fire',
+          'installIoGuard: while the app owns the screen, console.log/info/warn/error and the stdout/stderr writes are captured — the app\'s own frame writes pass through (the tuiWriting flag), every foreign write is queued and flushed as a transcript row inside the next frame, on the sticky math\'s own terms; everything restored on destroy',
+          'resizes (SIGWINCH) re-anchor from the bottom: every width-dependent cache (wrapped / flat / stream) is dropped and the old sticky zone is erased generously (2× stickyDrawn + 2, clamped) — no more frozen fragments after a terminal reflow',
+          'flatLines no longer marks pending lines flushed while the inline history viewer is open (they used to VANISH when the viewer closed); streamCache is keyed by {length, width}',
+        ],
+      },
+      {
+        name: 'Fixed — the build OOM (the 8 GB laptop report)',
+        items: [
+          'scripts/build-binaries.sh detects free RAM (/proc/meminfo on Linux, vm_stat on macOS) and runs bun with --smol (smaller heap, small speed cost) whenever free is under 6 GB — bun build --compile peaks at a few GB per target, and an 8 GB laptop with a browser open was an OOM kill',
+          'TAGENT_BUILD_SMOL=1 forces it on, =0 forces it off (full heap); each target still compiles separately and sequentially, and a single-target run — scripts/build-binaries.sh <version> "linux x64" — cuts the peak further',
+          'the memory hog is the embedded web GUI: ~11.8 MB of base64 baked into every binary per target (the price of download-run-done with zero install)',
+        ],
+      },
+      {
+        name: 'Audit — the rest of the memory surface',
+        items: [
+          'verified already bounded: bash tool output capped at 32k · MCP stdio fully piped (no direct terminal writes) · session history is disk-based with only metadata in memory · pending transcript writes debounced 1.5s · transcript/wrapped/flat caches bounded by the (now profile-scaled) log cap',
+          'honest limits NOT silently tuned (runtime facts, not settings): the Bun runtime baseline is ~80–150 MB RSS, and MCP child processes are their own OS processes — a RAM pin does not shrink those',
+        ],
+      },
+      {
+        name: 'Tests',
+        items: [
+          'new suite scripts/test-render-guard.ts — 27 checks: foreign writes queued and flushed inside frames, sticky math, resize re-anchor + cache drops + clamp, the flatLines viewer fix, stream-cache width key, profile log cap, /config ram set/auto, guard restore on destroy',
+          'new suite scripts/test-memory-profile.ts — 24 checks: tier shapes and monotonicity, resolve/auto, web-cache eviction actually draining, the context diet firing earlier via compactThresholdChars (96k passes at default, digested at 20k), host wiring, GLOBAL-config persistence, explicit maxParallel winning',
+          'new live-pty proof scripts/glitch-proof.py — 6/6: a noisy plugin (console.error mid-session) plus a mid-run resize; the error text lands as transcript rows inside frame writes, the navbar rails stay intact, the editor stays intact, the repaint stays coherent',
+          'full battery green: tui-app 44 ALL PASS · plugin-hooks 62 · host ALL OK · cache 38 · compact 49 · context-loop 30 · switch-mode 52 · subagents 71 · skills-router 112 · ask 41 · features 19 · testmode 59 · browser 32 · v0190 71 · v0220 25 · version exit 0; tsc 117 total — 0 new vs baseline',
+        ],
+      },
+    ],
+  },
   {
     version: '0.31.0',
     date: '2026-09-27',

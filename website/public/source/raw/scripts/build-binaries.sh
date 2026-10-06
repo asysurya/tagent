@@ -8,6 +8,13 @@
 #   version        default: read from version.ts
 #   target-filter  optional substring filter, e.g. "windows x64" or "linux"
 # Output: dist/tagent-v<version>/tagent-v<version>-<os>-<arch>[.exe] + SHA256SUMS.txt
+#
+# Small-RAM machines (v0.31.1): `bun build --compile` peaks at a few GB per
+# target — on an 8 GB laptop with a browser open that is an OOM. When free
+# RAM is low the build automatically runs bun with --smol (smaller heap at a
+# small speed cost). Override: TAGENT_BUILD_SMOL=1 forces it on, =0 forces it
+# off. Building just ONE target ("linux x64") also cuts the peak — each
+# target is compiled separately and sequentially.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -86,6 +93,36 @@ TARGETS=(
 )
 
 mkdir -p "$OUT"
+
+# -------------------------------------------------- small-RAM build mode --
+# free RAM (MB): linux /proc/meminfo · darwin page-stats · else unlimited
+free_ram_mb() {
+  if [ -r /proc/meminfo ]; then
+    awk '/^MemAvailable:/ {print int($2/1024); exit}' /proc/meminfo
+  elif command -v vm_stat >/dev/null 2>&1; then
+    # darwin: free + speculative pages (best effort)
+    local pages ps
+    pages=$(vm_stat | awk '/Pages free/ {gsub("\.",""); print $3}')
+    ps=$(vm_stat | awk '/Pages speculative/ {gsub("\.",""); print $3}')
+    echo $(( (pages + ps) * 4096 / 1048576 ))
+  else
+    echo 999999
+  fi
+}
+SMOL=""
+if [ "${TAGENT_BUILD_SMOL:-}" = "1" ]; then
+  SMOL="--smol"
+  echo "[build] TAGENT_BUILD_SMOL=1 → bun --smol (forced)"
+elif [ "${TAGENT_BUILD_SMOL:-}" = "0" ]; then
+  echo "[build] TAGENT_BUILD_SMOL=0 → full heap (forced)"
+else
+  AVAIL=$(free_ram_mb)
+  if [ "$AVAIL" -lt 6144 ]; then
+    SMOL="--smol"
+    echo "[build] free RAM ${AVAIL}MB < 6GB → bun --smol (smaller heap; TAGENT_BUILD_SMOL=0 to force off)"
+  fi
+fi
+
 BUILT=0
 for t in "${TARGETS[@]}"; do
   if [ -n "$FILTER" ] && [[ "$t" != *"$FILTER"* ]]; then continue; fi
@@ -97,7 +134,9 @@ for t in "${TARGETS[@]}"; do
   outfile="$OUT/tagent-v$VERSION-$osname-$arch"
   echo "[build] → $outfile"
   # playwright is optional (browser tool resolves it at runtime) - keep it out.
-  bun build --compile --external playwright --target="$bun_target" "$ENTRY" --outfile "$outfile"
+  # --smol is a RUNTIME flag (heap discipline) — it goes before the subcommand.
+  # shellcheck disable=SC2086 — $SMOL is intentionally word-split when empty
+  bun $SMOL build --compile --external playwright --target="$bun_target" "$ENTRY" --outfile "$outfile"
   BUILT=$((BUILT+1))
 done
 

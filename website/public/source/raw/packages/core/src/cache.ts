@@ -140,6 +140,14 @@ interface TtlEntry {
 const MAX_WEB_ENTRIES = 128
 const webCache = new Map<string, TtlEntry>()
 
+/** v0.31.1: the cap is profile-driven (performance.ramGb) — the host lowers
+ *  it at boot on small machines; never raised above the compile-time ceiling. */
+let webCacheMax = MAX_WEB_ENTRIES
+
+export function setWebCacheMax(n: number): void {
+  webCacheMax = Math.max(8, Math.min(MAX_WEB_ENTRIES, Math.floor(n) || MAX_WEB_ENTRIES))
+}
+
 export function webCacheGet(key: string, ttlMs: number): string | undefined {
   const e = webCache.get(key)
   if (!e) return undefined
@@ -151,10 +159,11 @@ export function webCacheGet(key: string, ttlMs: number): string | undefined {
 }
 
 export function webCacheSet(key: string, body: string): void {
-  if (webCache.size >= MAX_WEB_ENTRIES) {
+  while (webCache.size >= webCacheMax) {
     // evict the oldest entry (Map preserves insertion order)
     const first = webCache.keys().next().value
-    if (first !== undefined) webCache.delete(first)
+    if (first === undefined) break
+    webCache.delete(first)
   }
   webCache.set(key, { body, at: Date.now() })
 }
