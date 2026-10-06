@@ -1534,3 +1534,56 @@ Stage Summary:
 - Working tree: 8 modified + 3 new source/test files, +289/−21. Ready for
   review; cut v0.31.1 on approval (version bump + releases.ts entry +
   snapshot regen + gh-release BODY).
+---
+Task ID: 14
+Agent: Super Z (main) — v0.31.1 release cut
+
+Task: user approved the cut ("gas, cut!!!") with Task 13's prep (247f208,
+small-RAM profile + render-guard fixes) already on origin/main.
+
+Work Log:
+- Pre-cut state: releases.ts had NO 0.31.1 entry yet (unlike 0.31.0,
+  which was pre-added unreleased) — the entry was composed at cut time
+  from Task 13's record, 5 sections: RAM profile / render glitch /
+  build OOM / audit / tests.
+- Cut commit fa307e0: version.ts 0.31.0 → 0.31.1 · releases.ts new
+  0.31.1 entry + LATEST flip · sync-latest → latest.json = 0.31.1 ·
+  gh-release.sh v0.31.1 BODY + release name; lightweight tag v0.31.1;
+  pushed main + tag. Source --version 0.31.1, exit 0.
+- build-binaries.sh 0.31.1: 6/6 targets, the new small-RAM mode proved
+  itself on the very cut — auto bun --smol kicked in at 2336 MB free
+  RAM; 565 MB total (74–106 MB per binary); SHA256SUMS.txt written;
+  binary linux-x64 --version 0.31.1 · --check-update "up to date:
+  v0.31.1".
+- gh-release.sh: release created (id 404331091) — but the backgrounded
+  upload process was killed by tool-session teardown mid-loop, severing
+  the linux-x64 upload connection.
+- Recovery (dist/complete-release-assets.sh, idempotent per asset):
+  remaining assets uploaded; linux-x64 initially LOOKED present but was
+  a state=starter GHOST — the severed upload listed by the assets
+  endpoint, never finalized, never servable (by-tag showed 6/7).
+  Recovery script hardened (only state=uploaded counts as present;
+  purge_ghost deletes non-uploaded assets), ghost 614529467 deleted,
+  linux-x64 re-uploaded clean.
+- gh-release.sh hardening commit 980ed17: adopt an already-cut release
+  instead of 422-dying on re-run (the exact gap this cut hit).
+- Snapshot regen 78f7cdf: v0.31.1 · 344 files · 48 dirs · 74212 lines
+  (pre-cut 340/73076; +4 files: memory-profile.ts, glitch-proof.py,
+  test-render-guard.ts, test-memory-profile.ts; +1136 lines total).
+- Post-cut verification (all green): raw latest.json = 0.31.1 ·
+  jsDelivr = 0.31.1 (no CDN lag this time) · GitHub API latest:
+  v0.31.1, draft=False, prerelease=False, 7/7 assets state=uploaded ·
+  real API download of linux-x64 → SHA256 e5a541b3… matches
+  SHA256SUMS.txt byte-for-byte · test-source-site 127/0 (Task 13's
+  125/2 resolved by the regen) · skills-router 112/0 · plugin-hooks
+  62/0 · render-guard 27/0 · memory-profile 24/0 · tsc 117 = baseline,
+  0 new.
+
+Stage Summary:
+- v0.31.1 is LIVE: https://github.com/asysurya/tagent/releases/tag/v0.31.1
+  (7 assets: 6 binaries + SHA256SUMS.txt). Commit chain: 247f208 (prep)
+  → fa307e0 (cut) → 980ed17 (gh-release adopt-guard) → 78f7cdf
+  (snapshot).
+- Carried-over tech debt, re-scoped to v0.32.0: the dedicated 'blocked'
+  record status (loop.ts TODO comment still says "v0.31.1" — the cut
+  shipped without it per scope; fix the label in the next prep).
