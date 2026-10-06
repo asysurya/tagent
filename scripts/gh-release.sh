@@ -36,117 +36,87 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — Plugin decision hooks: a gatekeeper + a resolver
+## v__VER__ — Small-RAM profiles & render-guard fixes
 
-Two decision hooks join the plugin system — beforeToolCall (a gatekeeper
-that runs BEFORE the permission gate) and onResolve (a capability resolver
-contract) — plus subagent plugin inheritance and the Taceen scaffolding
-(template + capability categories; the model itself is future work).
-Drop-in: no config required, plugins stay optional — with no plugins loaded
-the emit layer is bypassed entirely and nothing changes.
+Two stability fixes for the machines tagent actually runs on: a RAM
+profile (performance.ramGb — 0 = auto-detect) that scales the TUI
+transcript retention, subagent parallelism, the web cache and the
+context diet to the machine budget — and the root-cause fix for the
+reported render glitch ("box tool call tiba-tiba jadi kayak navbar").
+Drop-in: nothing to configure — auto-detect picks the tier; /config ram
+to pin it explicitly.
 
-### Added — beforeToolCall: the gatekeeper before the permission gate
+### Added — the RAM profile (performance.ramGb)
 
-- fires on every tool call with { tool, input, risk, workspaceRoot,
-  sessionId }, BEFORE permissions.gate()
-- the contract — first block/modify across plugins wins:
-  - {action:'allow'} or void → neutral, the call proceeds
-  - {action:'block', reason, alternative?} → the call stops: record status
-    'denied', output `Blocked by plugin: <reason>` (+ `Alternative: <alt>`
-    on its own line) fed back to the agent on the same path as a permission
-    denial; the permission gate and the tool run are skipped
-  - {action:'modify', input} → the tool input is replaced; the record's
-    input is updated too, so the transcript shows what actually ran
-- fail-open: a hook that throws is logged and skipped — the call proceeds;
-  a broken plugin never blocks the agent
-- deviation from the original design snippet, on purpose: the record
-  status is 'denied' (an existing ToolCallRecord value), not 'blocked'
+- new performance.ramGb (default 0 = auto-detect via os.totalmem) — pin
+  the machine's RAM in GB: 4, 8, 16 …
+- tiers (monotonic by construction):
+  - ≤4 GB → transcript 1500 rows · 2 parallel subagents · 48 web-cache
+    entries · context diet at 100k chars
+  - ≤8 GB → 2500 · 3 · 96 · 120k
+  - above → the existing defaults 4000 · 4 · 128 · 150k
+- /config ram [gb|auto] — live rescale (no restart), a 🧠 dashboard row,
+  persisted to the GLOBAL config (a machine property, not per-project);
+  an explicit config always wins where stricter (min) — e.g.
+  subagents.maxParallel 1 stays 1
+- new core/src/memory-profile.ts; setWebCacheMax eviction is now a
+  while-loop, so a lowered cap actually drains (clamped 8..128)
 
-### Added — onResolve: the capability resolver (contract now, call-site later)
+### Fixed — the render glitch (the "navbar" tool box)
 
-- fires with { query, workspaceRoot, mode } and answers
-  { available: [{type:'tool'|'mcp'|'plugin'|'skill', name, reason?}],
-  unavailable?, hint? } — or void for "no answer"
-- emitOnResolve merges answers across plugins (first hint wins; null when
-  nobody answered)
-- there is NO loop call-site yet — deliberate: this is the stable
-  integration surface for Taceen (the main-agent/sub-agent wiring lands in
-  a follow-up release); the contract + template ship first
-- PermissionDecision grows optional reason? / alternative? — unconsumed
-  prep for the gatekeeper ↔ permission-gate integration
+- root cause: the sticky region repaints with cursor-up + erase-below;
+  a foreign write landing between frames (a plugin console.error, a
+  stray log) pushed the cursor down → the next erase started too low →
+  the PREVIOUS frame's top rows (the tool box) froze on screen while
+  the AI stream kept painting under them. Intermittent because it
+  needed a plugin error to fire
+- render guard: while the app owns the screen, console.log/info/warn/
+  error and stdout/stderr writes are captured — the app's own frame
+  writes pass through (tuiWriting flag), every foreign write is queued
+  and flushed as a transcript row inside the next frame; restored on
+  destroy
+- resizes (SIGWINCH) re-anchor from the bottom and drop every
+  width-dependent cache (wrapped / flat / stream) — no more frozen
+  fragments after a terminal reflow
+- lines printed while the inline history viewer was open no longer
+  VANISH when it closes (flatLines flushed too early); streamCache is
+  keyed by {length, width}
 
-### Added — subagents inherit plugins + MCP/plugin tools
+### Fixed — the build OOM (the 8 GB laptop report)
 
-- AgentLoopOptions.plugins? is new; spawnSubagent forwards plugins AND
-  extraTools — spawned subagents (including background subagents, same
-  code path) now run the gatekeeper and see the host-injected MCP/plugin
-  tools
-- e2e: a plugin denial inside a subagent is fed back into the sub
-  conversation, and the report still reaches the parent
-- host.ts passes the loaded plugins to the primary AgentLoop (one line) —
-  without it the gatekeeper would never have fired in real CLI runs
+- scripts/build-binaries.sh detects free RAM (/proc/meminfo · vm_stat)
+  and runs bun with --smol (smaller heap, small speed cost) whenever
+  free is under 6 GB — bun build --compile peaks at a few GB per target
+- TAGENT_BUILD_SMOL=1/0 forces it on/off; each target still compiles
+  separately and sequentially; a single-target run
+  ("linux x64") cuts the peak further for the tightest boxes
+- the hog is the embedded web GUI — ~11.8 MB of base64 baked into every
+  binary (the price of download-run-done, zero install)
 
-### Added — the Taceen plugin template (prep work — no model yet)
+### Audit — the rest of the memory surface
 
-Taceen is a planned small (~30–50 MB) local Python Tool & Capability
-Resolver. This release ships the scaffolding it slots into — mock +
-subprocess modes, everything fails open:
-
-| File | What |
-|---|---|
-| `.tagent/plugins/taceen.mjs` | the plugin (mock + subprocess modes) |
-| `.tagent/plugins/taceen.json` | config |
-| `.tagent/taceen/taceen.py` | JSON-over-stdio skeleton (one line in, one out) |
-| `docs/TACEEN.md` | developer doc (EN/ID) |
-
-- config (defaults): enabled `true` · mode `"mock"` · pythonPath `"python3"`
-  · taceenScript `.tagent/taceen/taceen.py` · timeoutMs `1500`
-- mock mode: file/test/web keywords resolve heuristically to
-  read_file / bash / mcp_browser_navigate; any bash command containing
-  rm -rf is blocked with an alternative
-- switch to subprocess mode with {"mode":"subprocess"} in taceen.json —
-  onResolve and beforeToolCall then shell out to python3 with the JSON
-  contract above
-- the fallback rule (design invariant): any Taceen error or timeout →
-  allow. Every hook body is try/catch → undefined; spawn failure, empty
-  stdout, unparseable JSON and timeout all collapse to allow. Verified
-  live with a 1 ms timeout and the missing-script path — the agent stays
-  unblocked in every failure mode
-
-### Added — capability categories (10 categories / 41 capabilities)
-
-- .tagent/taceen/categories.json v1.0 + docs/CATEGORIES.md — the taxonomy
-  the future resolver model consumes
-- 10 functional cross-kind categories covering 41 capabilities: all 25
-  registered tools + the 3 builtin skills + 13 representative MCP
-  examples (the live MCP list is per-user config; these are demonstrative)
-- two-stage answers: pick ONE category, return only that category's
-  capabilities — ~30 tokens per entry, the full catalog under ~1.5k tokens
-- docs/CATEGORIES.md records the 8 design answers (exposure, no-match
-  fallback, multi-match ranking, MCP naming, skill handling) + 3 worked
-  examples
+- verified bounded: bash tool output capped 32k · MCP stdio fully
+  piped · session history disk-based (only metadata in memory) ·
+  pending writes debounced 1.5s · transcript/wrapped/flat caches bound
+  by the (now profile-scaled) log cap
+- honest limits, not tunables: the Bun runtime baseline is ~80–150 MB
+  RSS; MCP child processes are their own OS processes — a RAM pin does
+  not shrink those
 
 ### Tests
 
-- new suite scripts/test-plugin-hooks.ts — 62 checks (hermetic mkdtemp
-  roots, 5 consecutive identical runs): e2e block/modify through a real
-  AgentLoop, the no-plugins path, subagent inheritance, 12 emit-layer
-  units, and the real taceen plugin in mock/subprocess/disabled/
-  missing-script modes — including the proof that the plugin fires BEFORE
-  the bash blocklist (the /tmp sentinel survived an rm -rf attempt)
-- scripts/smoke-plugin-hooks.ts — 8 sanity checks (persisted)
-- full battery green, matching the release numbers: switch-mode 52 ·
-  subagents 71 · testmode 59 · ask 41 · features 19 · context-loop 30 ·
-  browser 32 · v0190 71 · v0220 25 · tui-app ALL PASS · host ALL OK ·
-  version exit 0 · cache 38 · skills-router 112; source-site snapshot
-  regenerated for this release (125 passed / 2 failed before the regen —
-  it predated the loop.ts change)
-- tsc: 117 total — 0 new vs the pre-change baseline
+- new scripts/test-render-guard.ts — 27 checks · new
+  scripts/test-memory-profile.ts — 24 checks · new glitch-proof.py
+  live-pty 6/6 (a noisy plugin console.error mid-session + a mid-run
+  resize: error text as transcript rows, navbar rails intact, editor
+  intact, coherent repaint)
+- full battery green (tui-app 44 · plugin-hooks 62 · subagents 71 ·
+  skills-router 112 · …); tsc 117 — 0 new vs baseline
 
 ### Upgrade note
 
-- drop-in: no config changes required — plugins stay entirely optional;
-  with none loaded, the emit layer is bypassed and behavior is unchanged
+- drop-in: nothing required — auto-detect picks the tier on first run;
+  pin it explicitly with `/config ram 8` (or `/config ram auto`)
 EOF
 )
 
@@ -156,7 +126,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — Plugin decision hooks: a gatekeeper + a resolver" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — Small-RAM profiles & render-guard fixes" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")
