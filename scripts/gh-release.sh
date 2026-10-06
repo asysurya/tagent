@@ -131,7 +131,20 @@ RELEASE_JSON=$(curl -s -X POST \
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")
 echo "[release] $URL"
-if [ -z "$ID" ]; then echo "$RELEASE_JSON" >&2; exit 1; fi
+if [ -z "$ID" ]; then
+  # a re-run after a partial cut 422s with "already_exists" — adopt the
+  # existing release and finish the missing assets instead of dying
+  # (found live at the v0.31.1 cut: the upload loop is idempotent, the
+  # release creation was not)
+  RELEASE_JSON=$(curl -s -H "Authorization: token $TOKEN" "https://api.github.com/repos/$REPO/releases/tags/v$VERSION")
+  ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
+  if [ -n "$ID" ]; then
+    echo "[release] v$VERSION already exists (id $ID) — adopting it, uploading missing assets only"
+  else
+    echo "$RELEASE_JSON" >&2
+    exit 1
+  fi
+fi
 
 # ----------------------------------------------------------- 3. the assets --
 # list already-uploaded assets → make re-runs idempotent
