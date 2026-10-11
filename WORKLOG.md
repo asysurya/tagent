@@ -1587,3 +1587,65 @@ Stage Summary:
 - Carried-over tech debt, re-scoped to v0.32.0: the dedicated 'blocked'
   record status (loop.ts TODO comment still says "v0.31.1" — the cut
   shipped without it per scope; fix the label in the next prep).
+---
+Task ID: 15
+Agent: Super Z (main) — v0.31.2 prep: navbar machine stats + ctx bar for every provider
+
+Task: user request, two parts: (1) "bikin computer performance stats di
+navbar" — live machine stats in the TUI navbar; (2) "stats windows context
+bisa untuk semua provider" — the context-window bar must work for every
+provider, not just known ones.
+
+Work Log:
+- Exploration (evidence): navbar = headerRows (tui-app ~5740) — title +
+  footer built via roundBox, 1s nav ticker; hint row (~5912) showed the ctx
+  bar only when ctxLimit>0; host.contextInfo() used modelContextWindow()
+  which returns 0 for unknown models (gap proof: modelContextWindow(
+  'custom','mystery-model-v9') === 0) → no bar AT ALL for custom providers/
+  unlisted models; the loop already emits onContext every turn with
+  estimated fallback; renderContextBar had no estimate markers.
+- NEW packages/cli/src/perf-stats.ts — PerfSampler: cpu% = delta between
+  os.cpus() snapshots, ram% (freemem/totalmem), tagent rss, uptime; 2s
+  unref'd interval, get() is O(1) + stale-recompute (>15s → laptop
+  suspend); fmtUptime helper.
+- ui.ts roundBox: titleRight option (right-aligned label on the top
+  border). Both sides hard-truncated so the row stays EXACTLY innerW —
+  a wrapped border row would break the v0.31.1 sticky math.
+- headerRows: perf segment `🖥 12% · 💾 62% · 210M` rides the title row
+  (boxW>=58 only; title budget shrinks by its width); numbers color only
+  at cpu>=70% / ram>=80%.
+- core/context.ts: ASSUMED_CONTEXT_WINDOW = 128_000 + renderContextBar
+  marks param ({estUsed, estLimit} → `~12.3k/~128k [█░] 10%`); exported.
+- host.contextInfo: limit = fromLoop?.limit || modelWindow ||
+  ASSUMED_CONTEXT_WINDOW; assumed flag; 500ms cache (the estimate path
+  walked every session message + read zai-models.json PER FRAME — also a
+  perf fix); returns {used,limit,pct,bar,estimated,assumed}.
+- hintRow: reads host.contextInfo() (was ctxUsed/ctxLimit fields); priority
+  fit — a long custom model id shrinks (min 4 cols) instead of crowding
+  the bar out.
+- navbar footer priority ladder: candidates full → ws 8 → model 10 →
+  -dev → -mcp → -ws → -model; mode · bar · clock survive at every width
+  (verified live at 50 cols).
+- /stats: machine row + '(window assumed 128k)' / '(used estimated)'
+  markers.
+- Tests: NEW scripts/test-perf-stats.ts — 37 checks green: sampler
+  lifecycle (start/stop/stale), roundBox exact-width invariants (incl.
+  oversized titleRight clamp), bar markers, gap proof, host fallback chain
+  (unknown → assumed 128k; glm → 131072; env wins; fromLoop usage with
+  no window → real used + assumed limit), live TUI frames at 80/120/50
+  cols (perf segment present/dropped; bar in footer + hint row; ladder).
+- Regression: tui-app 0 fail · render-guard 27/0 · memory-profile 24/0 ·
+  host ALL OK · cache 38/0 · compact 49/0 · context-loop 30/0 ·
+  glitch-proof.py 6/6 (live pty, resize + noisy plugin — the render guard
+  holds with the new navbar) · tsc 117 = baseline (2 test-file TS nits
+  found + fixed: dynamic-import type alias + class-as-type cast) · PTY
+  suite 10/11 — 'model list view' FAIL reproduces on a clean stash
+  (pre-existing, NOT this change; recorded as known).
+
+Stage Summary:
+- Commit c2ff948 (local, not pushed yet? pushed with this worklog commit).
+- Deliverables: navbar machine stats (cpu/ram/rss/uptime, 2s, width-safe)
+  + context bar for every provider (assumed-window fallback with ~
+  markers, hint-row priority fit, footer ladder, /stats machine row).
+- NO release actions (rule): version.ts still 0.31.1, no LATEST flip, no
+  tag. Ready for review; cut v0.31.2 on approval.
