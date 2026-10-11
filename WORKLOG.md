@@ -1649,3 +1649,64 @@ Stage Summary:
   markers, hint-row priority fit, footer ladder, /stats machine row).
 - NO release actions (rule): version.ts still 0.31.1, no LATEST flip, no
   tag. Ready for review; cut v0.31.2 on approval.
+
+---
+Task ID: 16
+Agent: Super Z (main) — v0.31.2 release cut
+
+Task: user approval "Acc cut" — execute the v0.31.2 release cut on top of
+the Task 15 prep (c2ff948 navbar machine stats + context bar for every
+provider, d38f793 worklog). Same 8-step sequence as 0.30.1/0.31.0/0.31.1.
+
+Work Log:
+- Pre-flight evidence: prep c2ff948 + worklog d38f793 already pushed
+  (main...origin/main clean, origin/main..HEAD empty); version.ts still
+  0.31.1, no tag — NO release actions had been taken in prep (rule held).
+- releases.ts had NO pre-seeded unreleased 0.31.2 entry (prep didn't
+  follow the 0.31.0 seeding pattern) — entry written at cut time from
+  the Task 15 worklog record, same as the 0.31.1 cut (transparent, and
+  consistent with how 0.31.1 was handled). 4 sections: navbar machine
+  stats · context bar for every provider · priority+hot-path fixes ·
+  /stats & tests.
+- Cut sequence:
+  1. version.ts → 0.31.2
+  2. releases.ts entry + LATEST flip to 0.31.2
+  3. sync-latest.ts → latest.json (notes extraction doubles as a parse
+     proof of the new entry)
+  4. commit e8c45f2 + push
+  5. LIGHTWEIGHT tag v0.31.2 → e8c45f2 + push (objecttype=commit, same
+     as every previous tag)
+  6. build-binaries.sh: free RAM 3.4GB < 6GB → --smol auto-activated
+     AGAIN on its own release (second self-verification); 6/6 targets,
+     no OOM, ~1 min; SHA256SUMS.txt written
+  7. gh-release.sh BODY + release name rewritten for 0.31.2 (committed
+     with the snapshot in step 8's push); ran FOREGROUND with --no-build
+     (Task 14 lesson — no background uploads); release 409541414
+     created, 7/7 assets uploaded in ONE clean pass — no ghost assets,
+     no teardown kills this time
+  8. gen-source-snapshot.ts: v0.31.2 · 346 files · 48 dirs · 74854 lines
+     (pre-cut 344/74212; +perf-stats.ts +test-perf-stats.ts in the
+     snapshot raw/json for the first time) + push 0ab158c
+- Verification (all green):
+  - API: draft=False, prerelease=False, 7/7 assets state=uploaded
+    (SHA256SUMS + 6 binaries, ~565MB total)
+  - byte-level proof: linux-x64 downloaded via the ASSET API → SHA256
+    b366d139… === SHA256SUMS.txt entry (exact match, then deleted)
+  - raw.githubusercontent latest.json = 0.31.2 · jsDelivr = 0.31.2
+    (no CDN lag this time)
+  - binary --version 0.31.2 · source --version 0.31.2 ·
+    checkUpdate(true): current=0.31.2=latest, outdated=false
+  - test-perf-stats 37/0 · test-source-site 127/0 · render-guard 27/0 ·
+    memory-profile 24/0 · tsc: 117 errors = baseline, 0 new
+  - tag target verified: v0.31.2 → e8c45f2 (the release-cut commit);
+    working tree clean, main synced
+
+Stage Summary:
+- v0.31.2 LIVE: https://github.com/asysurya/tagent/releases/tag/v0.31.2
+- Commit chain this cut: e8c45f2 (cut) → 0ab158c (snapshot), both
+  pushed; tag v0.31.2 lightweight on e8c45f2.
+- The v0.31.1 lessons held: foreground upload (no teardown kill),
+  state=uploaded check (no ghosts accepted), API byte-level download
+  verification. Zero drama this cut.
+- Backlog unchanged: v0.32.0 tech debt (blocked record status — loop.ts
+  TODO still says "v0.31.1"), Taceen onResolve call-site wiring.
