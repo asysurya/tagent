@@ -23,6 +23,16 @@ export function envContextWindow(): number {
 }
 
 /**
+ * Fallback window for models nothing is known about — the bar must render
+ * for EVERY provider, so display falls back to this when the catalog,
+ * registry seeds and id heuristics all miss (custom providers, unlisted
+ * models). Clearly marked with `~` wherever it shows up; a real value from
+ * zai-models.json, the provider seeds or TAGENT_CONTEXT_WINDOW always wins.
+ * Display-only: the compaction prompt keeps using the loop's real numbers.
+ */
+export const ASSUMED_CONTEXT_WINDOW = 128_000
+
+/**
  * Heuristic defaults by model id (approx input windows, tokens).
  * Explicit values in zai-models.json / provider seeds always win.
  */
@@ -129,15 +139,25 @@ export function fmtTokens(n: number): string {
  * Render the usage bar, opencode-style:
  *   used/limit [██████░░░░░░░░] 9%
  * `width` = bar cells (default 10). Returns '' when the limit is unknown.
+ * `marks` (v0.31.2) flags estimates so every provider's bar stays honest:
+ *   estUsed  → `~12.3k/…`   (used is a local estimate — no provider usage)
+ *   estLimit → `…/~128k`    (window is the ASSUMED fallback, not known)
  */
-export function renderContextBar(used: number, limit: number, width = 10): string {
+export function renderContextBar(
+  used: number,
+  limit: number,
+  width = 10,
+  marks?: { estUsed?: boolean; estLimit?: boolean },
+): string {
   if (!limit || limit <= 0) return ''
   const u = Math.max(0, used)
   const pct = Math.max(0, Math.min(100, Math.round((u / limit) * 100)))
   const cells = Math.max(3, width)
   const filled = Math.max(u > 0 ? 1 : 0, Math.min(cells, Math.round((pct / 100) * cells)))
   const bar = '█'.repeat(filled) + '░'.repeat(cells - filled)
-  return `${fmtTokens(u)}/${fmtTokens(limit)} [${bar}] ${pct}%`
+  const usedTxt = `${marks?.estUsed ? '~' : ''}${fmtTokens(u)}`
+  const limitTxt = `${marks?.estLimit ? '~' : ''}${fmtTokens(limit)}`
+  return `${usedTxt}/${limitTxt} [${bar}] ${pct}%`
 }
 
 /** percentage helper — 0 when the limit is unknown */

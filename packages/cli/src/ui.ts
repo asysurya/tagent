@@ -250,6 +250,11 @@ export interface BoxOpts {
    *  border color; the rail is then composed in SEGMENTS so the chip's
    *  SGR reset never bleeds into the border run. */
   titleChip?: (s: string) => string
+  /** v0.31.2 — right-aligned label on the TOP border (the navbar's live
+   *  machine stats): ╭─ title ─── 🖥 12% · 💾 62% ─╮. Call sites only pass
+   *  it when it fits; here it is hard-truncated to never wrap a row (a
+   *  wrapped border row would break the sticky-region math). */
+  titleRight?: string
   /** drawn into the bottom border: ╰─ footer ──╯ */
   footer?: string
   /** body rows (already styled); each is fitted to the inner width */
@@ -279,6 +284,15 @@ export function roundBox(o: BoxOpts): string[] {
       const chipTxt = o.titleChip(truncateV(label, Math.max(1, innerW - 6)))
       const fill = Math.max(0, innerW - vw(chipTxt) - 1)
       return color(cornerL + B.top) + chipTxt + color(B.top.repeat(fill) + cornerR)
+    }
+    if (o.titleRight !== undefined && o.titleRight !== '' && cornerL === B.topLeft) {
+      // right-aligned top-border label (v0.31.2 perf stats). Both sides are
+      // clamped so the row is EXACTLY innerW — a wider row would soft-wrap
+      // on narrow terminals and break the sticky math (the v0.31.1 lesson).
+      const right = ` ${truncateV(o.titleRight, Math.max(1, innerW - 8))} `
+      const text = ` ${truncateV(label ?? '', Math.max(1, innerW - vw(right) - 6))} `
+      const fill = Math.max(0, innerW - vw(text) - vw(right) - 1)
+      return color(cornerL + B.top + text + B.top.repeat(fill) + right + cornerR)
     }
     const text = ` ${truncateV(label, Math.max(1, innerW - 4))} `
     const fill = Math.max(0, innerW - vw(text) - 1)
