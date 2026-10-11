@@ -17,7 +17,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { GLOBAL_DIR } from './config'
 
-export const CURRENT_VERSION = '0.31.1'
+export const CURRENT_VERSION = '0.31.2'
 
 const REPO_SLUG = 'asysurya/tagent'
 

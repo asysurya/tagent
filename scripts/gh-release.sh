@@ -36,87 +36,73 @@ fi
 
 # ---------------------------------------------------------- 2. the release --
 BODY=$(cat <<'EOF'
-## v__VER__ — Small-RAM profiles & render-guard fixes
+## v__VER__ — Navbar machine stats & a context bar for every provider
 
-Two stability fixes for the machines tagent actually runs on: a RAM
-profile (performance.ramGb — 0 = auto-detect) that scales the TUI
-transcript retention, subagent parallelism, the web cache and the
-context diet to the machine budget — and the root-cause fix for the
-reported render glitch ("box tool call tiba-tiba jadi kayak navbar").
-Drop-in: nothing to configure — auto-detect picks the tier; /config ram
-to pin it explicitly.
+Two navbar upgrades: the TUI title row now shows live machine stats
+(CPU %, system RAM %, tagent's own RSS — sampled every 2 s), and the
+context bar works for EVERY provider. Unknown models / custom providers
+used to resolve a context window of 0 — which hid the bar entirely; the
+display now falls back to an assumed 128k window, marked so you always
+know what's real and what's estimated.
 
-### Added — the RAM profile (performance.ramGb)
+### Added — machine stats in the navbar
 
-- new performance.ramGb (default 0 = auto-detect via os.totalmem) — pin
-  the machine's RAM in GB: 4, 8, 16 …
-- tiers (monotonic by construction):
-  - ≤4 GB → transcript 1500 rows · 2 parallel subagents · 48 web-cache
-    entries · context diet at 100k chars
-  - ≤8 GB → 2500 · 3 · 96 · 120k
-  - above → the existing defaults 4000 · 4 · 128 · 150k
-- /config ram [gb|auto] — live rescale (no restart), a 🧠 dashboard row,
-  persisted to the GLOBAL config (a machine property, not per-project);
-  an explicit config always wins where stricter (min) — e.g.
-  subagents.maxParallel 1 stays 1
-- new core/src/memory-profile.ts; setWebCacheMax eviction is now a
-  while-loop, so a lowered cap actually drains (clamped 8..128)
+- new perf-stats.ts — PerfSampler: cpu % (delta between os.cpus()
+  snapshots), system RAM % (freemem/totalmem), tagent's own RSS; a 2 s
+  unref'd interval, O(1) get(), and a sample older than 15 s is
+  recomputed on read (a suspended laptop no longer shows frozen numbers)
+- the stats ride the title row's free dash space (roundBox titleRight,
+  shown at boxW>=58): "🖥 12% · 💾 62% · 210M" — the border row stays
+  EXACTLY boxW wide, hard-truncated both sides, never wrapped (the
+  v0.31.1 sticky-math lesson applied from the start)
+- numbers stay quiet by default — they only take color at cpu>=70% or
+  RAM>=80% (the bar that matters when the machine is choking)
 
-### Fixed — the render glitch (the "navbar" tool box)
+### Added — a context bar for every provider
 
-- root cause: the sticky region repaints with cursor-up + erase-below;
-  a foreign write landing between frames (a plugin console.error, a
-  stray log) pushed the cursor down → the next erase started too low →
-  the PREVIOUS frame's top rows (the tool box) froze on screen while
-  the AI stream kept painting under them. Intermittent because it
-  needed a plugin error to fire
-- render guard: while the app owns the screen, console.log/info/warn/
-  error and stdout/stderr writes are captured — the app's own frame
-  writes pass through (tuiWriting flag), every foreign write is queued
-  and flushed as a transcript row inside the next frame; restored on
-  destroy
-- resizes (SIGWINCH) re-anchor from the bottom and drop every
-  width-dependent cache (wrapped / flat / stream) — no more frozen
-  fragments after a terminal reflow
-- lines printed while the inline history viewer was open no longer
-  VANISH when it closes (flatLines flushed too early); streamCache is
-  keyed by {length, width}
+- the gap, proven: modelContextWindow("custom", "mystery-model-v9")
+  resolved 0 — custom providers and unlisted models showed NO context
+  bar at all, while the loop already emitted estimated usage every turn
+- new ASSUMED_CONTEXT_WINDOW = 128_000 (core/context.ts): the display
+  falls back to it when the catalog, the registry and
+  TAGENT_CONTEXT_WINDOW all miss — marked "~128k"; estimated usage is
+  marked "~" too ("~12.3k/~128k [█░] 10%")
+- precedence unchanged: TAGENT_CONTEXT_WINDOW and every real
+  catalog/registry value always beat the assumption — a known model
+  never gets a "~" it didn't earn
 
-### Fixed — the build OOM (the 8 GB laptop report)
+### Fixed — the bar survives (priority + hot-path)
 
-- scripts/build-binaries.sh detects free RAM (/proc/meminfo · vm_stat)
-  and runs bun with --smol (smaller heap, small speed cost) whenever
-  free is under 6 GB — bun build --compile peaks at a few GB per target
-- TAGENT_BUILD_SMOL=1/0 forces it on/off; each target still compiles
-  separately and sequentially; a single-target run
-  ("linux x64") cuts the peak further for the tightest boxes
-- the hog is the embedded web GUI — ~11.8 MB of base64 baked into every
-  binary (the price of download-run-done, zero install)
+- hint-row priority fit: a long custom model id shrinks first (down to
+  4 cols) instead of crowding the context bar out of the row
+- navbar footer ladder: segments shrink or drop in the order ws →
+  model → -dev → -mcp → -ws → -model before the bar ever does — mode ·
+  bar · clock survive at every width (verified live at 50 cols)
+- host.contextInfo() gains a 500 ms cache — the estimated-usage path
+  walked every session message and read zai-models.json per frame (a
+  per-render hot path; a perf fix as much as a feature)
 
-### Audit — the rest of the memory surface
+### /stats & tests
 
-- verified bounded: bash tool output capped 32k · MCP stdio fully
-  piped · session history disk-based (only metadata in memory) ·
-  pending writes debounced 1.5s · transcript/wrapped/flat caches bound
-  by the (now profile-scaled) log cap
-- honest limits, not tunables: the Bun runtime baseline is ~80–150 MB
-  RSS; MCP child processes are their own OS processes — a RAM pin does
-  not shrink those
-
-### Tests
-
-- new scripts/test-render-guard.ts — 27 checks · new
-  scripts/test-memory-profile.ts — 24 checks · new glitch-proof.py
-  live-pty 6/6 (a noisy plugin console.error mid-session + a mid-run
-  resize: error text as transcript rows, navbar rails intact, editor
-  intact, coherent repaint)
-- full battery green (tui-app 44 · plugin-hooks 62 · subagents 71 ·
-  skills-router 112 · …); tsc 117 — 0 new vs baseline
+- /stats grows a machine row (cpu · ram · rss · uptime) plus the
+  "(window assumed 128k)" / "(used estimated)" markers, so the numbers
+  in the navbar are explainable
+- new scripts/test-perf-stats.ts — 37 checks: sampler lifecycle
+  (start/stop/stale-recompute), roundBox exact-width invariants,
+  bar markers, the gap proof, the host fallback chain (unknown → assumed
+  128k · glm → 131072 · env wins · fromLoop usage with no window), live
+  TUI frames at 80/120/50 cols
+- regression battery green: render-guard 27 · memory-profile 24 ·
+  glitch-proof.py live-pty 6/6 (the render guard holds with the new
+  navbar); tsc 117 = baseline, 0 new; PTY suite 10/11 — the one fail
+  ("model list view") is pre-existing on a clean stash, recorded known
 
 ### Upgrade note
 
-- drop-in: nothing required — auto-detect picks the tier on first run;
-  pin it explicitly with `/config ram 8` (or `/config ram auto`)
+- drop-in: nothing to configure — the stats appear at boxW>=58, the
+  context bar appears for every provider; if you know the real window
+  of an unlisted model, TAGENT_CONTEXT_WINDOW=<tokens> beats the
+  assumption
 EOF
 )
 
@@ -126,7 +112,7 @@ RELEASE_JSON=$(curl -s -X POST \
   -H "Authorization: token $TOKEN" \
   -H "Accept: application/vnd.github+json" \
   https://api.github.com/repos/$REPO/releases \
-  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — Small-RAM profiles & render-guard fixes" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
+  -d "$(jq -n --arg tag "v$VERSION" --arg name "v$VERSION — Navbar machine stats & a context bar for every provider" --arg body "$BODY" '{tag_name: $tag, name: $name, body: $body}')")
 
 ID=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id') or '')")
 URL=$(echo "$RELEASE_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('html_url') or json.load(sys.stdin).get('message'))")

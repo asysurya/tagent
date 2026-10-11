@@ -67,6 +67,7 @@ import {
   loadConfig,
   readGlobalConfig,
   updateGlobalConfig,
+  ASSUMED_CONTEXT_WINDOW,
   renderContextBar,
   contextPct,
   SyncEngine,
@@ -114,6 +115,7 @@ import {
 import type { AgentHost } from './host'
 import type { DaemonHandle } from './daemon'
 import { selfUpdate } from './updater'
+import { PerfSampler, fmtUptime, type PerfSample } from './perf-stats'
 import {
   vw, truncateV, fitV, padCol, roundBox, labelRow, kvRow, toolIcon,
   setUiColor, STATUS_ICONS, SYM, F, cpW, wrapV, boxTop, boxRow, boxBottom, chip,
@@ -904,6 +906,10 @@ export class TuiApp {
   private flatCache: { upto: number; lines: string[] } = { upto: 0, lines: [] }
   /** 1s navbar ticker — model/mcp/context/time facts refresh without a keypress */
   private navTimer: ReturnType<typeof setInterval> | undefined
+  /** machine performance sampler (v0.31.2) — the navbar's 🖥/💾 segment;
+ *  a 2s background interval, never per-frame (renderNow runs ~10×/s while
+ *  streaming) */
+  private perf = new PerfSampler()
 
   /* bracketed paste state — feed() switches on \x1b[200~ / \x1b[201~ */
   private pasting = false
@@ -986,6 +992,7 @@ export class TuiApp {
       this.refreshSyncBadge()
       this.startStatsTicker()
       this.startNavTicker()
+      this.perf.start() // machine stats for the navbar — 2s, unref'd
       this.startSyncEngine()
       // global config repo: warn when it's gone, apply/pull silently otherwise
       // ("config sama meskipun beda device" — checked at every `tagent start`)
@@ -1064,6 +1071,7 @@ export class TuiApp {
       clearInterval(this.navTimer)
       this.navTimer = undefined
     }
+    this.perf.stop()
     if (this.statsTimer) {
       clearInterval(this.statsTimer)
       this.statsTimer = undefined
@@ -4044,14 +4052,16 @@ export class TuiApp {
 
       case 'stats': {
         const st = host.stats()
-        const ctx = st.context as { used: number; limit: number; pct: number; bar: string; estimated: boolean }
+        const ctx = st.context as { used: number; limit: number; pct: number; bar: string; estimated: boolean; assumed?: boolean }
         this.println(`  ${bold('sessions')} ${st.sessions} · ${bold('snapshots')} ${st.snapshots}`)
         if (ctx.bar) {
-          this.println(`  ${bold('context')}   ${ctx.bar}${ctx.estimated ? dim(' (estimated)') : ''}`)
+          this.println(`  ${bold('context')}   ${ctx.bar}${ctx.estimated ? dim(' (used estimated)') : ''}${ctx.assumed ? dim(` (window assumed ${Math.round(ASSUMED_CONTEXT_WINDOW / 1000)}k)`) : ''}`)
           this.println(dim('    /compact summarizes old turns — deterministic, no AI'))
         } else {
           this.println(`  ${bold('context')}   ~${fmtTok(ctx.used)} tokens (model window unknown — set contextWindow in ~/.tagent/zai-models.json or TAGENT_CONTEXT_WINDOW)`)
         }
+        const p = this.perf.get()
+        this.println(`  ${bold('machine')}   🖥 cpu ${p.cpuPct}% · 💾 ram ${p.ramPct}% of ${p.ramTotalGb}G · tagent ${p.rssMb}M · up ${fmtUptime(p.uptimeS)}`)
         return
       }
 
@@ -5762,7 +5772,10 @@ export class TuiApp {
     const ci = this.host.contextInfo()
     let ctx = ''
     if (ci.limit > 0) {
-      const raw = renderContextBar(ci.used, ci.limit, 8)
+      const raw = renderContextBar(ci.used, ci.limit, 8, {
+        estUsed: ci.estimated,
+        estLimit: ci.assumed,
+      })
       const pct = contextPct(ci.used, ci.limit)
       ctx = ` · ${pct >= 80 ? red(raw) : pct >= 60 ? yellow(raw) : green(raw)}`
     }
@@ -5776,12 +5789,68 @@ export class TuiApp {
         : `${sst.others.length} devices`
       devSeg = ` · ${green(`◉ ${who} online`)}`
     }
-    const title = `${orange('✻')} ${bold('Tagent')} ${dim(`v${CURRENT_VERSION}`)} · ${dim('💬')} ${truncateStyled(this.sessionTitle, Math.max(6, boxW - 34))}`
+    let title = `${orange('✻')} ${bold('Tagent')} ${dim(`v${CURRENT_VERSION}`)} · ${dim('💬')} ${truncateStyled(this.sessionTitle, Math.max(6, boxW - 34))}`
+    // machine stats ride the title row's free dash space (v0.31.2) — only on
+    // wide-enough boxes; ~21 cols, and the title budget shrinks by its width
+    // + breathing room so the border row stays exactly boxW wide
+    let titleRight = ''
+    if (boxW >= 58) {
+      const seg = this.perfText(this.perf.get())
+      if (seg) {
+        titleRight = seg
+        title = `${orange('✻')} ${bold('Tagent')} ${dim(`v${CURRENT_VERSION}`)} · ${dim('💬')} ${truncateStyled(this.sessionTitle, Math.max(6, boxW - 34 - vw(seg) - 2))}`
+      }
+    }
     // workspace — which folder the agent is working in; the hint row's ⎇
     // segment shows the sync REPO, this shows the local folder itself
     const wsName = path.basename(this.opts.workspaceRoot || '.') || this.opts.workspaceRoot || '.'
-    const foot = `🤖 ${this.mode} · 📂 ${truncateStyled(wsName, 18)} · ${shortModelName(cfg.defaultModel)} · 🔌 ${mcp}${ctx}${devSeg} · ${fmtElapsed(Date.now() - this.startedAt)}`
-    return roundBox({ title, footer: foot, rows: [], width: boxW })
+    // footer priority ladder (v0.31.2): the context bar must survive at
+    // EVERY width — flexible segments (workspace, model, mcp, presence)
+    // shrink or drop first, mode · bar · clock last. First fit wins; the
+    // final rung hard-truncates like the old behavior did.
+    const elapsedFoot = fmtElapsed(Date.now() - this.startedAt)
+    const modelFull = shortModelName(cfg.defaultModel)
+    const footSegs = (o: { ws?: number; model?: number; mcp?: boolean; dev?: boolean; ctx?: boolean }) => {
+      const parts = [`🤖 ${this.mode}`]
+      if (o.ws !== 0) parts.push(`📂 ${truncateStyled(wsName, o.ws ?? 18)}`)
+      if (o.model !== 0) parts.push(truncateStyled(modelFull, o.model ?? 24))
+      if (o.mcp !== false) parts.push(`🔌 ${mcp}`)
+      if (o.ctx !== false && ctx) parts.push(ctx.replace(/^ · /, ''))
+      if (o.dev !== false) parts.push(devSeg.replace(/^ · /, ''))
+      parts.push(elapsedFoot)
+      return parts.filter(Boolean).join(' · ')
+    }
+    const budget = Math.max(14, boxW - 4) // roundBox truncates to innerW-4
+    const ladder: { ws?: number; model?: number; mcp?: boolean; dev?: boolean; ctx?: boolean }[] = [
+      {},
+      { ws: 8 },
+      { ws: 8, model: 10 },
+      { ws: 8, model: 10, dev: false },
+      { ws: 8, model: 10, dev: false, mcp: false },
+      { ws: 0, model: 10, dev: false, mcp: false },
+      { ws: 0, model: 0, dev: false, mcp: false },
+    ]
+    let foot = footSegs(ladder[0]!)
+    for (const rung of ladder) {
+      const cand = footSegs(rung)
+      if (vwidthANSI(cand) <= budget) {
+        foot = cand
+        break
+      }
+      foot = cand // keep the tightest seen; the last rung is mode·ctx·clock
+    }
+    return roundBox({ title, footer: foot, rows: [], width: boxW, ...(titleRight ? { titleRight } : {}) })
+  }
+
+  /** the navbar's machine-stats segment: `🖥 12% · 💾 62% · 210M` — cpu,
+   *  system ram, process rss. Numbers color only when they matter (cpu ≥70%,
+   *  ram ≥80%), else they stay plain so the row doesn't turn into a
+   *  christmas tree. Empty string when the platform reports nothing. */
+  private perfText(p: PerfSample): string {
+    if (p.ramTotalGb <= 0 && p.rssMb <= 0) return ''
+    const cpu = p.cpuPct >= 90 ? red(`${p.cpuPct}%`) : p.cpuPct >= 70 ? yellow(`${p.cpuPct}%`) : `${p.cpuPct}%`
+    const ram = p.ramPct >= 90 ? red(`${p.ramPct}%`) : p.ramPct >= 80 ? yellow(`${p.ramPct}%`) : `${p.ramPct}%`
+    return `🖥 ${cpu} · 💾 ${ram} · ${p.rssMb}M`
   }
 
   /** 1s refresh — the navbar's facts (mcp handshakes landing, the context
@@ -5908,14 +5977,20 @@ export class TuiApp {
   /** the row under the editor box — Claude Code's `? for shortcuts` line:
    *  keys on the left, live session stats right. The context bar
    *  (`12.3k/131k [██████░░░░] 9%`) shows how much of the model's window the
-   *  session eats; without a known limit it falls back to token counters. */
+   *  session eats — for EVERY provider (v0.31.2): an unknown window falls
+   *  back to ASSUMED_CONTEXT_WINDOW marked `~`, and an unreported used is a
+   *  local estimate marked `~` too. */
   private hintRow(W: number): string {
     const cfg = this.cfgFast() as { defaultModel: string }
     const keys = this.running ? 'esc interrupt · ? shortcuts · ctrl+x menu' : HINT_KEYS
+    const ci = this.host.contextInfo()
     let ctx = ''
-    if (this.ctxLimit > 0) {
-      const pct = contextPct(this.ctxUsed, this.ctxLimit)
-      const raw = renderContextBar(this.ctxUsed, this.ctxLimit, 10)
+    if (ci.limit > 0) {
+      const pct = contextPct(ci.used, ci.limit)
+      const raw = renderContextBar(ci.used, ci.limit, 10, {
+        estUsed: ci.estimated,
+        estLimit: ci.assumed,
+      })
       ctx = pct >= 80 ? red(raw) : pct >= 60 ? yellow(raw) : green(raw)
     } else if (this.tokensIn + this.tokensOut > 0) {
       ctx = `${fmtTok(this.tokensIn)}${SYM.arrowUp} ${fmtTok(this.tokensOut)}${SYM.arrowDown}`
@@ -5938,9 +6013,19 @@ export class TuiApp {
         if (s.lastError) badge += ` ${red('!')}`
       }
     }
-    const right = `${this.mode} · ${shortModelName(cfg.defaultModel)}${ctx ? ` · ${ctx}` : ''} · ${fmtElapsed(Date.now() - this.startedAt)}${badge}`
+    // priority fit (v0.31.2): the context bar is the one stat the user asked
+    // to ALWAYS see — a long custom model id must never crowd it out of the
+    // row, so the model's budget shrinks first (min 4 cols, … when clipped)
+    const elapsed = fmtElapsed(Date.now() - this.startedAt)
     const room = W - vwidthANSI(keys) - 2
-    const rightCut = room > 10 ? dim(truncateStyled(right, Math.max(4, room))) : ''
+    let right = ''
+    if (room > 10) {
+      const fixed = vwidthANSI(`${this.mode} · `) + (ctx ? vwidthANSI(` · ${ctx}`) : 0) + vwidthANSI(` · ${elapsed}`)
+      const modelBudget = Math.max(4, room - fixed - 2 - vwidthANSI(badge))
+      const model = truncateStyled(shortModelName(cfg.defaultModel), Math.min(24, modelBudget))
+      right = `${this.mode} · ${model}${ctx ? ` · ${ctx}` : ''} · ${elapsed}${badge}`
+    }
+    const rightCut = right ? dim(truncateStyled(right, Math.max(4, room))) : ''
     const keysCut = truncateStyled(keys, Math.max(4, W - vwidthANSI(rightCut) - 1))
     const pad = Math.max(1, W - vwidthANSI(keysCut) - vwidthANSI(rightCut))
     return dim(keysCut) + ' '.repeat(pad) + rightCut

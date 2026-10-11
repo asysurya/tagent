@@ -21,6 +21,7 @@ export { PermissionManager } from './permissions'
 export { AgentLoop, isReadOnlyTool, extractPlan } from './loop'
 export {
   modelContextWindow, guessContextWindow, envContextWindow,
+  ASSUMED_CONTEXT_WINDOW,
   estimateTokens, estimateMessageTokens,
   renderContextBar, contextPct, fmtTokens,
 } from './context'

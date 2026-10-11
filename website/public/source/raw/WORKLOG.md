@@ -1534,3 +1534,118 @@ Stage Summary:
 - Working tree: 8 modified + 3 new source/test files, +289/−21. Ready for
   review; cut v0.31.1 on approval (version bump + releases.ts entry +
   snapshot regen + gh-release BODY).
+---
+Task ID: 14
+Agent: Super Z (main) — v0.31.1 release cut
+
+Task: user approved the cut ("gas, cut!!!") with Task 13's prep (247f208,
+small-RAM profile + render-guard fixes) already on origin/main.
+
+Work Log:
+- Pre-cut state: releases.ts had NO 0.31.1 entry yet (unlike 0.31.0,
+  which was pre-added unreleased) — the entry was composed at cut time
+  from Task 13's record, 5 sections: RAM profile / render glitch /
+  build OOM / audit / tests.
+- Cut commit fa307e0: version.ts 0.31.0 → 0.31.1 · releases.ts new
+  0.31.1 entry + LATEST flip · sync-latest → latest.json = 0.31.1 ·
+  gh-release.sh v0.31.1 BODY + release name; lightweight tag v0.31.1;
+  pushed main + tag. Source --version 0.31.1, exit 0.
+- build-binaries.sh 0.31.1: 6/6 targets, the new small-RAM mode proved
+  itself on the very cut — auto bun --smol kicked in at 2336 MB free
+  RAM; 565 MB total (74–106 MB per binary); SHA256SUMS.txt written;
+  binary linux-x64 --version 0.31.1 · --check-update "up to date:
+  v0.31.1".
+- gh-release.sh: release created (id 404331091) — but the backgrounded
+  upload process was killed by tool-session teardown mid-loop, severing
+  the linux-x64 upload connection.
+- Recovery (dist/complete-release-assets.sh, idempotent per asset):
+  remaining assets uploaded; linux-x64 initially LOOKED present but was
+  a state=starter GHOST — the severed upload listed by the assets
+  endpoint, never finalized, never servable (by-tag showed 6/7).
+  Recovery script hardened (only state=uploaded counts as present;
+  purge_ghost deletes non-uploaded assets), ghost 614529467 deleted,
+  linux-x64 re-uploaded clean.
+- gh-release.sh hardening commit 980ed17: adopt an already-cut release
+  instead of 422-dying on re-run (the exact gap this cut hit).
+- Snapshot regen 78f7cdf: v0.31.1 · 344 files · 48 dirs · 74212 lines
+  (pre-cut 340/73076; +4 files: memory-profile.ts, glitch-proof.py,
+  test-render-guard.ts, test-memory-profile.ts; +1136 lines total).
+- Post-cut verification (all green): raw latest.json = 0.31.1 ·
+  jsDelivr = 0.31.1 (no CDN lag this time) · GitHub API latest:
+  v0.31.1, draft=False, prerelease=False, 7/7 assets state=uploaded ·
+  real API download of linux-x64 → SHA256 e5a541b3… matches
+  SHA256SUMS.txt byte-for-byte · test-source-site 127/0 (Task 13's
+  125/2 resolved by the regen) · skills-router 112/0 · plugin-hooks
+  62/0 · render-guard 27/0 · memory-profile 24/0 · tsc 117 = baseline,
+  0 new.
+
+Stage Summary:
+- v0.31.1 is LIVE: https://github.com/asysurya/tagent/releases/tag/v0.31.1
+  (7 assets: 6 binaries + SHA256SUMS.txt). Commit chain: 247f208 (prep)
+  → fa307e0 (cut) → 980ed17 (gh-release adopt-guard) → 78f7cdf
+  (snapshot).
+- Carried-over tech debt, re-scoped to v0.32.0: the dedicated 'blocked'
+  record status (loop.ts TODO comment still says "v0.31.1" — the cut
+  shipped without it per scope; fix the label in the next prep).
+---
+Task ID: 15
+Agent: Super Z (main) — v0.31.2 prep: navbar machine stats + ctx bar for every provider
+
+Task: user request, two parts: (1) "bikin computer performance stats di
+navbar" — live machine stats in the TUI navbar; (2) "stats windows context
+bisa untuk semua provider" — the context-window bar must work for every
+provider, not just known ones.
+
+Work Log:
+- Exploration (evidence): navbar = headerRows (tui-app ~5740) — title +
+  footer built via roundBox, 1s nav ticker; hint row (~5912) showed the ctx
+  bar only when ctxLimit>0; host.contextInfo() used modelContextWindow()
+  which returns 0 for unknown models (gap proof: modelContextWindow(
+  'custom','mystery-model-v9') === 0) → no bar AT ALL for custom providers/
+  unlisted models; the loop already emits onContext every turn with
+  estimated fallback; renderContextBar had no estimate markers.
+- NEW packages/cli/src/perf-stats.ts — PerfSampler: cpu% = delta between
+  os.cpus() snapshots, ram% (freemem/totalmem), tagent rss, uptime; 2s
+  unref'd interval, get() is O(1) + stale-recompute (>15s → laptop
+  suspend); fmtUptime helper.
+- ui.ts roundBox: titleRight option (right-aligned label on the top
+  border). Both sides hard-truncated so the row stays EXACTLY innerW —
+  a wrapped border row would break the v0.31.1 sticky math.
+- headerRows: perf segment `🖥 12% · 💾 62% · 210M` rides the title row
+  (boxW>=58 only; title budget shrinks by its width); numbers color only
+  at cpu>=70% / ram>=80%.
+- core/context.ts: ASSUMED_CONTEXT_WINDOW = 128_000 + renderContextBar
+  marks param ({estUsed, estLimit} → `~12.3k/~128k [█░] 10%`); exported.
+- host.contextInfo: limit = fromLoop?.limit || modelWindow ||
+  ASSUMED_CONTEXT_WINDOW; assumed flag; 500ms cache (the estimate path
+  walked every session message + read zai-models.json PER FRAME — also a
+  perf fix); returns {used,limit,pct,bar,estimated,assumed}.
+- hintRow: reads host.contextInfo() (was ctxUsed/ctxLimit fields); priority
+  fit — a long custom model id shrinks (min 4 cols) instead of crowding
+  the bar out.
+- navbar footer priority ladder: candidates full → ws 8 → model 10 →
+  -dev → -mcp → -ws → -model; mode · bar · clock survive at every width
+  (verified live at 50 cols).
+- /stats: machine row + '(window assumed 128k)' / '(used estimated)'
+  markers.
+- Tests: NEW scripts/test-perf-stats.ts — 37 checks green: sampler
+  lifecycle (start/stop/stale), roundBox exact-width invariants (incl.
+  oversized titleRight clamp), bar markers, gap proof, host fallback chain
+  (unknown → assumed 128k; glm → 131072; env wins; fromLoop usage with
+  no window → real used + assumed limit), live TUI frames at 80/120/50
+  cols (perf segment present/dropped; bar in footer + hint row; ladder).
+- Regression: tui-app 0 fail · render-guard 27/0 · memory-profile 24/0 ·
+  host ALL OK · cache 38/0 · compact 49/0 · context-loop 30/0 ·
+  glitch-proof.py 6/6 (live pty, resize + noisy plugin — the render guard
+  holds with the new navbar) · tsc 117 = baseline (2 test-file TS nits
+  found + fixed: dynamic-import type alias + class-as-type cast) · PTY
+  suite 10/11 — 'model list view' FAIL reproduces on a clean stash
+  (pre-existing, NOT this change; recorded as known).
+
+Stage Summary:
+- Commit c2ff948 (local, not pushed yet? pushed with this worklog commit).
+- Deliverables: navbar machine stats (cpu/ram/rss/uptime, 2s, width-safe)
+  + context bar for every provider (assumed-window fallback with ~
+  markers, hint-row priority fit, footer ladder, /stats machine row).
+- NO release actions (rule): version.ts still 0.31.1, no LATEST flip, no
+  tag. Ready for review; cut v0.31.2 on approval.

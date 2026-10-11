@@ -28,9 +28,50 @@ export interface Release {
 
 /** The version the download buttons point at — bumped at release time, in
  *  lockstep with removing `unreleased` from the newest entry (see header). */
-export const LATEST = '0.31.1'
+export const LATEST = '0.31.2'
 
 export const RELEASES: Release[] = [
+  {
+    version: '0.31.2',
+    date: '2026-10-11',
+    title: 'Navbar machine stats & a context bar for every provider',
+    summary:
+      "The navbar becomes a live dashboard: the title row now shows the machine itself — CPU %, system RAM %, tagent's own RSS, sampled every 2 s (a PerfSampler built on os.cpus() deltas that recomputes on read after a laptop suspend, so the numbers never go stale), rendered into the free dash-space of the box border and hard-truncated on both sides so the row stays exactly terminal-wide — the v0.31.1 sticky-math lesson applied from the start. And the context bar now works for EVERY provider: unknown models and custom providers used to resolve a context window of 0, which hid the bar entirely — the display now falls back to an assumed 128k window (marked \"~128k\"), estimated usage is marked \"~\" too, while TAGENT_CONTEXT_WINDOW and every real catalog/registry value always win. The bar also survives narrow terminals: a long custom model id shrinks before the bar is crowded out, the navbar footer drops ws/model/mcp segments before it — mode · bar · clock live at every width — and /stats grows a machine row of its own.",
+    sections: [
+      {
+        name: 'Added — machine stats in the navbar',
+        items: [
+          "new packages/cli/src/perf-stats.ts — PerfSampler: cpu % as the delta between two os.cpus() snapshots, system RAM % (freemem/totalmem), and tagent's own RSS; a 2 s unref'd interval so it never holds the process open, get() is O(1), and a sample older than 15 s is recomputed on read (a suspended laptop no longer shows frozen numbers)",
+          'the stats ride the title row\'s free dash space (roundBox titleRight — a right-aligned label on the top border, shown at boxW>=58; the title\'s budget shrinks by its width): "🖥 12% · 💾 62% · 210M"; the border row stays EXACTLY boxW wide — both sides hard-truncated, never wrapped (a wrapped border row would break the sticky math)',
+          "numbers stay quiet by default — they only take color when cpu >= 70% or RAM >= 80% (the bar that matters when the machine is choking)",
+        ],
+      },
+      {
+        name: 'Added — a context bar for every provider',
+        items: [
+          'the gap, proven: modelContextWindow("custom", "mystery-model-v9") resolved 0 — custom providers and unlisted models showed NO context bar at all, while the loop already emitted onContext with estimated usage every turn',
+          'new ASSUMED_CONTEXT_WINDOW = 128_000 (core/context.ts): the display falls back to it when the catalog, the registry and TAGENT_CONTEXT_WINDOW all miss, and marks it "~128k"; estimated usage is marked "~" too (renderContextBar marks → "~12.3k/~128k [█░] 10%")',
+          "precedence unchanged: TAGENT_CONTEXT_WINDOW and every real catalog/registry value always beat the assumption — a known model never gets a \"~\" it didn't earn",
+        ],
+      },
+      {
+        name: 'Fixed — the bar survives (priority + hot-path)',
+        items: [
+          "hint-row priority fit: a long custom model id shrinks first (down to 4 cols) instead of crowding the context bar out of the row",
+          'navbar footer priority ladder: segments shrink or drop in the order ws 8 → model 10 → -dev → -mcp → -ws → -model before the bar ever does — mode · bar · clock survive at every width (verified live at 50 cols)',
+          'host.contextInfo() gains a 500 ms cache — the estimated-usage path walked every session message and read zai-models.json per frame (a per-render hot path; this is a perf fix as much as a feature)',
+        ],
+      },
+      {
+        name: '/stats & tests',
+        items: [
+          '/stats grows a machine row (cpu · ram · rss · uptime) plus the "(window assumed 128k)" / "(used estimated)" markers, so the numbers in the navbar are explainable',
+          'new suite scripts/test-perf-stats.ts — 37 checks: sampler lifecycle (start/stop/stale-recompute), roundBox exact-width invariants (including an oversized titleRight clamp), bar markers, the gap proof, the host fallback chain (unknown → assumed 128k; glm → 131072; env wins; fromLoop usage with no window → real used + assumed limit), and live TUI frames at 80/120/50 cols (perf segment present/dropped, bar in footer + hint row, ladder)',
+          'regression battery green: tui-app 0 fail · render-guard 27 · memory-profile 24 · host ALL OK · cache 38 · compact 49 · context-loop 30 · glitch-proof.py 6/6 (live pty — the render guard holds with the new navbar); tsc 117 = baseline, 0 new; PTY suite 10/11 — the one fail ("model list view") reproduces on a clean stash: pre-existing, not this change, recorded as known',
+        ],
+      },
+    ],
+  },
   {
     version: '0.31.1',
     date: '2026-10-06',

@@ -67,6 +67,7 @@ import {
   parseRoleRef,
   setRoleRef,
   estimateMessageTokens,
+  ASSUMED_CONTEXT_WINDOW,
   renderContextBar,
   contextPct,
   fmtTokens as fmtTokensCore,
@@ -138,6 +139,10 @@ export class AgentHost {
   private lastPlan: { sessionId: string; plan: string } | undefined
   /** last context-window state (per-turn, from the loop) — powers the bar */
   private lastContext: ContextInfo | undefined
+  /** contextInfo() cache (500ms) — the navbar + hint row read it per frame,
+ *  and the estimate path walks every session message; the window lookup
+ *  also reads ~/.tagent/zai-models.json from disk. One read per tick. */
+  private ctxInfoCache: { at: number; val: ReturnType<AgentHost['contextInfo']> } | undefined
   /** one compact-prompt per crossing — don't nag every turn */
   private ctxWarned = false
   /** background subagents (task background:true) — host-owned so a sub
@@ -543,9 +548,14 @@ export class AgentHost {
   /* context window — the usage bar + deterministic compaction          */
   /* ------------------------------------------------------------------ */
 
-  /** current context state for display (last provider usage, else estimate) */
-  contextInfo(): { used: number; limit: number; pct: number; bar: string; estimated: boolean } {
-    const limit = modelContextWindow(this.cfg.defaultProvider, this.cfg.defaultModel, this.root)
+  /** current context state for display — works for EVERY provider (v0.31.2):
+   *  the window falls back to ASSUMED_CONTEXT_WINDOW (marked) when nothing is
+   *  known, `used` falls back to a local token estimate when the provider
+   *  reports no usage. `~` markers in the bar keep the two honest. */
+  contextInfo(): { used: number; limit: number; pct: number; bar: string; estimated: boolean; assumed: boolean } {
+    const now = Date.now()
+    if (this.ctxInfoCache && now - this.ctxInfoCache.at < 500) return this.ctxInfoCache.val
+    const modelWindow = modelContextWindow(this.cfg.defaultProvider, this.cfg.defaultModel, this.root)
     const fromLoop = this.lastContext
     const used =
       fromLoop?.used ??
@@ -553,13 +563,20 @@ export class AgentHost {
         (n, m) => n + estimateMessageTokens(m.content, m.toolCalls),
         0,
       )
-    return {
+    // loop-reported window (provider knows) → catalog/registry/env → assumed
+    const limit = fromLoop?.limit || modelWindow || ASSUMED_CONTEXT_WINDOW
+    const assumed = !(fromLoop && fromLoop.limit > 0) && modelWindow === 0
+    const estimated = !fromLoop
+    const val = {
       used,
       limit,
       pct: contextPct(used, limit),
-      bar: renderContextBar(used, limit, 10),
-      estimated: !fromLoop,
+      bar: renderContextBar(used, limit, 10, { estUsed: estimated, estLimit: assumed }),
+      estimated,
+      assumed,
     }
+    this.ctxInfoCache = { at: now, val }
+    return val
   }
 
   /** compact threshold from config (default 80; 0 = never prompt) */
